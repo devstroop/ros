@@ -30,8 +30,11 @@ It is the target, not the as-built. The as-built picture is
 
 Each app is a separate Native SDK app: its own `app.json`, its own id
 (`com.devstroop.ros.admin`, `com.devstroop.ros.service`, `com.devstroop.ros.kiosk`),
-its own window, its own engine-owned database in its own app-data
-directory, and its own release artifact.
+its own window, its own icon, its own engine-owned database in its own
+app-data directory, and its own release artifact. `scripts/package.sh`
+builds the three macOS DMGs and the
+[release runbook](../operations/release.md) covers signing, install and
+the per-app update cadence.
 
 ### The screen partition
 
@@ -282,10 +285,13 @@ so the traffic never leaves the host, and a loopback or same-subnet
 path proves the seam but not the network; more than one connection in
 flight at once, which the per-connection slots make room for but the
 spike does not exercise; and the wake-up path that a self-pipe would
-give. The macOS Local Network permission is also still untested: it is
-asked the first time an app opens a socket to a local-network address,
-which is exactly what the LAN bind does, and a machine that has never
-been asked will show the prompt.
+give. The macOS Local Network permission is also still untested by the
+spike: it is asked the first time an app opens a socket to a
+local-network address, which is exactly what the LAN bind does, and a
+machine that has never been asked will show the prompt. The packaged
+apps carry their own `NSLocalNetworkUsageDescription`; the kiosk's
+install grants it by hand
+([release runbook](../operations/release.md)).
 
 ### Why the client is `fx.fetch` and not a socket
 
@@ -473,10 +479,12 @@ a fallback to the ephemeral one.
 
 Broadcast is blocked by some managed and guest networks, and macOS asks
 the user for Local Network permission the first time a socket is used.
-So every app also accepts a **manually configured peer address**, and
-the admin app keeps a list of the devices it has seen. A restaurant that
-blocks broadcast configures one address per device and never thinks
-about it again.
+The packaged apps carry their own `NSLocalNetworkUsageDescription`, so
+the prompt is in the app's words; the kiosk's install grants it by hand
+([release runbook](../operations/release.md)). So every app also accepts
+a **manually configured peer address**, and the admin app keeps a list
+of the devices it has seen. A restaurant that blocks broadcast
+configures one address per device and never thinks about it again.
 
 ### Bootstrap and compaction
 

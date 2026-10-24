@@ -1,7 +1,8 @@
 # Phase 9 — Three apps over TCP/IP
 
-> **Status:** In progress. Slices 9.0–9.8 are merged; packaging (9.9)
-> remains.
+> **Status:** In progress. Slices 9.0–9.8 are merged; 9.9 packaging is
+> implemented (ad-hoc CI, identity/notarisation supported) and awaits
+> the clean-machine release sign-off.
 > **Decision:** [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md)
 > (Accepted 2026-10-24); the design is
 > [`architecture/12`](../architecture/12-three-apps-and-ipc.md). Bootstrap
@@ -434,11 +435,34 @@ one.
 
 ### 9.9 — Packaging (4 days, overlaps Phase 8)
 
-Three signed artifacts, three installs, three updates. The Local
-Network permission prompt is part of the kiosk's install, by hand.
+**As built.** [`scripts/package.sh`](../../scripts/package.sh) builds the
+three apps in ReleaseFast and produces
+`dist/ros-admin-<version>-macos.dmg`,
+`dist/ros-service-<version>-macos.dmg` and
+`dist/ros-kiosk-<version>-macos.dmg`. It packages with
+`native package --signing none`, injects each app's own
+`NSLocalNetworkUsageDescription`, signs again (ad-hoc by default;
+Developer ID, hardened runtime and a secure timestamp when
+`ROS_SIGNING_IDENTITY` is set), optionally notarises and staples, then
+builds and verifies the DMG. `--check` re-verifies the checksums and the
+app inside each mounted DMG. CI's **Package (macOS)** job runs `--ci` and
+`--check` and uploads the three DMGs plus `checksums.txt`.
+
+The kiosk's text names the kitchen and the two peers it syncs with; the
+install checklist explains the manual Local Network grant. The update
+path per app - admin often, service deliberately, kiosk rarely - is
+written down in
+[`docs/operations/release.md`](../operations/release.md), together with
+the manual replace-and-backup flow and the SDK's signed-feed path. The
+bundle ids stay `com.devstroop.ros.*`: the design's `dev.eatery.v2.*`
+names were placeholders, and the id is the app-data and Local Network
+key. Each app has its own icon.
 
 **Done when:** three signed builds install on clean machines and the
-kiosk asks for the Local Network permission in its own words.
+kiosk asks for the Local Network permission in its own words. Packaging
+and the kiosk text are proven in CI; the clean-machine install is a
+manual release sign-off, and Developer ID/notarisation need the release
+credentials.
 
 ## Exit criterion
 

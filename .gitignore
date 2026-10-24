@@ -16,6 +16,10 @@ zig-cache/
 *.sqlite3
 /exports/
 
+# Release artifacts and update-signing material
+dist/
+native-update.key
+
 # Editors and OS
 .DS_Store
 .idea/
