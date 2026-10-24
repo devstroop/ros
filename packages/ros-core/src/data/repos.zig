@@ -170,7 +170,7 @@ pub const customers_sql =
 pub const orders_sql =
     \\SELECT id, order_no, order_type, status, dining_table_id, customer_id,
     \\       employee_id, subtotal_minor, tax_minor, discount_minor,
-    \\       total_minor, placed_at, notes,
+    \\       total_minor, placed_at, notes, origin_device, origin_id,
     \\       (SELECT COUNT(*) FROM payment WHERE order_id = orders.id) AS paid
     \\FROM orders
     \\WHERE status <> 5
@@ -1119,6 +1119,8 @@ pub fn decodeOrders(model: *Model, bytes: []const u8) void {
             .total_minor = reader.intOf(&values, "total_minor", 0),
             .placed_at = reader.intOf(&values, "placed_at", 0),
             .notes = model.orders_buf.dupe(reader.textOf(&values, "notes")) orelse "",
+            .origin_device = model.orders_buf.dupe(reader.textOf(&values, "origin_device")) orelse "",
+            .origin_id = reader.intOf(&values, "origin_id", 0),
             .paid = reader.intOf(&values, "paid", 0) > 0,
         };
     }
@@ -1821,6 +1823,7 @@ pub fn takePayment(
     amount_minor: i64,
     at: i64,
 ) void {
+    const origin = orderOrigin(model, order_id);
     // Each statement carries its OWN parameters: the engine checks that
     // a statement's parameter count matches the placeholders it uses,
     // and one shared array for three different statements never does.
@@ -1886,7 +1889,8 @@ pub fn takePayment(
     var count: usize = 4;
 
     const snapshot = record.PaymentSnapshot{
-        .order_id = order_id,
+        .order_id = origin.id,
+        .origin_device = origin.device,
         .mode = @intFromEnum(mode),
         .amount_minor = amount_minor,
         .paid_at = at,
@@ -1906,7 +1910,7 @@ pub fn takePayment(
         const device_id = syncDeviceId(model);
         const clock = nextSyncClock(model);
         const op_id = record.formatId(&op_id_buffer, device_id, clock, 0) catch break :build_op false;
-        const entity_id = std.fmt.bufPrint(&entity_buffer, "{d}", .{order_id}) catch break :build_op false;
+        const entity_id = std.fmt.bufPrint(&entity_buffer, "{d}", .{origin.id}) catch break :build_op false;
         const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{clock}) catch break :build_op false;
 
         op_params = .{
@@ -2196,6 +2200,29 @@ fn syncDeviceId(model: *Model) []const u8 {
     return model.device_token_buf[0..model.device_token_len];
 }
 
+const OrderOrigin = struct {
+    device: []const u8,
+    id: i64,
+};
+
+/// The stable cross-device name of the order behind a local row id.
+///
+/// A status or payment op written on a device that only holds a remapped
+/// copy must still name the order the way the origin device named it.
+/// The loaded order carries that pair; a row that predates the origin
+/// columns, or a caller that never loaded the order, is treated as a
+/// local sale.
+fn orderOrigin(model: *Model, order_id: i64) OrderOrigin {
+    for (model.orders) |order| {
+        if (order.id != order_id) continue;
+        return .{
+            .device = if (order.origin_device.len > 0) order.origin_device else syncDeviceId(model),
+            .id = if (order.origin_id != 0) order.origin_id else order.id,
+        };
+    }
+    return .{ .device = syncDeviceId(model), .id = order_id };
+}
+
 /// The next Lamport clock. The writer bumps to `max(own, highest seen)
 /// + 1`, and the vector cursor is where the highest seen lives.
 fn nextSyncClock(model: *Model) u64 {
@@ -2317,7 +2344,16 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
         .params = &sequence_params,
     };
 
-    var order_params: [13]native_sdk.EffectDbValue = .{
+    // The local row id and the cross-device origin are two different
+    // names. The id is this database's key; the origin pair is what a
+    // peer uses to find the same sale in its own database. A local sale
+    // is normally both, but a test or a repair can hand in a row whose
+    // origin is already another device's.
+    const local_device = syncDeviceId(model);
+    const origin_device = if (order.origin_device.len > 0) order.origin_device else local_device;
+    const origin_id = if (order.origin_id != 0) order.origin_id else order.id;
+
+    var order_params: [15]native_sdk.EffectDbValue = .{
         .{ .integer = order.id },
         .{ .integer = @intFromEnum(order.order_type) },
         .{ .integer = @intFromEnum(order.status) },
@@ -2334,14 +2370,17 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
         .{ .integer = order.placed_at },
         .{ .text = order.notes },
         .{ .text = request_key },
+        .{ .text = origin_device },
+        .{ .integer = origin_id },
     };
     statements[1] = .{
         .sql =
         \\INSERT INTO orders (id, order_no, order_type, status, dining_table_id,
         \\  customer_id, employee_id, subtotal_minor, tax_minor, discount_minor,
-        \\  total_minor, placed_at, notes, created_at, updated_at, request_key)
+        \\  total_minor, placed_at, notes, created_at, updated_at, request_key,
+        \\  origin_device, origin_id)
         \\VALUES (?1, (SELECT printf('%06d', value) FROM sequence WHERE name = 'order_no'),
-        \\  ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?11, ?11, ?13)
+        \\  ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?11, ?11, ?13, ?14, ?15)
         \\ON CONFLICT(request_key) DO NOTHING;
         ,
         .params = &order_params,
@@ -2396,8 +2435,10 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
     // The op the peers receive. One op carries the whole order - the
     // header and its lines - so a receiving device can show the ticket
     // in one transaction. The order number is absent on purpose: the
-    // receiver's database assigns its own, and the order's identity is
-    // the id both devices already agree on.
+    // receiver's database assigns its own. The stable identity is the
+    // origin pair, not the local row id: a receiver stores the sale
+    // under an id of its own choosing and keeps the pair for every
+    // later status or payment.
     var snapshot_lines: [max_order_lines]record.OrderLineSnapshot = undefined;
     var snapshot_count: usize = 0;
     for (lines) |line| {
@@ -2414,7 +2455,8 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
         snapshot_count += 1;
     }
     const snapshot = record.OrderSnapshot{
-        .id = order.id,
+        .id = origin_id,
+        .origin_device = origin_device,
         .order_type = @intFromEnum(order.order_type),
         .status = @intFromEnum(order.status),
         .dining_table_id = if (order.dining_table_id == 0) null else order.dining_table_id,
@@ -2444,7 +2486,7 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
         const device_id = syncDeviceId(model);
         const clock = nextSyncClock(model);
         const op_id = record.formatId(&op_id_buffer, device_id, clock, 0) catch break :build_op false;
-        const entity_id = std.fmt.bufPrint(&entity_buffer, "{d}", .{order.id}) catch break :build_op false;
+        const entity_id = std.fmt.bufPrint(&entity_buffer, "{d}", .{origin_id}) catch break :build_op false;
         const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{clock}) catch break :build_op false;
 
         op_params = .{
@@ -2516,6 +2558,7 @@ pub fn setOrderStatus(
     to_status: domain.OrderStatus,
     at: i64,
 ) void {
+    const origin = orderOrigin(model, order_id);
     var statements: [4]native_sdk.EffectDbStatement = undefined;
     var history_params: [4]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
@@ -2547,7 +2590,8 @@ pub fn setOrderStatus(
     var count: usize = 2;
 
     const snapshot = record.OrderStatusSnapshot{
-        .id = order_id,
+        .id = origin.id,
+        .origin_device = origin.device,
         .status = @intFromEnum(to_status),
         .changed_at = at,
     };
@@ -2566,7 +2610,7 @@ pub fn setOrderStatus(
         const device_id = syncDeviceId(model);
         const clock = nextSyncClock(model);
         const op_id = record.formatId(&op_id_buffer, device_id, clock, 0) catch break :build_op false;
-        const entity_id = std.fmt.bufPrint(&entity_buffer, "{d}", .{order_id}) catch break :build_op false;
+        const entity_id = std.fmt.bufPrint(&entity_buffer, "{d}", .{origin.id}) catch break :build_op false;
         const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{clock}) catch break :build_op false;
 
         op_params = .{
@@ -2683,17 +2727,24 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot) void 
     var statements: [4 + max_order_lines]native_sdk.EffectDbStatement = undefined;
     var count: usize = 0;
 
-    // The number is local. The bump is conditional on the order id
-    // being new, so a duplicate op does not consume a second number.
-    var sequence_params: [2]native_sdk.EffectDbValue = .{
+    // The origin pair is the stable name. A create op written before
+    // the origin columns existed has no `origin_device` in its data;
+    // the writer was the origin then.
+    const origin_device = if (snapshot.origin_device.len > 0) snapshot.origin_device else op.device_id;
+    const origin_id = snapshot.id;
+
+    // The number is local. The bump is conditional on the origin being
+    // new, so a duplicate op does not consume a second number.
+    var sequence_params: [3]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.placed_at },
-        .{ .integer = snapshot.id },
+        .{ .text = origin_device },
+        .{ .integer = origin_id },
     };
     statements[count] = .{
         .sql =
         \\INSERT INTO sequence (name, value, updated_at)
         \\SELECT 'order_no', 1, ?1
-        \\WHERE NOT EXISTS (SELECT 1 FROM orders WHERE id = ?2)
+        \\WHERE NOT EXISTS (SELECT 1 FROM orders WHERE origin_device = ?2 AND origin_id = ?3)
         \\ON CONFLICT(name) DO UPDATE SET value = value + 1, updated_at = ?1;
         ,
         .params = &sequence_params,
@@ -2703,8 +2754,13 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot) void 
     // A reference row this device has not received yet becomes NULL,
     // not a foreign-key failure: the ticket still arrives, and the
     // reference-data slice (#109) fills in the name later.
-    var order_params: [13]native_sdk.EffectDbValue = .{
-        .{ .integer = snapshot.id },
+    //
+    // The local id is allocated from the negative side: local ids are
+    // positive, so a remote order can never land on one. The origin
+    // pair is checked first, so a repeated create op - or an op for an
+    // order this database already holds as a local sale - writes
+    // nothing.
+    var order_params: [14]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.order_type },
         .{ .integer = snapshot.status },
         nullableIdParam(snapshot.dining_table_id),
@@ -2717,46 +2773,61 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot) void 
         .{ .integer = snapshot.placed_at },
         .{ .text = snapshot.notes },
         .{ .text = op.id },
+        .{ .text = origin_device },
+        .{ .integer = origin_id },
     };
     statements[count] = .{
         .sql =
         \\INSERT INTO orders (id, order_no, order_type, status, dining_table_id,
         \\  customer_id, employee_id, subtotal_minor, tax_minor, discount_minor,
-        \\  total_minor, placed_at, notes, created_at, updated_at, request_key)
-        \\VALUES (?1, (SELECT printf('%06d', value) FROM sequence WHERE name = 'order_no'),
-        \\  ?2, ?3,
-        \\  (SELECT id FROM dining_table WHERE id = ?4),
-        \\  (SELECT id FROM customer WHERE id = ?5),
-        \\  (SELECT id FROM employee WHERE id = ?6),
-        \\  ?7, ?8, ?9, ?10, ?11, ?12, ?11, ?11, ?13)
+        \\  total_minor, placed_at, notes, created_at, updated_at, request_key,
+        \\  origin_device, origin_id)
+        \\SELECT
+        \\  COALESCE((SELECT MIN(id) FROM orders WHERE id < 0), 0) - 1,
+        \\  (SELECT printf('%06d', value) FROM sequence WHERE name = 'order_no'),
+        \\  ?1, ?2,
+        \\  (SELECT id FROM dining_table WHERE id = ?3),
+        \\  (SELECT id FROM customer WHERE id = ?4),
+        \\  (SELECT id FROM employee WHERE id = ?5),
+        \\  ?6, ?7, ?8, ?9, ?10, ?11, ?10, ?10, ?12, ?13, ?14
+        \\WHERE NOT EXISTS (
+        \\  SELECT 1 FROM orders WHERE origin_device = ?13 AND origin_id = ?14
+        \\)
         \\ON CONFLICT DO NOTHING;
         ,
         .params = &order_params,
     };
     count += 1;
 
-    var line_params: [max_order_lines][9]native_sdk.EffectDbValue = undefined;
-    for (snapshot.lines) |line| {
+    var line_params: [max_order_lines][10]native_sdk.EffectDbValue = undefined;
+    for (snapshot.lines, 0..) |line, index| {
         // Two slots are reserved for the op row and the clock.
         if (count + 3 > statements.len) break;
         const slot = count - 2;
         line_params[slot] = .{
-            .{ .integer = line.id },
-            .{ .integer = snapshot.id },
             nullableIdParam(line.product_id),
             .{ .text = line.product_name },
             .{ .integer = line.qty },
             .{ .integer = line.unit_price_minor },
             .{ .integer = line.tax_bps },
             .{ .text = line.notes },
+            .{ .integer = @intCast(index) },
+            .{ .text = origin_device },
+            .{ .integer = origin_id },
             .{ .integer = snapshot.placed_at },
         };
         statements[count] = .{
             .sql =
             \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
             \\  unit_price_minor, tax_bps, notes, created_at)
-            \\SELECT ?1, ?2, (SELECT id FROM product WHERE id = ?3), ?4, ?5, ?6, ?7, ?8, ?9
-            \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?2)
+            \\SELECT
+            \\  ((SELECT id FROM orders WHERE origin_device = ?8 AND origin_id = ?9) * 128 + ?7),
+            \\  (SELECT id FROM orders WHERE origin_device = ?8 AND origin_id = ?9),
+            \\  (SELECT id FROM product WHERE id = ?1),
+            \\  ?2, ?3, ?4, ?5, ?6, ?10
+            \\WHERE EXISTS (
+            \\  SELECT 1 FROM orders WHERE origin_device = ?8 AND origin_id = ?9
+            \\)
             \\ON CONFLICT DO NOTHING;
             ,
             .params = &line_params[slot],
@@ -2792,18 +2863,31 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot) void 
 
 fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSnapshot) void {
     var statements: [4]native_sdk.EffectDbStatement = undefined;
-    var params: [3]native_sdk.EffectDbValue = .{
+    var params: [4]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.id },
         .{ .integer = snapshot.status },
         .{ .integer = snapshot.changed_at },
+        .{ .text = snapshot.origin_device },
     };
     statements[0] = .{
         // The status is monotonic. `voided` is the terminal exception:
         // it can end an open ticket, but it cannot undo a completed
         // one.
+        //
+        // The order is named by its origin pair. A status op written
+        // on a device that only holds a remapped copy carries the
+        // origin, not that device's local id. An op from before the
+        // origin columns existed falls back to the old rule: the local
+        // id was the origin id then.
         .sql =
         \\UPDATE orders SET status = ?2, updated_at = ?3
-        \\WHERE id = ?1 AND status <> ?2
+        \\WHERE id = (
+        \\  CASE WHEN ?4 = ''
+        \\    THEN (SELECT id FROM orders WHERE id = ?1)
+        \\    ELSE (SELECT id FROM orders WHERE origin_device = ?4 AND origin_id = ?1)
+        \\  END
+        \\)
+        \\  AND status <> ?2
         \\  AND (status < ?2 OR (?2 = 5 AND status < 4));
         ,
         .params = &params,
@@ -2811,7 +2895,13 @@ fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSna
     statements[1] = .{
         .sql =
         \\INSERT INTO order_status_history (order_id, status, changed_at)
-        \\SELECT ?1, ?2, ?3 WHERE changes() > 0;
+        \\SELECT
+        \\  CASE WHEN ?4 = ''
+        \\    THEN (SELECT id FROM orders WHERE id = ?1)
+        \\    ELSE (SELECT id FROM orders WHERE origin_device = ?4 AND origin_id = ?1)
+        \\  END,
+        \\  ?2, ?3
+        \\WHERE changes() > 0;
         ,
         .params = &params,
     };
@@ -2846,47 +2936,80 @@ fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSna
 fn applyPayment(fx: *Effects, op: record.Op, snapshot: record.PaymentSnapshot) void {
     var statements: [6]native_sdk.EffectDbStatement = undefined;
 
-    // The payment id is the order id, so a second delivery is the same
-    // row, not a second charge.
-    var payment_params: [4]native_sdk.EffectDbValue = .{
+    // The payment is keyed by the local order id, so a second delivery
+    // is the same row, not a second charge. The op names the order by
+    // its origin pair; an op from before the origin columns existed
+    // falls back to the old rule, where the local id was the origin id.
+    var payment_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.order_id },
         .{ .integer = snapshot.mode },
         .{ .integer = snapshot.amount_minor },
         .{ .integer = snapshot.paid_at },
+        .{ .text = snapshot.origin_device },
     };
     statements[0] = .{
         .sql =
         \\INSERT INTO payment (id, order_id, mode, amount_minor, reference, paid_at, created_at)
-        \\SELECT ?1, ?1, ?2, ?3, '', ?4, ?4
-        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?1)
+        \\SELECT id, id, ?2, ?3, '', ?4, ?4
+        \\FROM orders
+        \\WHERE id = (
+        \\  CASE WHEN ?5 = ''
+        \\    THEN (SELECT id FROM orders WHERE id = ?1)
+        \\    ELSE (SELECT id FROM orders WHERE origin_device = ?5 AND origin_id = ?1)
+        \\  END
+        \\)
         \\ON CONFLICT(id) DO NOTHING;
         ,
         .params = &payment_params,
     };
 
-    var order_params: [3]native_sdk.EffectDbValue = .{
+    var order_params: [4]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.order_id },
         .{ .integer = snapshot.paid_at },
         .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
+        .{ .text = snapshot.origin_device },
     };
     statements[1] = .{
         // Paid closes an open ticket. It does not reopen a voided one.
-        .sql = "UPDATE orders SET status = ?3, updated_at = ?2 WHERE id = ?1 AND status < ?3;",
+        .sql =
+        \\UPDATE orders SET status = ?3, updated_at = ?2
+        \\WHERE id = (
+        \\  CASE WHEN ?4 = ''
+        \\    THEN (SELECT id FROM orders WHERE id = ?1)
+        \\    ELSE (SELECT id FROM orders WHERE origin_device = ?4 AND origin_id = ?1)
+        \\  END
+        \\)
+        \\  AND status < ?3;
+        ,
         .params = &order_params,
     };
     statements[2] = .{
         .sql =
         \\INSERT INTO order_status_history (order_id, status, changed_at)
-        \\SELECT ?1, ?3, ?2 WHERE changes() > 0;
+        \\SELECT
+        \\  CASE WHEN ?4 = ''
+        \\    THEN (SELECT id FROM orders WHERE id = ?1)
+        \\    ELSE (SELECT id FROM orders WHERE origin_device = ?4 AND origin_id = ?1)
+        \\  END,
+        \\  ?3, ?2
+        \\WHERE changes() > 0;
         ,
         .params = &order_params,
     };
     statements[3] = .{
         .sql =
         \\UPDATE dining_table SET status = 0
-        \\WHERE id = (SELECT dining_table_id FROM orders WHERE id = ?1);
+        \\WHERE id = (SELECT dining_table_id FROM orders WHERE id = (
+        \\  CASE WHEN ?2 = ''
+        \\    THEN (SELECT id FROM orders WHERE id = ?1)
+        \\    ELSE (SELECT id FROM orders WHERE origin_device = ?2 AND origin_id = ?1)
+        \\  END
+        \\  ));
         ,
-        .params = &.{.{ .integer = snapshot.order_id }},
+        .params = &.{
+            .{ .integer = snapshot.order_id },
+            .{ .text = snapshot.origin_device },
+        },
     };
     var count: usize = 4;
 

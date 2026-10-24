@@ -391,6 +391,14 @@ pub const Order = struct {
     total_minor: i64,
     placed_at: i64,
     notes: []const u8,
+    /// The device that took the sale. It is the first half of the
+    /// order's cross-device identity; `id` above is only this database's
+    /// local key. An empty value means "this device" for a row that
+    /// predates the origin columns.
+    origin_device: []const u8 = "",
+    /// The order's id on `origin_device`. Together with the device it
+    /// names the same sale on every database.
+    origin_id: i64 = 0,
 };
 
 /// A printable report of the day's takings. Kept so a device can print

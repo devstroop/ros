@@ -5,7 +5,7 @@
 > service and kiosk mount their role's subsets of the same core.
 > **Last verified:** 2026-10-24, by source review and the split suites.
 > `scripts/verify-all.sh` is green for ros-core, admin, kiosk, net-spike
-> and service; the suites are admin 143/143, kiosk 7/7, net-spike 13/13,
+> and service; the suites are admin 148/148, kiosk 7/7, net-spike 13/13,
 > service 8/8 and ros-core 37/37.
 > `native build` produces ReleaseFast binaries.
 > The money and back-office tracks are merged. The three apps share
@@ -26,12 +26,12 @@
 | Templates with a render test | 53 in the admin | `apps/admin/src/tests.zig` (the screen-coverage test builds each one, and finds a landmark of its own) |
 | `Msg` variants | 201 | `packages/ros-core/src/core/msg.zig` |
 | Tables | 44 | `apps/admin/src/schema/*.sql` |
-| Migrations | 15 | `apps/admin/migrations.lock.json` version 15 |
+| Migrations | 16 | `apps/admin/src/schema/migrations.lock.json` version 16 |
 | Read queries | 16 named constants | `packages/ros-core/src/data/repos.zig` (one named constant each, and one place that says the app is loading) |
 | Write paths | setup, order + lines, status + history, config, currency, product, employee, employee PIN, employee removal, customer, category, tax slab, discount, modifier group, dish station, stock count, payment, op log, reference version | `repos.zig` |
 | Effect keys | 62, each used once | `packages/ros-core/src/data/repos.zig`; a test asserts the uniqueness |
-| Headless tests | admin 143/143, kiosk 7/7, net-spike 13/13, service 8/8, ros-core 37/37; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
-| Database integration tests | 95, green | `apps/admin/src/tests_data.zig` |
+| Headless tests | admin 148/148, kiosk 7/7, net-spike 13/13, service 8/8, ros-core 37/37; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
+| Database integration tests | 100, green | `apps/admin/src/tests_data.zig` |
 | Sidecar binaries | 0 | `tools/*` contain READMEs only |
 | CI workflows | 1 (verify + smoke) | `.github/workflows/ci.yml` |
 | Reusable component templates | 0 | `src/components/` empty |
@@ -59,11 +59,11 @@
 | Payments | Partial | Cash/card/UPI mode, confirmation and one payment write; a payment is taken once, and an order can still be closed without one |
 | Reports / compliance | Partial | The owner's read of the day exists: the takings, the orders, the tax, the discounts, and the way the money was paid. The X report, the Z report and the day close are the reports track's |
 | Printing | Scaffolded | Tables and README-only sidecar; no code |
-| Sync | Implemented core | Op log in the same transaction, per-device Lamport clock and vector cursor, beacon or manual peers, reference snapshot. The push stream (#110) is implemented: a held-open `/v1/events` line wakes the peer's pull, with the five-second poll as the fallback. Late join/compaction (#111) and order identity across devices (#87) remain |
+| Sync | Implemented core | Op log in the same transaction, per-device Lamport clock and vector cursor, beacon or manual peers, reference snapshot. The push stream (#110) is implemented: a held-open `/v1/events` line wakes the peer's pull, with the five-second poll as the fallback. Cross-device order identity (#87) is implemented: `orders.id` is the local row key, `(origin_device, origin_id)` is the stable name, remote orders get negative local ids, and status/payment ops carry the origin. Late join/compaction (#111) remains |
 | Push / events | Implemented | `/v1/events` held open, chunked NDJSON, one thread per stream, 20ms wake, 15s heartbeat; one stream per peer, line-triggered pull, pending-pull follow-up, terminal reopen; 5s poll fallback |
 | Display board | Partial | The board renders and shows the order cards |
 | Waiter shell | Partial | The floor, the menu, the cart and the order list render |
-| Testing | Partial | The split suites are green via `scripts/verify-all.sh` (admin 143/143, kiosk 7/7, net-spike 13/13, service 8/8, ros-core 37/37); no sale smoke through the UI (#42) |
+| Testing | Partial | The split suites are green via `scripts/verify-all.sh` (admin 148/148, kiosk 7/7, net-spike 13/13, service 8/8, ros-core 37/37); no sale smoke through the UI (#42) |
 | Packaging | Planned | No packaging/signing workflow; no signed build |
 
 ## Flows that work
@@ -137,7 +137,7 @@ a docs change.
 | # | Defect | Where | Impact |
 |---|---|---|---|
 | D1 | ~~Provisional salt installed before the database confirms it; a failed save was marked confirmed~~ | `src/core/update.zig` (`submit_login`, `createSalt`, `config_loaded`) | FIXED: the salt is a four-state lifecycle (`unknown`, `installing`, `verifying`, `confirmed`), the sign-in waits for `confirmed`, and the setup writes the salt with the operator's hash (B-003) |
-| D2 | ~~Order `id` = wall ms, `order_no` = wall seconds~~ | `src/core/update.zig` (`placeOrder`, `nextOrderId`), `src/data/repos.zig` (`saveOrder`) | FIXED: the number is a sequence the database assigns, the id keeps a per-device floor, and a request key makes a retry the same sale (B-006, [ADR-0014](../decisions/0014-order-identity.md)) |
+| D2 | ~~Order `id` = wall ms, `order_no` = wall seconds~~ | `src/core/update.zig` (`placeOrder`, `nextOrderId`), `src/data/repos.zig` (`saveOrder`) | FIXED: the number is a sequence the database assigns, the id keeps a per-device floor, and a request key makes a retry the same sale (B-006, [ADR-0014](../decisions/0014-order-identity.md)). The cross-device half is the origin pair and negative remote ids ([ADR-0019](../decisions/0019-cross-device-order-identity.md), #87) |
 | D3 | ~~`loadAll` omits `loadCustomers`~~ | `packages/ros-core/src/data/repos.zig` (`loadAll`) | FIXED: `loadAll` calls `loadCustomers`; the list and the form load (B-015) |
 | D4 | Shell gates are hard-coded ordinals | `src/app.native` | A test now pins the gated ordinals against the enum, so inserting a screen fails the suite instead of remapping the UI (B-023) |
 | D5 | `orders` header badge says "open" but uses `order_count` (non-voided, including completed) | `src/screens/screen-orders.native` | Misleading count (B-012) |

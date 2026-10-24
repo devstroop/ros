@@ -64,12 +64,14 @@ const migration_sql = [_][]const u8{
     @embedFile("schema/0013_order_request_key.sql"),
     @embedFile("schema/0014_payment_once.sql"),
     @embedFile("schema/0015_currency_decimals.sql"),
+    @embedFile("schema/0016_order_origin.sql"),
 };
 
 const migration_names = [_][]const u8{
     "core", "catalog", "floor", "customers", "orders",
     "inventory", "ops", "compliance", "printing", "sync", "default_tax_slab",
     "order_sequence", "order_request_key", "payment_once", "currency_decimals",
+    "order_origin",
 };
 
 /// A model, a real database and a real effects channel, together.
@@ -502,6 +504,61 @@ fn latestOp(harness: *Harness, arena: std.mem.Allocator) !record.Op {
         }
     }
     return error.OpNotFound;
+}
+
+// ------------------------------------------------ cross-device identity
+
+/// Two devices mint the same wall-clock id in the same millisecond. The
+/// origin pair is the only thing that tells the sales apart.
+const same_id = 1_700_000_000_000;
+const same_id_text = "1700000000000";
+
+const same_id_order_a =
+    \\{"id":1700000000000,"origin_device":"dev-a","order_type":0,"status":0,"employee_id":7,"subtotal_minor":1000,"tax_minor":0,"discount_minor":0,"total_minor":1000,"placed_at":1700000000000,"notes":"a","lines":[{"id":1,"product_id":1,"product_name":"A","qty":1,"unit_price_minor":1000,"tax_bps":0,"notes":""}]}
+;
+const same_id_order_b =
+    \\{"id":1700000000000,"origin_device":"dev-b","order_type":0,"status":0,"employee_id":7,"subtotal_minor":2000,"tax_minor":0,"discount_minor":0,"total_minor":2000,"placed_at":1700000000000,"notes":"b","lines":[{"id":2,"product_id":1,"product_name":"B","qty":2,"unit_price_minor":1000,"tax_bps":0,"notes":""}]}
+;
+
+const same_id_op_a: record.Op = .{
+    .id = "dev-a:10:0",
+    .entity_table = "order",
+    .entity_id = same_id_text,
+    .operation = .create,
+    .logical_clock = 10,
+    .device_id = "dev-a",
+    .created_at = same_id,
+    .data_json = same_id_order_a,
+};
+const same_id_op_b: record.Op = .{
+    .id = "dev-b:10:0",
+    .entity_table = "order",
+    .entity_id = same_id_text,
+    .operation = .create,
+    .logical_clock = 10,
+    .device_id = "dev-b",
+    .created_at = same_id,
+    .data_json = same_id_order_b,
+};
+
+const SameIdPair = struct { a: i64, b: i64 };
+
+/// Apply two creates that share an id, then read the receiver's local
+/// ids back. A pair member is zero when that origin did not land.
+fn applySameIdOrders(harness: *Harness) !SameIdPair {
+    repos.applyOp(&harness.model, harness.fx, same_id_op_a);
+    harness.drain();
+    repos.applyOp(&harness.model, harness.fx, same_id_op_b);
+    harness.drain();
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+
+    var pair = SameIdPair{ .a = 0, .b = 0 };
+    for (harness.model.orders) |order| {
+        if (std.mem.eql(u8, order.origin_device, "dev-a")) pair.a = order.id;
+        if (std.mem.eql(u8, order.origin_device, "dev-b")) pair.b = order.id;
+    }
+    return pair;
 }
 
 test "advancing an order twice writes one history row" {
@@ -3135,12 +3192,18 @@ test "placing an order writes one op row and a durable clock" {
     harness.drain();
     try testing.expectEqual(@as(usize, 1), harness.model.orders.len);
     const order = harness.model.orders[0];
+    // A local sale keeps a positive row id and names itself as the
+    // origin. The origin pair, not the id alone, is the stable name.
+    try testing.expect(order.id > 0);
+    try testing.expectEqualStrings("test01", order.origin_device);
+    try testing.expectEqual(order.id, order.origin_id);
 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const op = try latestOp(&harness, arena_state.allocator());
 
     try testing.expectEqualStrings("order", op.entity_table);
+    try testing.expect(std.mem.indexOf(u8, op.data_json, "\"origin_device\":\"test01\"") != null);
     try testing.expectEqual(record.Operation.create, op.operation);
     try testing.expect(op.logical_clock > 0);
     try testing.expectEqualStrings("test01", op.device_id);
@@ -3187,6 +3250,7 @@ test "an order op applies to a second database, and a duplicate changes nothing"
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const op = try latestOp(&a, arena_state.allocator());
+    try testing.expect(std.mem.indexOf(u8, op.data_json, "\"origin_device\":\"test01\"") != null);
 
     var b = try seeded(testing.allocator);
     defer b.deinit();
@@ -3205,10 +3269,22 @@ test "an order op applies to a second database, and a duplicate changes nothing"
 
     // The applied-op result reloads the board, so the new ticket is
     // visible without an explicit query or a poll tick.
+    //
+    // The receiver stores the sale under its own local id, not the
+    // origin id: the ids are allowed to collide across devices. The
+    // origin pair is what names the sale.
     try testing.expectEqual(@as(usize, 1), b.model.orders.len);
-    try testing.expectEqual(order.id, b.model.orders[0].id);
+    try testing.expect(b.model.orders[0].id < 0);
     try testing.expectEqual(order.total_minor, b.model.orders[0].total_minor);
     try testing.expectEqual(domain.OrderStatus.pending, b.model.orders[0].status);
+    try testing.expectEqualStrings("test01", b.model.orders[0].origin_device);
+    try testing.expectEqual(order.id, b.model.orders[0].origin_id);
+    const origins = try countRows(
+        &b,
+        "SELECT COUNT(*) AS n FROM orders WHERE origin_device = 'test01' AND origin_id = ?1;",
+        &.{.{ .integer = order.id }},
+    );
+    try testing.expectEqual(@as(i64, 1), origins);
 
     repos.loadOrderLines(&b.model, b.fx);
     b.drain();
@@ -3275,6 +3351,160 @@ test "ops from two peers with unrelated clocks both apply" {
     try testing.expectEqual(@as(usize, 2), harness.model.orders.len);
 }
 
+test "two devices that mint the same order id stay two orders" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    const pair = try applySameIdOrders(&harness);
+    try testing.expectEqual(@as(u32, 2), harness.model.sync_applied);
+    try testing.expectEqual(@as(usize, 2), harness.model.orders.len);
+    try testing.expect(pair.a != 0);
+    try testing.expect(pair.b != 0);
+    try testing.expect(pair.a != pair.b);
+    try testing.expect(pair.a < 0);
+    try testing.expect(pair.b < 0);
+
+    const rows = try countRows(&harness, "SELECT COUNT(*) AS n FROM orders;", &.{});
+    try testing.expectEqual(@as(i64, 2), rows);
+    const lines = try countRows(&harness, "SELECT COUNT(*) AS n FROM order_line;", &.{});
+    try testing.expectEqual(@as(i64, 2), lines);
+    const origin_rows = try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM orders WHERE origin_device = 'dev-a' AND origin_id = 1700000000000;",
+        &.{},
+    );
+    try testing.expectEqual(@as(i64, 1), origin_rows);
+
+    // The same op again is the cursor's no-op.
+    repos.applyOp(&harness.model, harness.fx, same_id_op_a);
+    harness.drain();
+    try testing.expectEqual(@as(u32, 1), harness.model.sync_skipped);
+
+    // A NEW op with the same origin (a peer re-sends the create under a
+    // new id) is the origin guard's no-op. The cursor lets it in, but
+    // the order and its lines stay one.
+    const replayed = record.Op{
+        .id = "dev-a:11:0",
+        .entity_table = "order",
+        .entity_id = same_id_text,
+        .operation = .create,
+        .logical_clock = 11,
+        .device_id = "dev-a",
+        .created_at = same_id,
+        .data_json = same_id_order_a,
+    };
+    repos.applyOp(&harness.model, harness.fx, replayed);
+    harness.drain();
+    try testing.expectEqual(@as(u32, 3), harness.model.sync_applied);
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqual(@as(usize, 2), harness.model.orders.len);
+    const lines_again = try countRows(&harness, "SELECT COUNT(*) AS n FROM order_line;", &.{});
+    try testing.expectEqual(@as(i64, 2), lines_again);
+}
+
+test "a status op finds its order by origin, not by a shared id" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    const pair = try applySameIdOrders(&harness);
+    try testing.expect(pair.a != 0);
+    try testing.expect(pair.b != 0);
+
+    const status_json = try std.fmt.allocPrint(
+        testing.allocator,
+        "{{\"id\":{d},\"origin_device\":\"dev-b\",\"status\":1,\"changed_at\":{d}}}",
+        .{ same_id, same_id + 1 },
+    );
+    defer testing.allocator.free(status_json);
+    const status_op = record.Op{
+        .id = "dev-c:1:0",
+        .entity_table = "order_status",
+        .entity_id = same_id_text,
+        .operation = .update,
+        .logical_clock = 1,
+        .device_id = "dev-c",
+        .created_at = same_id + 1,
+        .data_json = status_json,
+    };
+    repos.applyOp(&harness.model, harness.fx, status_op);
+    harness.drain();
+
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    for (harness.model.orders) |order| {
+        if (std.mem.eql(u8, order.origin_device, "dev-a")) {
+            try testing.expectEqual(domain.OrderStatus.pending, order.status);
+        }
+        if (std.mem.eql(u8, order.origin_device, "dev-b")) {
+            try testing.expectEqual(domain.OrderStatus.preparing, order.status);
+        }
+    }
+    const history_b = try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM order_status_history WHERE order_id = ?1;",
+        &.{.{ .integer = pair.b }},
+    );
+    try testing.expectEqual(@as(i64, 1), history_b);
+    const history_a = try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM order_status_history WHERE order_id = ?1;",
+        &.{.{ .integer = pair.a }},
+    );
+    try testing.expectEqual(@as(i64, 0), history_a);
+}
+
+test "a payment op finds its order by origin, not by a shared id" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    const pair = try applySameIdOrders(&harness);
+    try testing.expect(pair.a != 0);
+    try testing.expect(pair.b != 0);
+
+    const payment_json = try std.fmt.allocPrint(
+        testing.allocator,
+        "{{\"order_id\":{d},\"origin_device\":\"dev-b\",\"mode\":0,\"amount_minor\":2000,\"paid_at\":{d}}}",
+        .{ same_id, same_id + 2 },
+    );
+    defer testing.allocator.free(payment_json);
+    const payment_op = record.Op{
+        .id = "dev-c:2:0",
+        .entity_table = "payment",
+        .entity_id = same_id_text,
+        .operation = .create,
+        .logical_clock = 2,
+        .device_id = "dev-c",
+        .created_at = same_id + 2,
+        .data_json = payment_json,
+    };
+    repos.applyOp(&harness.model, harness.fx, payment_op);
+    harness.drain();
+
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    for (harness.model.orders) |order| {
+        if (std.mem.eql(u8, order.origin_device, "dev-a")) {
+            try testing.expectEqual(domain.OrderStatus.pending, order.status);
+        }
+        if (std.mem.eql(u8, order.origin_device, "dev-b")) {
+            try testing.expectEqual(domain.OrderStatus.completed, order.status);
+        }
+    }
+    const payment_b = try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM payment WHERE order_id = ?1;",
+        &.{.{ .integer = pair.b }},
+    );
+    try testing.expectEqual(@as(i64, 1), payment_b);
+    const payment_a = try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM payment WHERE order_id = ?1;",
+        &.{.{ .integer = pair.a }},
+    );
+    try testing.expectEqual(@as(i64, 0), payment_a);
+}
+
 test "a status op moves a ticket forward, and a stale one does not" {
     var a = try seeded(testing.allocator);
     defer a.deinit();
@@ -3319,8 +3549,8 @@ test "a status op moves a ticket forward, and a stale one does not" {
     // ticket backward.
     const stale_json = try std.fmt.allocPrint(
         arena_state.allocator(),
-        "{{\"id\":{d},\"status\":0,\"changed_at\":1700000002000}}",
-        .{order.id},
+        "{{\"id\":{d},\"origin_device\":\"{s}\",\"status\":0,\"changed_at\":1700000002000}}",
+        .{ order.id, order_op.device_id },
     );
     const stale: record.Op = .{
         .id = "dev-c:1:0",
@@ -3416,11 +3646,16 @@ test "a payment op closes the order on the second database" {
     repos.loadOrders(&b.model, b.fx);
     b.drain();
     try testing.expectEqual(domain.OrderStatus.completed, b.model.orders[0].status);
+    try testing.expect(b.model.orders[0].id < 0);
+    const remote_order_id = b.model.orders[0].id;
 
+    // The payment is keyed by the receiver's local order id. The op
+    // named the origin pair, so it landed on the remapped order rather
+    // than on an id that belongs to nobody here.
     const payments = try countRows(
         &b,
         "SELECT COUNT(*) AS n FROM payment WHERE order_id = ?1;",
-        &.{.{ .integer = order.id }},
+        &.{.{ .integer = remote_order_id }},
     );
     try testing.expectEqual(@as(i64, 1), payments);
 
@@ -3430,9 +3665,125 @@ test "a payment op closes the order on the second database" {
     const again = try countRows(
         &b,
         "SELECT COUNT(*) AS n FROM payment WHERE order_id = ?1;",
-        &.{.{ .integer = order.id }},
+        &.{.{ .integer = remote_order_id }},
     );
     try testing.expectEqual(@as(i64, 1), again);
+}
+
+test "a remapped order's status travels back to its origin" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+
+    a.model.employee_id = 7;
+    a.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    a.send(.{ .add_to_cart = 1 });
+    a.send(Msg{ .place_order = {} });
+    a.drain();
+
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+    const order = a.model.orders[0];
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const order_op = try latestOp(&a, arena_state.allocator());
+
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    repos.applyOp(&b.model, b.fx, order_op);
+    b.drain();
+    repos.loadOrders(&b.model, b.fx);
+    b.drain();
+    const remote = b.model.orders[0];
+    try testing.expect(remote.id < 0);
+    try testing.expectEqualStrings("test01", remote.origin_device);
+    try testing.expectEqual(order.id, remote.origin_id);
+
+    // B advances the ticket it only holds as a remapped copy. The op
+    // must name A's order, not B's negative local id.
+    repos.setOrderStatus(&b.model, b.fx, remote.id, remote.status, .preparing, 1_700_000_000_500);
+    b.drain();
+    const status_op = try latestOp(&b, arena_state.allocator());
+    try testing.expectEqualStrings("order_status", status_op.entity_table);
+    try testing.expectEqualStrings("test02", status_op.device_id);
+    try testing.expect(std.mem.indexOf(u8, status_op.data_json, "\"origin_device\":\"test01\"") != null);
+    var id_buffer: [32]u8 = undefined;
+    const order_id_text = try std.fmt.bufPrint(&id_buffer, "{d}", .{order.id});
+    try testing.expectEqualStrings(order_id_text, status_op.entity_id);
+
+    repos.applyOp(&a.model, a.fx, status_op);
+    a.drain();
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+    try testing.expectEqual(domain.OrderStatus.preparing, a.model.orders[0].status);
+}
+
+test "a remapped order's payment travels back to its origin" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+
+    a.model.employee_id = 7;
+    a.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    a.send(.{ .add_to_cart = 1 });
+    a.send(Msg{ .place_order = {} });
+    a.drain();
+
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+    const order = a.model.orders[0];
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const order_op = try latestOp(&a, arena_state.allocator());
+
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    repos.applyOp(&b.model, b.fx, order_op);
+    b.drain();
+    repos.loadOrders(&b.model, b.fx);
+    b.drain();
+    const remote = b.model.orders[0];
+
+    // B takes the money on the remapped copy. The op names A's order,
+    // so the payment lands on A's row when A applies it.
+    repos.takePayment(
+        &b.model,
+        b.fx,
+        repos.key_payment,
+        remote.id,
+        remote.status,
+        domain.PaymentMode.cash,
+        remote.total_minor,
+        1_700_000_000_600,
+    );
+    b.drain();
+    const payment_op = try latestOp(&b, arena_state.allocator());
+    try testing.expectEqualStrings("payment", payment_op.entity_table);
+    try testing.expectEqualStrings("test02", payment_op.device_id);
+    try testing.expect(std.mem.indexOf(u8, payment_op.data_json, "\"origin_device\":\"test01\"") != null);
+    var id_buffer: [32]u8 = undefined;
+    const order_id_text = try std.fmt.bufPrint(&id_buffer, "{d}", .{order.id});
+    try testing.expectEqualStrings(order_id_text, payment_op.entity_id);
+
+    repos.applyOp(&a.model, a.fx, payment_op);
+    a.drain();
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+    try testing.expectEqual(domain.OrderStatus.completed, a.model.orders[0].status);
+    const payments = try countRows(
+        &a,
+        "SELECT COUNT(*) AS n FROM payment WHERE order_id = ?1;",
+        &.{.{ .integer = order.id }},
+    );
+    try testing.expectEqual(@as(i64, 1), payments);
 }
 
 test "a beacon adds a peer once and updates it in place" {

@@ -56,6 +56,10 @@ pub const ParsedId = struct {
 /// One line of an order, as the op carries it. The name and the price
 /// are frozen at the moment of the sale, so the receiving device can
 /// show the ticket even when its own menu has moved on.
+///
+/// `id` is the writer's line id. The receiver does not use it: it
+/// namespaces its own line ids under its local order id, because two
+/// devices' line ids are not comparable.
 pub const OrderLineSnapshot = struct {
     id: i64,
     product_id: ?i64 = null,
@@ -70,10 +74,21 @@ pub const OrderLineSnapshot = struct {
 ///
 /// The order number is deliberately absent. It is a local sequence on
 /// each database, assigned by the database that stores the order, so
-/// two devices never fight over the same ticket number. The order's
-/// identity is `id`, and that is what the peers agree on.
+/// two devices never fight over the same ticket number.
+///
+/// The order's stable cross-device identity is the pair
+/// (`origin_device`, `id`): the device that took the sale and that
+/// device's local order id. `id` is NOT the receiving database's row
+/// key. A receiver looks the pair up and stores the order under its own
+/// local id (a negative one when the order came from a peer), so two
+/// devices that minted the same id stay two orders.
 pub const OrderSnapshot = struct {
+    /// The order id on `origin_device`.
     id: i64,
+    /// The device that took the sale. Absent on ops written before the
+    /// origin columns existed; the writer's `device_id` is the origin
+    /// in that case.
+    origin_device: []const u8 = "",
     order_type: i64,
     status: i64,
     dining_table_id: ?i64 = null,
@@ -90,17 +105,26 @@ pub const OrderSnapshot = struct {
 
 /// A status move. It is its own op because the order's content is
 /// immutable and the status is the one part that moves.
+///
+/// `id` is the order id on `origin_device`, not the local id of the
+/// device that wrote the op. The writer can be a third device that only
+/// holds a remapped copy of the order; the origin is what travels.
 pub const OrderStatusSnapshot = struct {
     id: i64,
+    origin_device: []const u8 = "",
     status: i64,
     changed_at: i64,
 };
 
-/// The money. One payment per order; the payment id is the order id,
-/// which is what makes a second delivery a duplicate rather than a
-/// second charge.
+/// The money. One payment per order; the payment id is the receiving
+/// database's local order id, which is what makes a second delivery a
+/// duplicate rather than a second charge.
+///
+/// `order_id` is the order id on `origin_device`; `origin_device` names
+/// that device. The receiver resolves the pair to its own local id.
 pub const PaymentSnapshot = struct {
     order_id: i64,
+    origin_device: []const u8 = "",
     mode: i64,
     amount_minor: i64,
     paid_at: i64,
@@ -371,6 +395,7 @@ test "an order snapshot round-trips with its lines" {
     }};
     const snapshot = OrderSnapshot{
         .id = 1_700_000_000_000,
+        .origin_device = "dev-3",
         .order_type = 0,
         .status = 0,
         .dining_table_id = 3,
@@ -390,6 +415,7 @@ test "an order snapshot round-trips with its lines" {
 
     const again = try parseOrder(arena, out.written());
     try std.testing.expectEqual(snapshot.id, again.id);
+    try std.testing.expectEqualStrings(snapshot.origin_device, again.origin_device);
     try std.testing.expectEqual(snapshot.total_minor, again.total_minor);
     try std.testing.expectEqual(@as(usize, 1), again.lines.len);
     try std.testing.expectEqualStrings("Paneer Tikka", again.lines[0].product_name);
@@ -401,12 +427,18 @@ test "a status snapshot round-trips" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const snapshot = OrderStatusSnapshot{ .id = 42, .status = 2, .changed_at = 1_700_000_000_000 };
+    const snapshot = OrderStatusSnapshot{
+        .id = 42,
+        .origin_device = "dev-3",
+        .status = 2,
+        .changed_at = 1_700_000_000_000,
+    };
     var out = std.Io.Writer.Allocating.init(arena);
     try std.json.Stringify.value(snapshot, .{}, &out.writer);
 
     const again = try parseOrderStatus(arena, out.written());
     try std.testing.expectEqual(snapshot.id, again.id);
+    try std.testing.expectEqualStrings(snapshot.origin_device, again.origin_device);
     try std.testing.expectEqual(snapshot.status, again.status);
     try std.testing.expectEqual(snapshot.changed_at, again.changed_at);
 }
@@ -418,6 +450,7 @@ test "a payment snapshot round-trips" {
 
     const snapshot = PaymentSnapshot{
         .order_id = 42,
+        .origin_device = "dev-3",
         .mode = 1,
         .amount_minor = 51450,
         .paid_at = 1_700_000_000_000,
@@ -427,6 +460,7 @@ test "a payment snapshot round-trips" {
 
     const again = try parsePayment(arena, out.written());
     try std.testing.expectEqual(snapshot.order_id, again.order_id);
+    try std.testing.expectEqualStrings(snapshot.origin_device, again.origin_device);
     try std.testing.expectEqual(snapshot.mode, again.mode);
     try std.testing.expectEqual(snapshot.amount_minor, again.amount_minor);
     try std.testing.expectEqual(snapshot.paid_at, again.paid_at);
