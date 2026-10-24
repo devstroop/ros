@@ -8,6 +8,9 @@
 > and service; the suites are admin 154/154, kiosk 8/8, net-spike 13/13,
 > service 10/10 and ros-core 43/43.
 > `native build` produces ReleaseFast binaries.
+> `scripts/package.sh --ci` and `--check` produce and verify three macOS
+> DMGs; the CI package job runs both. The artifacts are ad-hoc signed
+> until the release credentials are configured.
 > The money and back-office tracks are merged. The three apps share
 > `packages/ros-core`; the session and setup screens are copied into
 > each app by the package split. The screens the roadmap's phase two
@@ -33,14 +36,14 @@
 | Headless tests | admin 154/154, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
 | Database integration tests | 104, green | `apps/admin/src/tests_data.zig` |
 | Sidecar binaries | 0 | `tools/*` contain READMEs only |
-| CI workflows | 1 (verify + smoke) | `.github/workflows/ci.yml` |
+| CI workflows | 1 (verify, smoke, package) | `.github/workflows/ci.yml` |
 | Reusable component templates | 0 | `src/components/` empty |
 
 ## Subsystems
 
 | Subsystem | Status | Notes |
 |---|---|---|
-| Build and manifest | Partial | `app.json`, scripts and CI exist; no clean-machine proof; the smoke is shallow |
+| Build and manifest | Partial | Three `app.json` manifests, scripts, CI and the macOS package job exist; Developer ID/notarisation and the clean-machine proof remain; the smoke is shallow |
 | App model | Implemented | Model, Msg, update, boot, effects keys |
 | Role picker and login | Partial | bcrypt PIN hashes, kiosk sign-in and the admin's first-run setup exist; the sign-in checks the employee's stored role (B-002) and waits for the database to confirm the salt (B-003). A service or kiosk waits for the admin's reference data instead of setting up. The PIN field is still typed in the clear (B-027, #96) |
 | RBAC and navigation | Implemented core | 53 screens, 4 roles, one guard, a session-scoped stack ([ADR-0015](../decisions/0015-session-scoped-navigation.md)). The waiter opens the counter POS (`pos`, `pos_cart`, `payments`); the admin app remains the wildcard superset ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)) |
@@ -64,7 +67,7 @@
 | Display board | Partial | The board renders and shows the order cards |
 | Waiter shell | Partial | The floor, the menu, the cart, the order list, the counter POS and payments render; the tables screen has "Counter sale" and "Payments" entry points |
 | Testing | Partial | The split suites are green via `scripts/verify-all.sh` (admin 154/154, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43); each app walks its shell against the permission matrix; no sale smoke through the UI (#42) |
-| Packaging | Planned | No packaging/signing workflow; no signed build |
+| Packaging | Partial | `scripts/package.sh` builds three macOS DMGs, injects each app's `NSLocalNetworkUsageDescription`, signs ad-hoc by default (Developer ID + notarisation through `ROS_SIGNING_IDENTITY` / `ROS_NOTARY_PROFILE`), and verifies the checksums and the app inside each DMG. CI's **Package (macOS)** job uploads the three DMGs; the clean-machine sign-off and the hosted update feed remain. See [`operations/release.md`](../operations/release.md) |
 
 ## Flows that work
 
@@ -282,6 +285,10 @@ UI.
 - A CI workflow that exercises a sale (one exists, but only a non-blank smoke).
 - A test per screen that asserts what the operator sees, not only that
   it builds.
+- A Developer ID signed, notarised release installed and signed off on
+  the three clean machines.
+- A hosted, signed update feed per app, with the per-app cadence in
+  [`operations/release.md`](../operations/release.md) put into practice.
 
 ## Related
 
