@@ -13,8 +13,9 @@ const domain = @import("../domain/models.zig");
 const Role = nav.Role;
 const Screen = nav.Screen;
 
-/// Admin is the wildcard. Waiter is scoped to service. The two kiosk roles
-/// are device-scoped and sign in without a PIN, so their lists are short
+/// Admin is the wildcard. Waiter is the front of house and the counter
+/// POS: the waiter takes orders and money. The two kiosk roles are
+/// device-scoped and sign in without a PIN, so their lists are short
 /// and deliberately exclude anything that changes money.
 pub fn allows(role: Role, screen: Screen) bool {
     return switch (role) {
@@ -23,6 +24,9 @@ pub fn allows(role: Role, screen: Screen) bool {
             .role_picker,
             .login,
             .landing,
+            .pos,
+            .pos_cart,
+            .payments,
             .waiter_tables,
             .waiter_menu,
             .waiter_cart,
@@ -154,4 +158,25 @@ pub fn section_screen(section: nav.NavSection) Screen {
         .kitchen => .kds_board,
         .display => .display_board,
     };
+}
+
+test "the counter POS is the service role's, and the kiosk never touches money" {
+    for ([_]Screen{ .pos, .pos_cart, .payments }) |screen| {
+        // The admin app is the wildcard superset, so a single-machine
+        // restaurant can still run the till from it.
+        try std.testing.expect(allows(.admin, screen));
+        // The counter POS is the service app's: the waiter takes the
+        // order and the money at the same device.
+        try std.testing.expect(allows(.waiter, screen));
+        // The kiosk is a board, not a till.
+        try std.testing.expect(!allows(.kds, screen));
+        try std.testing.expect(!allows(.display, screen));
+    }
+
+    // The service role is the front of house, not the back office.
+    try std.testing.expect(allows(.waiter, .waiter_tables));
+    try std.testing.expect(allows(.waiter, .orders));
+    try std.testing.expect(!allows(.waiter, .admin_dashboard));
+    try std.testing.expect(!allows(.waiter, .reports));
+    try std.testing.expect(!allows(.waiter, .settings));
 }

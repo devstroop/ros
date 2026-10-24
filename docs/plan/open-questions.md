@@ -61,8 +61,6 @@ date before that phase starts.
 | A19 | What is the day boundary and timezone for reporting? | Epoch-ms is UTC; reports are local | Accountant + product | Product | Open |
 | A20 | What happens when two waiters edit one table? | Shared model and sync | Interviews + pilot | Product | Open |
 | A21 | Can a customer take the goods and settle later, and who may allow it? | An order now closes only when it is paid for, so "pay later" needs an explicit action | Interviews + product | Product | Open |
-| A22 | Is the counter POS the `admin` app or the `service` app? | The three-app split puts `pos` and `payments` in `admin` today, which means the till is the dedicated machine. If the till is a counter tablet, the permission matrix and the partition both change. | Product decision + a store visit | Product | Open |
-| A23 | Does the `service` app ever take money? | The waiter role cannot open `payments` today. If a waiter takes a card, the money must be replicated with the same discipline as the order. | Interviews + product | Product | Open |
 | A24 | Does the kiosk app run one board or both? | A single `kiosk` binary serves the kitchen and the customer display; the device chooses at install. A restaurant wanting both on one screen is a different requirement. | Store visit | Product | Open |
 
 ## B. Data and migration
@@ -243,6 +241,8 @@ listed so the team treats them as discovery work, not as solved.
 | How long are ops retained, and when is compaction safe? | 128 new ops trigger it; keep 64 clocks per device; delete below the floor in one transaction | ADR-0020, #111, tests |
 | How does a new device bootstrap? | Replay the durable log; if its cursor is below the floor, fetch and apply the snapshot first | ADR-0020, #111, tests |
 | How are ops compacted, and when? | Synthetic create/status/payment ops in `sync_snapshot_op`, clocks in the header, adopted after the last page | ADR-0020, #111, tests |
+| Is the counter POS the `admin` app or the `service` app? | The `service` app; the waiter role opens `pos`, `pos_cart` and `payments`, and the `admin` app remains the wildcard superset | ADR-0021, #112, the shell-partition tests |
+| Does the `service` app ever take money? | Yes; the waiter takes it on the same device, and the payment is device-owned and idempotent by request key | ADR-0021, ADR-0014, #112, tests |
 
 ## Adding a question
 

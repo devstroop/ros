@@ -72,6 +72,33 @@ fn fakeFx() !Effects {
     return fx;
 }
 
+/// The screen ordinals the shell gates, read out of the markup itself.
+fn markupGates(arena: std.mem.Allocator) ![]usize {
+    var out: std.ArrayList(usize) = .empty;
+    errdefer out.deinit(arena);
+    const needle = "screen_index == ";
+    var rest: []const u8 = main.app_markup;
+    while (std.mem.indexOf(u8, rest, needle)) |at| {
+        rest = rest[at + needle.len ..];
+        var digits: usize = 0;
+        while (digits < rest.len and std.ascii.isDigit(rest[digits])) digits += 1;
+        if (digits == 0) break;
+        const ordinal = std.fmt.parseInt(usize, rest[0..digits], 10) catch break;
+        try out.append(arena, ordinal);
+        rest = rest[digits..];
+    }
+    return out.toOwnedSlice(arena);
+}
+
+/// The onboarding screens are mounted by their own condition, before a
+/// role exists, so they are not part of a board's partition.
+fn isSessionScreen(screen: nav.Screen) bool {
+    return switch (screen) {
+        .role_picker, .login, .landing, .setup, .wizard, .create_company, .upgrade => true,
+        else => false,
+    };
+}
+
 // --------------------------------------------------------------- tests
 
 test "the kiosk boots as the kitchen board" {
@@ -136,6 +163,31 @@ test "the kiosk refuses every screen its board may not open" {
 
         try testing.expectEqual(before, model.screen());
         try testing.expect(model.error_text.len > 0);
+    }
+}
+
+test "the kiosk shell mounts exactly the screens its boards may open" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const gates = try markupGates(arena);
+    for ([_]nav.Role{ .kds, .display }) |role| {
+        for (std.enums.values(nav.Screen)) |screen| {
+            if (isSessionScreen(screen)) continue;
+            if (!rbac.allows(role, screen)) continue;
+            if (std.mem.indexOfScalar(usize, gates, screen.index()) == null) {
+                std.debug.print("the kiosk shell does not mount {s}, which {t} may open\n", .{ screen.title(), role });
+                return error.PartitionMismatch;
+            }
+        }
+    }
+
+    // Every gate belongs to at least one board: the kiosk does not
+    // mount a screen that neither mode can open.
+    for (gates) |ordinal| {
+        const screen = std.enums.fromInt(nav.Screen, ordinal) orelse return error.UnknownScreenOrdinal;
+        try testing.expect(rbac.allows(.kds, screen) or rbac.allows(.display, screen));
     }
 }
 

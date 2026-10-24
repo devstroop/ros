@@ -1,8 +1,8 @@
 # Screen backlog
 
-**Status:** Living document. 45 screens, tracked one by one.
-**Source of truth:** `apps/admin/src/core/navigation.zig` (the `Screen`
-enum), `apps/admin/src/app.native` (the mount gates) and
+**Status:** Living document. 53 screens, tracked one by one.
+**Source of truth:** `packages/ros-core/src/core/navigation.zig` (the
+`Screen` enum), `apps/admin/src/app.native` (the mount gates) and
 `apps/admin/src/screens/` (the templates).
 
 ## How to read this page
@@ -92,8 +92,8 @@ No nav section. These are reached by drilling in, not by a tab.
 
 | Screen | Ord | Route-ish id | Role | Status | Platform elements | Data source |
 |---|---|---|---|---|---|---|
-| `pos` | 10 | `sell/pos` | admin | Done | `split`, `column`, `row`, `search-field`, `toggle-button`, `scroll`, `grid`, `card`, `text`, `button` | `product`, `product_category` |
-| `pos_cart` | 11 | `sell/cart` | admin | Planned | `column`, `row`, `card`, `text`, `text-field`, `badge`, `button` | `product`, `modifier_group`, `modifier`, `discount` |
+| `pos` | 10 | `sell/pos` | admin, service | Done | `split`, `column`, `row`, `search-field`, `toggle-button`, `scroll`, `grid`, `card`, `text`, `button` | `product`, `product_category` |
+| `pos_cart` | 11 | `sell/cart` | admin, service | Planned | `column`, `row`, `card`, `text`, `text-field`, `badge`, `button` | `product`, `modifier_group`, `modifier`, `discount` |
 | `order_confirmation` | 12 | `sell/order-confirmation` | admin | Partial | `column`, `row`, `card`, `text`, `badge`, `button` | `orders`, `order_line`, `payment` |
 
 ## Orders and money
@@ -102,7 +102,7 @@ No nav section. These are reached by drilling in, not by a tab.
 |---|---|---|---|---|---|---|
 | `orders` | 13 | `orders/orders` | admin, waiter | Done | `column`, `row`, `card`, `text`, `badge`, `button`, `scroll` | `orders` |
 | `order_detail` | 14 | `orders/order-detail` | admin, waiter, kds, display | Foundation | `column`, `drawer`, `timeline`, `timeline-item`, `table`, `table-row`, `table-cell`, `badge`, `text`, `button` | `orders`, `order_line`, `order_line_modifier`, `order_status_history`, `payment` |
-| `payments` | 15 | `orders/payments` | admin | Planned | `grid`, `button`, `text-field`, `badge`, `dialog` | `payment`, `orders`, `order_discount` |
+| `payments` | 15 | `orders/payments` | admin, service | Planned | `grid`, `button`, `text-field`, `badge`, `dialog` | `payment`, `orders`, `order_discount` |
 
 ## Floor
 

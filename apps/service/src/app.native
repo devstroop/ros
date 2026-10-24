@@ -89,9 +89,12 @@
           </column>
         </if>
         <else>
+          <if test="{screen_index == 10}"><use template="screen-pos"/></if>
+          <if test="{screen_index == 11}"><use template="screen-pos-cart"/></if>
           <if test="{screen_index == 12}"><use template="screen-order-confirmation"/></if>
           <if test="{screen_index == 13}"><use template="screen-orders"/></if>
           <if test="{screen_index == 14}"><use template="screen-order-detail"/></if>
+          <if test="{screen_index == 15}"><use template="screen-payments"/></if>
           <if test="{screen_index == 16}"><use template="screen-customers"/></if>
           <if test="{screen_index == 6}"><use template="screen-reset-pin"/></if>
           <if test="{screen_index == 37}"><use template="screen-waiter-tables"/></if>

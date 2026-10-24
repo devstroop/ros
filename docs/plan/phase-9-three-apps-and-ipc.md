@@ -347,8 +347,8 @@ executor: opening the stream, a line pulling the peer's ops, the
 pending-pull race, a failed stream counting and reopening, and a clean
 close not counting. The real SDK `.stream` fetch test reads the chunked
 NDJSON from a live `ros-core` server, so the wire and the line message
-are proven together. `scripts/verify-all.sh` is green: admin 153/153,
-kiosk 7/7, net-spike 13/13, service 8/8, ros-core 41/41.
+are proven together. `scripts/verify-all.sh` is green: admin 154/154,
+kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43.
 
 **Done when:** an order placed on the service app appears on the kiosk
 app's board without a poll tick in between. The event path is the
@@ -415,10 +415,22 @@ binary or three. The split is a packaging and a safety decision on top
 of a fabric that already works, so it belongs at the end of the fabric
 and not in the middle of it. See [the order of the slices](#the-order-of-the-slices).
 
+**As built.** The three shells are `admin`, `service` and `kiosk`. The
+counter POS is the service app's (#112): the waiter role opens `pos`,
+`pos_cart` and `payments`, and the service shell mounts all three with
+"Counter sale" and "Payments" entry points on the tables screen. The
+admin app remains the wildcard superset, so a single machine can still
+run the till from it. Each app's suite walks every `(role, screen)` pair
+against the shell's gates: admin 154/154, service 10/10, kiosk 8/8, with
+the package matrix at 43/43. See
+[ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md).
+
 **Done when:** three binaries build; each refuses the screens its role
 may not open, by the same code path and the same test as today; the
-permission matrix test walks all three; and a restaurant running the
-three apps serves a customer exactly as it did when it ran one.
+permission matrix test walks all three and the partition agrees with
+it; a waiter can take money on the service app; and a restaurant
+running the three apps serves a customer exactly as it did when it ran
+one.
 
 ### 9.9 — Packaging (4 days, overlaps Phase 8)
 
@@ -464,16 +476,22 @@ kiosk asks for the Local Network permission in its own words.
   [#95](https://github.com/devstroop/ros/issues/95). It is the
   first thing slice 9.0 implements, because the sign-in does not work
   across the apps until it lands.
-- Is the counter POS the `admin` app or the `service` app? The matrix
-  today gives `pos` and `payments` to `admin` only, which puts the till
-  on the dedicated machine.
-- Does the waiter ever take money? The matrix says no.
+- ~~Is the counter POS the `admin` app or the `service` app?~~ The
+  service app; the waiter opens `pos`, `pos_cart` and `payments`
+  ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
+- ~~Does the waiter ever take money?~~ Yes, on the service app. The
+  payment is device-owned and idempotent by request key
+  ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
 - How are peers authenticated?
-- How long are ops retained, and what is the compaction rule?
+- ~~How long are ops retained, and what is the compaction rule?~~ 128
+  new ops trigger compaction, 64 clocks per device are kept, and a
+  cursor below the floor gets a snapshot
+  ([ADR-0020](../decisions/0020-late-join-and-compaction.md)).
 - What happens to a device that is removed from the restaurant?
 - Must the Flutter app interoperate during a mixed rollout?
 
-The first three are tracked in
+The PIN salt, peer authentication and the remaining operational
+questions are tracked in
 [`open-questions.md`](open-questions.md). See also
 [`architecture/12`](../architecture/12-three-apps-and-ipc.md) and
 [`architecture/08`](../architecture/08-sync.md).

@@ -9,10 +9,11 @@ pub fn build(b: *std.Build) void {
 
     // The package's own tests. A dependency module's tests are not
     // collected by the app that depends on it, so this is where the
-    // pure wire code is proved. It needs nothing but `std`.
+    // pure wire code and the permission matrix are proved. They need
+    // nothing but `std`.
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/net/tests.zig"),
+            .root_source_file = b.path("src/tests.zig"),
             .target = b.standardTargetOptions(.{}),
             .optimize = b.standardOptimizeOption(.{}),
         }),

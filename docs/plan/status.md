@@ -5,15 +5,15 @@
 > service and kiosk mount their role's subsets of the same core.
 > **Last verified:** 2026-10-24, by source review and the split suites.
 > `scripts/verify-all.sh` is green for ros-core, admin, kiosk, net-spike
-> and service; the suites are admin 153/153, kiosk 7/7, net-spike 13/13,
-> service 8/8 and ros-core 41/41.
+> and service; the suites are admin 154/154, kiosk 8/8, net-spike 13/13,
+> service 10/10 and ros-core 43/43.
 > `native build` produces ReleaseFast binaries.
 > The money and back-office tracks are merged. The three apps share
 > `packages/ros-core`; the session and setup screens are copied into
 > each app by the package split. The screens the roadmap's phase two
 > names are built.
 > See the [full audit](../review/archive/2026-10-20-audit.md).
-> **Screen-by-screen table:** [`architecture/03`](../architecture/03-navigation-and-rbac.md#the-45-screens).
+> **Screen-by-screen table:** [`architecture/03`](../architecture/03-navigation-and-rbac.md#the-53-screens).
 
 ## Scoreboard
 
@@ -30,7 +30,7 @@
 | Read queries | 16 named constants | `packages/ros-core/src/data/repos.zig` (one named constant each, and one place that says the app is loading) |
 | Write paths | setup, order + lines, status + history, config, currency, product, employee, employee PIN, employee removal, customer, category, tax slab, discount, modifier group, dish station, stock count, payment, op log, reference version, log compaction, snapshot apply | `repos.zig` |
 | Effect keys | 62, each used once | `packages/ros-core/src/data/repos.zig`; a test asserts the uniqueness |
-| Headless tests | admin 153/153, kiosk 7/7, net-spike 13/13, service 8/8, ros-core 41/41; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
+| Headless tests | admin 154/154, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
 | Database integration tests | 104, green | `apps/admin/src/tests_data.zig` |
 | Sidecar binaries | 0 | `tools/*` contain READMEs only |
 | CI workflows | 1 (verify + smoke) | `.github/workflows/ci.yml` |
@@ -43,12 +43,12 @@
 | Build and manifest | Partial | `app.json`, scripts and CI exist; no clean-machine proof; the smoke is shallow |
 | App model | Implemented | Model, Msg, update, boot, effects keys |
 | Role picker and login | Partial | bcrypt PIN hashes, kiosk sign-in and the admin's first-run setup exist; the sign-in checks the employee's stored role (B-002) and waits for the database to confirm the salt (B-003). A service or kiosk waits for the admin's reference data instead of setting up. The PIN field is still typed in the clear (B-027, #96) |
-| RBAC and navigation | Implemented core | 53 screens, 4 roles, one guard, a session-scoped stack ([ADR-0015](../decisions/0015-session-scoped-navigation.md)) |
+| RBAC and navigation | Implemented core | 53 screens, 4 roles, one guard, a session-scoped stack ([ADR-0015](../decisions/0015-session-scoped-navigation.md)). The waiter opens the counter POS (`pos`, `pos_cart`, `payments`); the admin app remains the wildcard superset ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)) |
 | Screen coverage | Implemented | 53 screens in the admin app; every one is mounted, renders, and has a landmark of its own. The seven session screens are mounted on their own condition, the other forty-six on their ordinal gate. The service and kiosk mount their role's subset |
 | Theming | Implemented | Light/dark semantic tokens; every text pair is asserted against WCAG AA |
 | Shell layout | Partial | Fixed rail + content; no responsive mode. The shell says "Loading..." while a read is on its way, and a failed read replaces the screen with the reason and a way to try again |
 | Dashboard | Implemented | Counts, recent orders, shortcuts; amounts use the company's currency decimals |
-| POS | Partial | Menu, filter, cart, order types and discounts work; the order write succeeds; a sale happens once, the number is a sequence and a retry is the same sale; the tax is worked out line by line from each product's slab. No modifiers; the price parser is still two-decimal (#66) |
+| POS | Partial | Menu, filter, cart, order types and discounts work; the order write succeeds; a sale happens once, the number is a sequence and a retry is the same sale; the tax is worked out line by line from each product's slab. The service app mounts the counter POS as well as the admin app ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)). No modifiers; the price parser is still two-decimal (#66) |
 | Orders | Partial | Lists non-voided orders including completed; status advance is conditional (D19); the header badge still disagrees with the list (D5, #7) |
 | Kitchen board | Implemented | Tickets, summary, wait time, advance |
 | Floor board | Partial | The table board shows what is true about each table; a guest cannot be moved to another table |
@@ -56,14 +56,14 @@
 | Employees | Partial | The list and the form work; a PIN can be reset by a manager, and an employee who has left can be removed - the row stays, so the orders they took still name them, and the last admin cannot be removed |
 | Catalog admin | Partial | The catalogue list, the product form, the categories, the tax slabs, the discounts and the modifier groups all work. The CHOICES inside a modifier group, and which dishes a group applies to, do not |
 | Settings / setup | Partial | The admin's first run is the walk-through: the company's record, then the owner and their PIN, written in one transaction with the starter menu, the salt and six tables. The quick setup stays for an owner who wants to start serving sooner. A service or kiosk that starts first waits for the admin's reference data and cannot set up a second restaurant |
-| Payments | Partial | Cash/card/UPI mode, confirmation and one payment write; a payment is taken once, and an order can still be closed without one |
+| Payments | Partial | Cash/card/UPI mode, confirmation and one payment write; a payment is taken once, and an order can still be closed without one. The service app takes payments too: the waiter's device owns the op and the order's status transition makes a retry the same sale ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)) |
 | Reports / compliance | Partial | The owner's read of the day exists: the takings, the orders, the tax, the discounts, and the way the money was paid. The X report, the Z report and the day close are the reports track's |
 | Printing | Scaffolded | Tables and README-only sidecar; no code |
 | Sync | Implemented core | Op log in the same transaction, per-device Lamport clock and vector cursor, beacon or manual peers, reference snapshot. The push stream (#110) is implemented: a held-open `/v1/events` line wakes the peer's pull, with the five-second poll as the fallback. Cross-device order identity (#87) is implemented: `orders.id` is the local row key, `(origin_device, origin_id)` is the stable name, remote orders get negative local ids, and status/payment ops carry the origin. Late join/compaction (#111) is implemented: `/v1/ops` is served from the durable log with a vector cursor, a 128-op trigger compacts to `sync_snapshot_op`, a cursor below the floor gets 409 and bootstraps from `/v1/snapshot`, and the header clocks are adopted after the last page |
 | Push / events | Implemented | `/v1/events` held open, chunked NDJSON, one thread per stream, 20ms wake, 15s heartbeat; one stream per peer, line-triggered pull, pending-pull follow-up, terminal reopen; 5s poll fallback |
 | Display board | Partial | The board renders and shows the order cards |
-| Waiter shell | Partial | The floor, the menu, the cart and the order list render |
-| Testing | Partial | The split suites are green via `scripts/verify-all.sh` (admin 153/153, kiosk 7/7, net-spike 13/13, service 8/8, ros-core 41/41); no sale smoke through the UI (#42) |
+| Waiter shell | Partial | The floor, the menu, the cart, the order list, the counter POS and payments render; the tables screen has "Counter sale" and "Payments" entry points |
+| Testing | Partial | The split suites are green via `scripts/verify-all.sh` (admin 154/154, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43); each app walks its shell against the permission matrix; no sale smoke through the UI (#42) |
 | Packaging | Planned | No packaging/signing workflow; no signed build |
 
 ## Flows that work

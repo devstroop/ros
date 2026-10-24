@@ -135,8 +135,8 @@ there.
 
 | Role | Allowed screens |
 |---|---|
-| `admin` | Every screen (43/43) |
-| `waiter` | `role_picker`, `login`, `landing`, `waiter_tables`, `waiter_menu`, `waiter_cart`, `waiter_orders`, `orders`, `order_detail`, `order_confirmation`, `customers`, `reset_pin` |
+| `admin` | Every screen (53/53) |
+| `waiter` | `role_picker`, `login`, `landing`, `pos`, `pos_cart`, `payments`, `waiter_tables`, `waiter_menu`, `waiter_cart`, `waiter_orders`, `orders`, `order_detail`, `order_confirmation`, `customers`, `reset_pin` |
 | `kds` | `role_picker`, `login`, `kds_board`, `order_detail` |
 | `display` | `role_picker`, `login`, `display_board`, `order_detail` |
 
@@ -150,9 +150,11 @@ Guarantees:
   no second path that writes `screen_index` except session setup and
   `go_back`.
 
-Waiter can reach `customers` and `order_confirmation`, but neither has a
-wired template. Waiter can also reach `reset_pin`, which has no template.
-The permission matrix is broader than the rendered surface.
+The waiter's matrix and the service shell now agree: the counter POS
+(`pos`, `pos_cart`) and `payments` are mounted there, as are
+`customers`, `order_confirmation` and `reset_pin`. The admin app remains
+the wildcard superset
+([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
 
 ## Nav sections and the rail
 
@@ -231,10 +233,11 @@ surviving sign-out - are fixed. See
    are a blank content pane.~~ FIXED: every screen in the enum is
    mounted, every one of them renders, and every one of them has a
    landmark of its own.
-2. **The waiter's rail leads to a working floor, but the waiter cannot
-   pay for a table.** The floor, the menu, the cart and the order list
-   render; the money does not. The waiter takes the order and the
-   payment is taken at the till.
+2. ~~**The waiter's rail leads to a working floor, but the waiter
+   cannot pay for a table.**~~ FIXED: the waiter role opens `pos`,
+   `pos_cart` and `payments`, and the service app mounts them. The
+   waiter takes the order and the payment on the same device
+   ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
 3. ~~**`pos_cart` is unused.** The POS uses an inline cart pane, not the
    `pos_cart` screen.~~ FIXED: the cart is ONE template, used both as
    the pane beside the menu and as the `pos_cart` screen, so the two

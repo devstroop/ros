@@ -25,7 +25,7 @@ It is the target, not the as-built. The as-built picture is
 | App | Role | Sign-in | Home | Screens |
 |---|---|---|---|---|
 | `admin` | `admin` | PIN | `admin_dashboard` | 50 |
-| `service` | `waiter` | PIN | `waiter_tables` | 9 |
+| `service` | `waiter` | PIN | `waiter_tables` | 12 |
 | `kiosk` | `kds` or `display`, chosen at install | device | `kds_board` or `display_board` | 3 per mode |
 
 Each app is a separate Native SDK app: its own `app.json`, its own id
@@ -41,9 +41,18 @@ sign in with a PIN, `kds` and `display` sign in by device.
 
 The counts are read off the enum and the matrix, not estimated. The
 `admin` app mounts the 50 screens the admin role may open, less the
-three every app shares; the `service` app mounts the 9 the waiter role
+three every app shares; the `service` app mounts the 12 the waiter role
 may open, less those three; the `kiosk` app mounts 3 per mode - its
 board and `order_detail` - plus the person picker and the sign-in.
+
+**The counter POS is the service app's.** The waiter role opens `pos`,
+`pos_cart` and `payments`, and the service shell mounts all three; the
+tables screen has "Counter sale" and "Payments" entry points. The
+`admin` app remains the wildcard superset, so a single-machine
+restaurant can still run the till from it and a manager can use the
+same screens for setup or correction. The kiosk roles never open a
+money screen. See
+[ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md).
 
 **These counts move, and they have moved.** The first draft of this
 page said 38, 11 and 3, read off the enum as it stood on 2026-10-21.
@@ -63,11 +72,11 @@ those two tests describe.
 | Screen group | admin | service | kiosk |
 |---|---|---|---|
 | `admin_dashboard`, `control_center` | ● | | |
-| `pos`, `pos_cart` | ● | | |
+| `pos`, `pos_cart` | ● | ● | |
 | `orders` | ● | ● | |
 | `order_detail` | ● | ● | ● |
 | `order_confirmation` | ● | ● | |
-| `payments` | ● | | |
+| `payments` | ● | ● | |
 | `customers` | ● | ● | |
 | `dining_tables`, `table_categories`, `floor_plan`, `reservations` | ● | | |
 | `kitchen_dishes`, `inventory_items`, `product_categories`, `suppliers`, `purchase_orders` | ● | | |
@@ -83,6 +92,11 @@ those two tests describe.
 | `landing`, `reset_pin` | ● | ● | |
 | `setup`, `wizard`, `create_company`, `upgrade` | ● | | |
 | `role_picker` (the person picker) | ● | ● | ● |
+
+`setup`, `wizard`, `create_company` and `upgrade` are the onboarding
+path: every app mounts them by their own condition before a role
+exists, and the table records the role that may open them once signed
+in.
 
 `role_picker` is the one screen whose meaning changes, and **it is
 mounted in all three apps** - which is a change from the first draft of
@@ -529,8 +543,16 @@ impossible, and only accepted where it cannot.
 | Customers | the device that created the row | ops | Last writer - on the **vector** clock and then the device id, because two devices' scalar clocks are not comparable |
 | An order's content and its lines | the device that created the order | ops | Single writer - nobody else writes it |
 | An order's status | any device | ops | Monotonic: the furthest along wins |
-| Payments | the device that took the money | ops | Single writer, idempotent by request key ([ADR-0014](../decisions/0014-order-identity.md)) |
+| Payments | the device that took the money, `admin` or `service` | ops | Single writer, idempotent by request key ([ADR-0014](../decisions/0014-order-identity.md)) |
 | Devices | each device, for itself | ops | Insert-only |
+
+The counter POS is the service app's, so the device that takes the
+money is usually the waiter's tablet or counter terminal
+([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)). The
+payment is an op like any other: the device that took it owns it, and
+the order's status transition is the idempotency key, so a second tap
+finds the order closed and writes nothing. The admin app can still take
+a payment as the wildcard superset; the kiosk cannot.
 
 Two properties fall out of this and both are worth stating plainly:
 
@@ -718,15 +740,16 @@ meaningful across the three databases.
   installation salt replicates as reference data, or it becomes
   per-employee. The second is the recommendation, and it is a product
   decision as much as an engineering one.
-- Whether the counter POS is the `admin` app or the `service` app.
-  Today the permission matrix gives `pos` and `payments` to `admin`
-  only, which puts the till on the dedicated machine. If the till is a
-  counter tablet, the matrix has to change and the partition with it.
+- ~~Whether the counter POS is the `admin` app or the `service` app.~~
+  **Decided:** the counter POS is the `service` app, and the `admin` app
+  remains the wildcard superset
+  ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
 - Peer authentication (see Security).
 - Whether a removed device's ops are retained.
 - Whether the snapshot should carry status history for the admin's
   audit screens.
 - The port numbers, which are a proposal, not a reservation.
 
-The first three are tracked as open questions. The rest belong to the
-phase that needs them.
+The PIN salt and peer authentication are tracked as open questions;
+the counter POS is settled. The rest belong to the phase that needs
+them.
