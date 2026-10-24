@@ -10,7 +10,9 @@
 > **Design:** [12-three-apps-and-ipc](12-three-apps-and-ipc.md) and
 > [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md) — the op log
 > survives as the wire format, the sidecar does not, and the transport
-> is HTTP/1.1 on TCP between the apps themselves.
+> is HTTP/1.1 on TCP between the apps themselves. Late join and
+> compaction are
+> [ADR-0020](../decisions/0020-late-join-and-compaction.md).
 
 ## The problem
 
@@ -168,9 +170,12 @@ Not decided:
 - which tables sync;
 - conflict handling beyond LWW;
 - deletion semantics (tombstones vs snapshots);
-- clock pruning and `op_log` growth;
 - whether the app or sidecar owns schema migration;
 - whether sync is required for a single-device install.
+
+Clock pruning and `op_log` growth are settled separately by
+[ADR-0020](../decisions/0020-late-join-and-compaction.md): the log
+compacts to a snapshot and keeps a 64-clock tail per device.
 
 See [ADR-0009](../decisions/0009-oplog-sync-with-transport-sidecar.md) and
 [phase 6](../plan/phase-6-sync-sidecar.md).

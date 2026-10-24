@@ -186,8 +186,8 @@ prevent.
 The app declares the `sqlite` capability in `app.json`. The SDK compiles
 its SQLite engine into the app, generates a migrations module from
 `src/schema/*.sql`, and opens the database migrated at boot. The
-append-only authority is `src/schema/migrations.lock.json` (version 16,
-16 hashes).
+append-only authority is `src/schema/migrations.lock.json` (version 17,
+17 hashes).
 
 The app does not open the database, set PRAGMAs, or run migrations
 itself. That is deliberate: the engine owns the connection.

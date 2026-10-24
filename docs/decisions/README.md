@@ -30,6 +30,7 @@ This project follows a lightweight MADR-style format.
 | [0017](0017-three-apps-over-tcp-ip.md) | Three apps, one core, TCP/IP between them | Accepted |
 | [0018](0018-the-pin-hash-is-the-employees.md) | The PIN hash is the employee's | Accepted |
 | [0019](0019-cross-device-order-identity.md) | Cross-device order identity: a local row id and an origin pair | Accepted |
+| [0020](0020-late-join-and-compaction.md) | Late join, snapshots and log compaction | Accepted |
 
 ADR-0017 was accepted on 2026-10-24. It supersedes ADR-0004 (four
 roles in one binary) and revises ADR-0009 (the op-log sidecar); the op

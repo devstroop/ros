@@ -584,8 +584,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .net => |event| net_bridge.onChannel(model, fx, event),
         .peer => |response| net_bridge.onResponse(model, fx, response),
+        .snapshot => |response| net_bridge.onSnapshotResponse(model, fx, response),
         .net_event => |line| net_bridge.onEventLine(model, fx, line),
         .event_done => |response| net_bridge.onEventDone(model, response),
+        .sync_ops_loaded => |result| net_bridge.onOpsLoaded(model, result),
+        .sync_snapshot_loaded => |result| net_bridge.onSnapshotLoaded(model, result),
+        .sync_compacted => |result| repos.onSyncCompacted(model, result),
         .sync_applied => |result| {
             // The cursor has already moved; a failed apply is a gap the
             // operator can see, not a loop that retries forever.
@@ -599,6 +603,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 // database.
                 net_bridge.notify();
                 repos.loadOrders(model, fx);
+                repos.maybeCompact(model, fx);
             }
         },
         .reference => |response| net_bridge.onReferenceResponse(model, fx, response),
@@ -1300,7 +1305,14 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .sync_state_loaded => |result| {
             if (result.outcome != .ok) return;
-            if (result.kind == .page) repos.decodeSyncState(model, result.bytes);
+            if (result.kind == .page) {
+                repos.decodeSyncState(model, result.bytes);
+                // A boot after a week may find a log that is already
+                // past the policy. The durable counter survived the
+                // restart; compact now rather than waiting for another
+                // 128 ops.
+                repos.maybeCompact(model, fx);
+            }
         },
 
         .dish_assigned => |result| {
@@ -1500,6 +1512,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // The order is in the op log. The other apps' boards wake
             // now instead of waiting for the five-second poll.
             net_bridge.notify();
+            repos.maybeCompact(model, fx);
         },
 
         // ----------------------------------------------------- the waiter
@@ -1572,6 +1585,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             go(model, .orders);
             repos.loadOrders(model, fx);
             net_bridge.notify();
+            repos.maybeCompact(model, fx);
         },
 
         // -------------------------------------------------------- the forms
@@ -1920,6 +1934,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // and the next move is computed from it.
             repos.loadOrders(model, fx);
             net_bridge.notify();
+            repos.maybeCompact(model, fx);
         },
 
         // -------------------------------------------------------------- data

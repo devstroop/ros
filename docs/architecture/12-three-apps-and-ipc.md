@@ -1,12 +1,14 @@
 # Three apps and the protocol between them
 
 > **Status:** Implemented core. The three shells build; the wire (9.2),
-> the op log (9.3), discovery (9.4), reference data (9.5) and the push
-> stream (9.6) are merged. Late-join bootstrap and compaction (9.7) and
-> packaging (9.9) remain. The decision is
-> [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md); the delivery
+> the op log (9.3), discovery (9.4), reference data (9.5), the push
+> stream (9.6) and late-join bootstrap/compaction (9.7) are merged.
+> Packaging (9.9) remains. The decision is
+> [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md); the bootstrap
+> and compaction rules are
+> [ADR-0020](../decisions/0020-late-join-and-compaction.md); the delivery
 > order is [`plan/phase-9`](../plan/phase-9-three-apps-and-ipc.md).
-> **Last reviewed:** 2026-10-24, after the push-stream slice landed.
+> **Last reviewed:** 2026-10-24, after the bootstrap/compaction slice landed.
 
 ## What this page is
 
@@ -301,10 +303,10 @@ could speak without a second protocol.
 | Endpoint | Direction | Body | Purpose |
 |---|---|---|---|
 | `GET /v1/hello` | peer → peer | — | The peer card: device id, role, protocol version, app version, local clock |
-| `GET /v1/ops?since=<cursor>` | peer → peer | NDJSON out | Every op the peer holds that the cursor does not already cover |
+| `GET /v1/ops?since=<cursor>` | peer → peer | NDJSON out | A page of durable ops the cursor does not already cover; `409` when the cursor is below the compacted floor |
 | `POST /v1/ops` | peer → peer | NDJSON in | Ops this peer produced |
 | `GET /v1/reference?after=<version>` | admin → peer | NDJSON out | Admin-owned reference rows above a version |
-| `GET /v1/snapshot` | peer → peer | NDJSON out | A compacted base state, for a device that joins late |
+| `GET /v1/snapshot?after=<seq>` | peer → peer | NDJSON out | One page of a compacted base state, for a device that joins late or fell below the floor |
 | `GET /v1/events` | peer → peer | NDJSON out | A long-lived stream of push notifications |
 
 `GET /v1/events` is the push path. The server holds the response open
@@ -462,19 +464,56 @@ the admin app keeps a list of the devices it has seen. A restaurant that
 blocks broadcast configures one address per device and never thinks
 about it again.
 
-### Bootstrap
+### Bootstrap and compaction
 
 A device that has never seen the restaurant asks for `/v1/ops` with an
-empty cursor and replays the log. The log is the history, so replay
-*is* the state. When the log is compacted, the peer answers
-`/v1/snapshot` instead: a base state plus the per-device clocks it was
-taken at.
+empty cursor and replays the durable log. The log is the history, so
+replay *is* the state while the range still exists.
 
-A device that has been offline for a week replays the ops it missed,
-from whichever peer holds them. Because ops are idempotent and the
-cursor is per source device, replaying a range a peer has already sent
-costs nothing but time - and a range from one peer can never hide a
-range from another.
+The log does not grow without bound. A SQLite trigger keeps a durable
+`ops_since_compact` counter; after 128 new ops the app compacts the log
+into a snapshot and keeps the last 64 clocks per device. The highest
+deleted clock for each device is the **floor**, stored in `sync_state`.
+Compaction writes the snapshot metadata and its lines, deletes the range
+below the floor and marks the retained rows in one transaction.
+
+The snapshot is NDJSON: a header line carrying the format version, the
+snapshot generation, the per-device clocks it was taken at, and the page
+position; then synthetic `create`, `order_status` and `payment` ops for
+the current state. The lines are ordinary wire ops, applied through the
+same idempotent path as a live op, with no op-log write and no cursor
+move per line. The receiver adopts the header clocks only after the last
+page, using the per-device maximum, so an interrupted bootstrap starts
+again from the top.
+
+A peer whose cursor does not cover the floor cannot replay the missing
+range. `/v1/ops` answers:
+
+```json
+{"error":"snapshot required","snapshot":"/v1/snapshot"}
+```
+
+with status `409`. The client resets its snapshot position, pages
+`/v1/snapshot?after=0` until the header says `done`, adopts the clocks,
+and then pulls the tail above them. A device that has been offline for a
+week therefore converges: the snapshot covers the week, and the tail
+covers what happened while it was reading.
+
+Both reads are async: the net thread parks the connection, the loop
+thread reads SQLite and answers. One pending answer slot is enough
+because the net thread is serial; a competing short request while a read
+is in flight gets `503`. A page is bounded by the 32 KiB frame. An op
+page that fills before its row limit is progress: the lines that fit are
+sent and the next pull resumes above the last clock. A single op or
+snapshot line that cannot fit in an empty frame is refused with `413`
+rather than split.
+
+The snapshot covers current orders, their lines, the current status and
+payments. It does not carry status history, voided drafts or reference
+data: a late joiner still gets the menu from the admin's
+`/v1/reference` document. An admin that is closed cannot seed a
+brand-new device's menu, but it is not needed for the restaurant to keep
+selling.
 
 ## Who owns what
 
@@ -684,8 +723,9 @@ meaningful across the three databases.
   only, which puts the till on the dedicated machine. If the till is a
   counter tablet, the matrix has to change and the partition with it.
 - Peer authentication (see Security).
-- Compaction: how the log is summarised into a snapshot, and when.
 - Whether a removed device's ops are retained.
+- Whether the snapshot should carry status history for the admin's
+  audit screens.
 - The port numbers, which are a proposal, not a reservation.
 
 The first three are tracked as open questions. The rest belong to the

@@ -1,10 +1,11 @@
 # Phase 9 — Three apps over TCP/IP
 
-> **Status:** In progress. Slices 9.0–9.6 and 9.8 are merged; late-join
-> bootstrap/compaction (9.7) and packaging (9.9) remain.
+> **Status:** In progress. Slices 9.0–9.8 are merged; packaging (9.9)
+> remains.
 > **Decision:** [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md)
 > (Accepted 2026-10-24); the design is
-> [`architecture/12`](../architecture/12-three-apps-and-ipc.md).
+> [`architecture/12`](../architecture/12-three-apps-and-ipc.md). Bootstrap
+> and compaction are [ADR-0020](../decisions/0020-late-join-and-compaction.md).
 > **Estimate:** 42 engineer-days
 > **Depends on:** Phase 3 (the POS slice), Phase 5 (the admin
 > surfaces), ADR-0017 accepted, **and the PIN salt settled**
@@ -346,8 +347,8 @@ executor: opening the stream, a line pulling the peer's ops, the
 pending-pull race, a failed stream counting and reopening, and a clean
 close not counting. The real SDK `.stream` fetch test reads the chunked
 NDJSON from a live `ros-core` server, so the wire and the line message
-are proven together. `scripts/verify-all.sh` is green: admin 148/148,
-kiosk 7/7, net-spike 13/13, service 8/8, ros-core 37/37.
+are proven together. `scripts/verify-all.sh` is green: admin 153/153,
+kiosk 7/7, net-spike 13/13, service 8/8, ros-core 41/41.
 
 **Done when:** an order placed on the service app appears on the kiosk
 app's board without a poll tick in between. The event path is the
@@ -360,6 +361,37 @@ A device that joins replays the log; a compacted log answers with a
 snapshot. The op log grows, so it is summarised. Then the proof: three
 apps, three machines, one restaurant, with the admin app closed in the
 middle of it.
+
+**As built.** `/v1/ops` is served from durable `op_log`, paged and
+filtered by a JSON vector cursor. A SQLite trigger keeps
+`ops_since_compact`; after 128 new ops the app compacts in one
+transaction, keeps the last 64 clocks per device and records the deleted
+range as `sync_op_floor`. A requester whose cursor does not cover the
+floor gets `409 {"error":"snapshot required","snapshot":"/v1/snapshot"}`.
+`/v1/snapshot` pages over `sync_snapshot_op` with `after`/`next`/`done`;
+the header carries the per-device clocks, and the receiver adopts them
+with a per-device maximum only after the last page. Snapshot lines are
+synthetic create/status/payment ops applied through the live idempotent
+path with `persist=false`, so they write no op-log rows and move no
+cursor per line. Both reads are async on the loop thread with one
+pending answer slot; a competing request gets 503.
+
+**Evidence.** `apps/admin/src/tests_data.zig` proves the floor and the
+retained tail (67 ops compact to floor `dev-a:3` with 64 kept), a
+snapshot page carrying the header and order lines, a fresh device that
+applies all 67 lines and ends with 65 orders, 65 lines and one payment
+but zero op-log rows, a device whose cursor is a week stale (128-op
+snapshot, then the durable tail to 133 orders), and three devices where
+the admin closes after its first order while kiosk and till keep taking,
+moving and paying orders for sixty simulated minutes and converge on 61
+orders and 60 payments, with both peer logs compacted during the hour.
+`apps/admin/src/tests.zig` proves a 409 turns into a snapshot fetch from
+`after=0`, and the compaction test drives the real `/v1/ops` and
+`/v1/snapshot` request paths, including the 409 and the 200 above the
+floor. An op page that fills before its sixty-four-row limit sends the
+lines that fit and the next pull resumes above the last clock; a single
+line that cannot fit at all is 413. `packages/ros-core` tests the header
+round-trip and refusal of an unknown format.
 
 **Done when:** the kitchen keeps cooking and the till keeps selling
 with the admin app closed; a device that has been off for a week

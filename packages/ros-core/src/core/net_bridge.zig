@@ -27,8 +27,10 @@ const native_sdk = @import("native_sdk");
 const model_mod = @import("model.zig");
 const msg_mod = @import("msg.zig");
 const protocol = @import("../net/protocol.zig");
+const cursor = @import("../net/cursor.zig");
 const record = @import("../net/record.zig");
 const reference = @import("../net/reference.zig");
+const snapshot_mod = @import("../net/snapshot.zig");
 const server = @import("../net/server.zig");
 const discovery = @import("../net/discovery.zig");
 const client = @import("../net/client.zig");
@@ -234,6 +236,11 @@ fn pollPeer(
 ) void {
     if (peer.host_len == 0 or peer.tcp == 0) return;
 
+    // A snapshot bootstrap owns the peer until it finishes. Pulling the
+    // log in the middle would move the cursor before the base state is
+    // in place.
+    if (peer.snapshot_key != 0) return;
+
     // One pull per peer at a time. The fetch key is fixed, so a second
     // pull would be rejected; an event that arrives during the pull is
     // remembered and the answer schedules one more pull instead.
@@ -342,6 +349,7 @@ pub fn notify() void {
 pub const sync_fetch_key_base: u64 = 9200;
 pub const reference_fetch_key_base: u64 = 9300;
 pub const event_fetch_key_base: u64 = 9400;
+pub const snapshot_fetch_key_base: u64 = 9500;
 
 /// How long one event stream is allowed to live. The terminal recycles
 /// it; the poll is the fallback while it is down.
@@ -412,6 +420,17 @@ pub fn onResponse(model: *Model, fx: *Effects, response: native_sdk.EffectRespon
         _ = applyOpLines(model, fx, response.body);
     }
 
+    // A peer that compacted past this cursor cannot replay the range.
+    // Start from its snapshot, then pull only what happened after the
+    // clocks the snapshot was taken at.
+    if (response.outcome == .ok and response.status == 409) {
+        if (pending) |peer| {
+            peer.snapshot_after = 0;
+            peer.snapshot_version = 0;
+            requestSnapshot(model, fx, peer);
+        }
+    }
+
     if (pending) |peer| {
         if (peer.sync_pending) {
             peer.sync_pending = false;
@@ -421,6 +440,111 @@ pub fn onResponse(model: *Model, fx: *Effects, response: native_sdk.EffectRespon
                 break;
             }
         }
+    }
+}
+
+/// Ask a peer for its compacted base state. The fetch is one page; the
+/// response handler asks for the next page until the header says done.
+fn requestSnapshot(model: *Model, fx: *Effects, peer: *model_mod.Peer) void {
+    if (peer.snapshot_key != 0) return;
+
+    var index: usize = 0;
+    var found = false;
+    for (model.peers[0..model.peer_count], 0..) |*candidate, at| {
+        if (candidate != peer) continue;
+        index = at;
+        found = true;
+        break;
+    }
+    if (!found) return;
+
+    var url_buffer: [client.max_url_bytes]u8 = undefined;
+    const url = client.formatSnapshot(
+        &url_buffer,
+        peer.address(),
+        peer.tcp,
+        peer.snapshot_after,
+        peer.snapshot_version,
+    ) catch return;
+    peer.snapshot_key = snapshot_fetch_key_base + index;
+    fx.fetch(.{
+        .key = peer.snapshot_key,
+        .url = url,
+        .timeout_ms = 5_000,
+        .on_response = Effects.responseMsg(.snapshot),
+    });
+}
+
+/// One page of a peer's snapshot. The header is a `snapshot.Header`;
+/// every following line is an ordinary op record applied without a
+/// cursor move. The cursor is adopted from the header only after the
+/// last page, so an interrupted bootstrap starts again from the top.
+pub fn onSnapshotResponse(model: *Model, fx: *Effects, response: native_sdk.EffectResponse) void {
+    const peer = model.findPeerBySnapshotKey(response.key) orelse return;
+    peer.snapshot_key = 0;
+
+    model.peer_outcome = @tagName(response.outcome);
+    model.peer_status = response.status;
+
+    if (response.outcome != .ok) return;
+    if (response.status == 204) {
+        model.sync_rejected +%= 1;
+        return;
+    }
+    if (response.status != 200 or response.truncated) {
+        model.sync_rejected +%= 1;
+        return;
+    }
+
+    const newline = std.mem.indexOfScalar(u8, response.body, '\n') orelse {
+        model.sync_rejected +%= 1;
+        return;
+    };
+
+    var header_arena_buffer: [8 * 1024]u8 = undefined;
+    var header_fba = std.heap.FixedBufferAllocator.init(&header_arena_buffer);
+    const header = snapshot_mod.decode(header_fba.allocator(), response.body[0..newline]) catch {
+        model.sync_rejected +%= 1;
+        return;
+    };
+
+    var applied: usize = 0;
+    var lines = std.mem.splitScalar(u8, response.body[newline + 1 ..], '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+
+        var arena_buffer: [16 * 1024]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&arena_buffer);
+        const op = record.decode(fba.allocator(), trimmed) catch {
+            model.sync_rejected +%= 1;
+            return;
+        };
+        if (!repos.applySnapshotOp(model, fx, op)) {
+            model.sync_rejected +%= 1;
+            return;
+        }
+        applied += 1;
+    }
+
+    if (!header.done and applied == 0) {
+        model.sync_rejected +%= 1;
+        return;
+    }
+
+    if (header.done) {
+        repos.adoptSnapshotCursor(model, fx, header.clocks, header.version);
+        model.sync_snapshots +%= 1;
+
+        for (model.peers[0..model.peer_count], 0..) |*candidate, index| {
+            if (candidate != peer) continue;
+            pollPeer(model, fx, candidate, index, false);
+            break;
+        }
+    } else {
+        peer.snapshot_after = header.next;
+        peer.snapshot_version = header.version;
+        requestSnapshot(model, fx, peer);
     }
 }
 
@@ -480,6 +604,76 @@ pub fn onReferenceResponse(model: *Model, fx: *Effects, response: native_sdk.Eff
     }
 }
 
+// ------------------------------------------------------ async answers
+//
+// A short request that needs a database read parks the connection and
+// returns. The query result comes back as a message on the loop thread;
+// the handler builds the body and writes the answer. The net thread is
+// serial, so one pending slot is enough. A second request while one is
+// pending gets 503 rather than racing the slot.
+
+/// A page of durable ops is ready. The client's cursor advances only
+/// over the lines that fit, so a page cut short is a retry, not a lost
+/// op.
+pub fn onOpsLoaded(model: *Model, result: native_sdk.EffectDbResult) void {
+    if (model.sync_pending != .ops) return;
+    const conn = model.sync_pending_conn;
+    model.sync_pending = .none;
+
+    if (result.outcome != .ok) {
+        respond(conn, 500, "Internal Server Error", "application/json", "{\"error\":\"op log read failed\"}\n");
+        return;
+    }
+
+    var body: [server.max_frame_bytes - 256]u8 = undefined;
+    const page = repos.writeSyncOpsPage(result.bytes, &body);
+    // A page that filled before the last op is progress, not a failure:
+    // the lines that fit are sent, and the next pull asks above the
+    // cursor they carry. Only a single op that cannot fit at all is 413.
+    if (page.overflow and page.len == 0) {
+        respond(conn, 413, "Payload Too Large", "application/json", "{\"error\":\"op too large for one frame\"}\n");
+        return;
+    }
+    respond(conn, 200, "OK", protocol.content_type, body[0..page.len]);
+}
+
+/// A page of a compacted snapshot is ready. A server with no snapshot
+/// says 204; the requester only asks after a 409 from `/v1/ops`, so a
+/// missing snapshot means the peer is in an inconsistent state and the
+/// next poll retries rather than inventing state.
+pub fn onSnapshotLoaded(model: *Model, result: native_sdk.EffectDbResult) void {
+    if (model.sync_pending != .snapshot) return;
+    const conn = model.sync_pending_conn;
+    const after = model.sync_pending_after;
+    model.sync_pending = .none;
+
+    if (result.outcome != .ok) {
+        respond(conn, 500, "Internal Server Error", "application/json", "{\"error\":\"snapshot read failed\"}\n");
+        return;
+    }
+
+    var body: [server.max_frame_bytes - 256]u8 = undefined;
+    const page = repos.writeSyncSnapshotPage(result.bytes, after, &body);
+    if (!page.found) {
+        respond(conn, 204, "No Content", protocol.content_type, "");
+        return;
+    }
+    if (page.overflow) {
+        respond(conn, 413, "Payload Too Large", "application/json", "{\"error\":\"snapshot line too large for one frame\"}\n");
+        return;
+    }
+    respond(conn, 200, "OK", protocol.content_type, body[0..page.len]);
+}
+
+fn respond(conn: u32, status: u16, reason: []const u8, content_type: []const u8, body: []const u8) void {
+    var response: [server.max_frame_bytes]u8 = undefined;
+    const text = server.formatResponse(&response, status, reason, content_type, body) catch return;
+    if (!shared.server_state.outbox.write(conn, text)) {
+        // The count is read by the terminal; the answer itself is gone.
+        _ = shared.server_state.outbox.dropped.fetchAdd(1, .monotonic);
+    }
+}
+
 // --------------------------------------------------------------- answers
 
 fn answer(model: *Model, fx: *Effects, conn: u32, bytes: []const u8) void {
@@ -527,11 +721,35 @@ fn answer(model: *Model, fx: *Effects, conn: u32, bytes: []const u8) void {
     } else if (std.mem.eql(u8, request.path, protocol.endpoints.ops)) {
         switch (request.method) {
             .get => {
-                // The recent ops above the requester's cursor. The
+                // The durable log above the requester's cursor. The
                 // cursor is a vector, so a peer that has seen a lot
                 // from one device still receives another's first op.
+                // The query is a page; the client applies it and asks
+                // again, which keeps the frame bounded.
                 const since = request.param("since") orelse "";
-                body_len = repos.writeCachedOps(model, since, &body);
+                var parsed: cursor.Vector = .{};
+                parsed.parse(since) catch {};
+
+                if (model.sync_op_floor.len > 0 and !parsed.coversVector(&model.sync_op_floor)) {
+                    status = 409;
+                    reason = "Conflict";
+                    const text = "{\"error\":\"snapshot required\",\"snapshot\":\"/v1/snapshot\"}\n";
+                    @memcpy(body[0..text.len], text);
+                    body_len = text.len;
+                    content_type = "application/json";
+                } else if (model.sync_pending != .none) {
+                    status = 503;
+                    reason = "Service Unavailable";
+                    const text = "{\"error\":\"busy\"}\n";
+                    @memcpy(body[0..text.len], text);
+                    body_len = text.len;
+                    content_type = "application/json";
+                } else {
+                    model.sync_pending = .ops;
+                    model.sync_pending_conn = conn;
+                    repos.loadSyncOps(fx, since);
+                    return;
+                }
             },
             .post => {
                 // A push is applied on the loop thread, in the same
@@ -543,6 +761,34 @@ fn answer(model: *Model, fx: *Effects, conn: u32, bytes: []const u8) void {
                 content_type = "application/json";
             },
             .other => {
+                status = 405;
+                reason = "Method Not Allowed";
+                const text = "{\"error\":\"method not allowed\"}\n";
+                @memcpy(body[0..text.len], text);
+                body_len = text.len;
+                content_type = "application/json";
+            },
+        }
+    } else if (std.mem.eql(u8, request.path, protocol.endpoints.snapshot)) {
+        switch (request.method) {
+            .get => {
+                if (model.sync_pending != .none) {
+                    status = 503;
+                    reason = "Service Unavailable";
+                    const text = "{\"error\":\"busy\"}\n";
+                    @memcpy(body[0..text.len], text);
+                    body_len = text.len;
+                    content_type = "application/json";
+                } else {
+                    const after = std.fmt.parseInt(i64, request.param("after") orelse "0", 10) catch 0;
+                    model.sync_pending = .snapshot;
+                    model.sync_pending_conn = conn;
+                    model.sync_pending_after = after;
+                    repos.loadSyncSnapshotPage(fx, after);
+                    return;
+                }
+            },
+            .post, .other => {
                 status = 405;
                 reason = "Method Not Allowed";
                 const text = "{\"error\":\"method not allowed\"}\n";
