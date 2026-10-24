@@ -322,8 +322,8 @@ rail and the allowed screens.
 
 | Role | Label | Sign-in | Home screen | Rail sections | Allowed screens |
 |---|---|---|---|---|---|
-| `admin` | Admin | PIN | `admin_dashboard` | Overview, Sell, Orders, Floor, Catalog, People, System | 43 (all) |
-| `waiter` | Waiter | PIN | `waiter_tables` | Service | 12 |
+| `admin` | Admin | PIN | `admin_dashboard` | Overview, Sell, Orders, Floor, Catalog, People, System | 53 (all) |
+| `waiter` | Waiter | PIN | `waiter_tables` | Service | 15 |
 | `kds` | Kitchen | none (device) | `kds_board` | Kitchen | 4 |
 | `display` | Display | none (device) | `display_board` | Display | 4 |
 
@@ -338,6 +338,7 @@ pub fn allows(role: Role, screen: Screen) bool {
         .admin => true,
         .waiter => switch (screen) {
             .role_picker, .login, .landing,
+            .pos, .pos_cart, .payments,
             .waiter_tables, .waiter_menu, .waiter_cart, .waiter_orders,
             .orders, .order_detail, .order_confirmation,
             .customers, .reset_pin,
@@ -363,7 +364,7 @@ The sets, written out:
 | Role | Allowed screens |
 |---|---|
 | `admin` | every screen in the enum |
-| `waiter` | `role_picker`, `login`, `landing`, `waiter_tables`, `waiter_menu`, `waiter_cart`, `waiter_orders`, `orders`, `order_detail`, `order_confirmation`, `customers`, `reset_pin` |
+| `waiter` | `role_picker`, `login`, `landing`, `pos`, `pos_cart`, `payments`, `waiter_tables`, `waiter_menu`, `waiter_cart`, `waiter_orders`, `orders`, `order_detail`, `order_confirmation`, `customers`, `reset_pin` |
 | `kds` | `role_picker`, `login`, `kds_board`, `order_detail` |
 | `display` | `role_picker`, `login`, `display_board`, `order_detail` |
 
@@ -384,22 +385,17 @@ Four guarantees fall out of the matrix, and each one is a test:
 
 ### Allowed is not the same as rendered
 
-The matrix is broader than the mounted surface. `waiter` may open
-`waiter_tables`, `waiter_menu`, `waiter_cart`, `waiter_orders`,
-`customers`, `reset_pin` and `landing` - none of which has a template.
-The waiter signs in, lands on `waiter_tables`, and the content pane is
-empty. The `display` role lands on `display_board`, which also has no
-template.
+The matrix is the permission; the shell is the mount. The service app
+mounts every screen the waiter may open except the onboarding screens,
+which are mounted by their own condition before a role exists. The
+admin app mounts every screen because admin is the wildcard. The kiosk
+mounts both boards and the order detail.
 
-The same gap exists on the admin rail: `Catalog` opens
-`product_categories`, `People` opens `employees` and `System` opens
-`settings` - three of the seven admin rail entries lead to an empty
-pane.
-
-This is a coverage gap, not a permission gap: `rbac.allows` is doing its
-job, and the shell has not caught up. A screen-coverage test that
-asserts "every allowed screen is either mounted or explicitly listed as
-unavailable" does not exist yet.
+Each app's suite walks every `(role, screen)` pair and compares the
+matrix with the shell's `screen_index` gates. A screen cannot be
+permitted but unmounted, or mounted but refused, without a test saying
+so. The counter POS is the service app's
+([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
 
 ## How a denied navigation is handled
 

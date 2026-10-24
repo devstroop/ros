@@ -258,18 +258,30 @@ test "a role cannot open a screen it may not use" {
 
 test "the permission matrix is total: every role against every screen" {
     for (std.enums.values(nav.Role)) |role| {
+        // Every role can always reach the person picker and the
+        // sign-in screen: a device must never be locked out.
+        try testing.expect(rbac.allows(role, .role_picker));
+        try testing.expect(rbac.allows(role, .login));
+
         for (std.enums.values(nav.Screen)) |screen| {
-            // The rule under test: a role may only open a screen whose
-            // nav section it can reach, or one of the shared screens.
-            const permitted = rbac.allows(role, screen);
-            if (permitted) {
-                try testing.expect(rbac.allows(role, screen));
-            }
-            // Every role can always reach the role picker and the
-            // sign-in screen: a device must never be locked out.
-            try testing.expect(rbac.allows(role, .role_picker));
-            try testing.expect(rbac.allows(role, .login));
+            // Calling the function for every pair is the point: it is
+            // total, and no pair traps. The values are asserted below
+            // and by each app's shell-partition test.
+            _ = rbac.allows(role, screen);
         }
+    }
+
+    // Admin is the wildcard, so the admin app remains the superset.
+    for (std.enums.values(nav.Screen)) |screen| {
+        try testing.expect(rbac.allows(.admin, screen));
+    }
+
+    // The counter POS is the service role's, and the kiosk never
+    // touches money (ADR-0021).
+    for ([_]nav.Screen{ .pos, .pos_cart, .payments }) |screen| {
+        try testing.expect(rbac.allows(.waiter, screen));
+        try testing.expect(!rbac.allows(.kds, screen));
+        try testing.expect(!rbac.allows(.display, screen));
     }
 }
 
@@ -1035,6 +1047,15 @@ fn markupGates(arena: std.mem.Allocator) ![]usize {
     return out.toOwnedSlice(arena);
 }
 
+/// The onboarding screens are mounted by their own condition, before a
+/// role exists, so they are not part of the role's partition.
+fn isSessionScreen(screen: nav.Screen) bool {
+    return switch (screen) {
+        .role_picker, .login, .landing, .setup, .wizard, .create_company, .upgrade => true,
+        else => false,
+    };
+}
+
 test "the shell gates the screens the enum says it does" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -1051,6 +1072,25 @@ test "the shell gates the screens the enum says it does" {
         if (std.enums.fromInt(nav.Screen, ordinal) == null) {
             std.debug.print("app.native gates screen {d}, which is not in the enum\n", .{ordinal});
             return error.UnknownScreenOrdinal;
+        }
+    }
+}
+
+test "the admin shell mounts exactly the screens the admin may open" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const gates = try markupGates(arena);
+    for (std.enums.values(nav.Screen)) |screen| {
+        if (isSessionScreen(screen)) continue;
+        const gated = std.mem.indexOfScalar(usize, gates, screen.index()) != null;
+        if (rbac.allows(.admin, screen) != gated) {
+            std.debug.print(
+                "the admin shell and the matrix disagree on {s}: allowed={} gated={}\n",
+                .{ screen.title(), rbac.allows(.admin, screen), gated },
+            );
+            return error.PartitionMismatch;
         }
     }
 }

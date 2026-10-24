@@ -671,7 +671,7 @@ print sidecar prototypes are not part of the three-app tree.
 | The model must be default-constructible. | It is built as `.{}`. It cannot own a heap allocator, so its size is a compile-time fact and it uses `Bump`. | `src/core/bump.zig`, `src/main.zig` |
 | A `.native` file not in `app_sources.zig` does not exist. | The import closure is embedded; a missing entry fails loudly at the import site. | `src/app_sources.zig` |
 | `native` is not on the PATH in this workspace; the installed Zig is 0.17.0. | The SDK pins Zig 0.16.0 and 0.17 does not parse it. The statuses in this document come from source review, not from a run. | `README.md` |
-| Counts drift between prose and the tree. | The schema holds 46 tables and the split suites hold 153 admin tests; the root README has been corrected to match, but any hand-written count will drift again. | `README.md`, `src/schema/`, `src/tests.zig`, `plan/status.md` |
+| Counts drift between prose and the tree. | The schema holds 46 tables and the split suites hold 154 admin tests; the root README has been corrected to match, but any hand-written count will drift again. | `README.md`, `src/schema/`, `src/tests.zig`, `plan/status.md` |
 | The root `README.md` used to link `docs/architecture/sync.md`, `docs/plan/gaps-from-v1.md`, `docs/plan/roadmap.md`, `docs/plan/backlog.md` and `AGENTS.md`. | Those paths do not exist; the maintained pages are `08-sync.md`, `plan/README.md` and `plan/status.md`. The root README should point at them. | `README.md` |
 
 ---

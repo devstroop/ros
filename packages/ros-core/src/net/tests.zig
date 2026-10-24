@@ -1,13 +1,8 @@
-//! The package's own test root.
+//! The wire tests' aggregator.
 //!
-//! A dependency module's tests are not collected by the app that depends
-//! on it - `zig build test` in the app collects tests from the app's
-//! module only. So the package tests itself: `zig build test` here runs
-//! the pure wire code, and `scripts/verify-all.sh` calls it.
-//!
-//! Only the files that need nothing but `std` are listed. The model and
-//! the repository layer need the SDK and the app's build options, and
-//! their rules are tested through the apps that mount them.
+//! The package's test root is `src/tests.zig`; it imports this file and
+//! the pure core tests. This file lists the wire files, which need
+//! nothing but `std`.
 
 test {
     _ = @import("protocol.zig");
