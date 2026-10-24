@@ -1,9 +1,9 @@
 # Schema
 
-> **Status:** Scaffolded — 43 tables across 11 migrations; only the core
+> **Status:** Scaffolded — 44 tables across 16 migrations; only the core
 > subset is used by repositories or UI.
-> **Last verified:** 2026-10-20, by source review.
-> **Source:** `src/schema/0001_core.sql` … `0010_sync.sql`,
+> **Last verified:** 2026-10-24, by source review and the migration lock.
+> **Source:** `src/schema/0001_core.sql` … `0016_order_origin.sql`,
 > `src/schema/migrations.lock.json`.
 
 ## Conventions
@@ -26,7 +26,7 @@ partly by review.
 ## Migration policy
 
 - Files are numbered `NNNN_name.sql` in `src/schema/`.
-- `migrations.lock.json` is the authority: version 11 and eleven hashes.
+- `migrations.lock.json` is the authority: version 16 and sixteen hashes.
 - `native db new-migration <name>` is the intended authoring path.
 - The engine opens the database **already migrated** at boot; the app
   never runs migration code.
@@ -132,6 +132,19 @@ The SQL file is authoritative for columns. This table is the map.
 | `op_log` | Append-only mutation log: table, row, operation, snapshot, logical clock, device | No |
 | `sync_state` | Local logical clock and sync metadata | No |
 
+### 0016 — Order origin (columns and indexes on `orders`)
+
+| Column/index | Purpose |
+|---|---|
+| `orders.origin_device` | The device that took the sale. Empty on a row that predates the columns and has no create op; the app treats that as this device. |
+| `orders.origin_id` | The order's id on `origin_device`. Together with the device it is the stable cross-device name. |
+| `orders_origin` | Lookup index on `(origin_device, origin_id)` for a status or payment op that names the origin. |
+| `orders_remote_origin` | Partial unique index on `(origin_device, origin_id) WHERE id < 0`; a remote order is stored once per origin. |
+
+The local `orders.id` stays the row key. Local sales are positive; a
+received sale gets a negative local id. See
+[ADR-0019](../decisions/0019-cross-device-order-identity.md).
+
 ## Indexes
 
 Indexes exist where the current queries need them:
@@ -143,6 +156,7 @@ Indexes exist where the current queries need them:
 - `customer(name)`
 - `customer_loyalty(customer_id)`
 - `orders(status)`, `orders(placed_at)`, `orders(dining_table_id)`
+- `orders(origin_device, origin_id)`, plus the partial unique remote-origin index
 - `order_line(order_id)`
 - `order_line_modifier(order_line_id)`
 - `order_status_history(order_id)`
@@ -163,7 +177,7 @@ reservations by status, and `op_log` by `created_at` for pruning.
 
 ## Relationship to the Flutter schema
 
-The v1 app had 39 tables in `assets/db/schema.sql`. Restaurant OS has 43, rewritten
+The v1 app had 39 tables in `assets/db/schema.sql`. Restaurant OS has 44, rewritten
 as STRICT. The differences that matter:
 
 | v1 | Restaurant OS | Why |
@@ -195,8 +209,10 @@ the table but only reads/writes `pin_salt` today.
    is no global deletion convention.
 7. **Audit columns.** `created_at`/`updated_at` exist on some tables, not
    all. A uniform convention is a target.
-8. **Sync identity.** `device.id` is `TEXT`; who generates it and how it
-   is trusted is not defined.
+8. **Sync identity.** The order origin pair is defined in ADR-0019. The
+   device token is generated at boot and not persisted, so a restart is
+   a new device identity for future rows and cursors; persisting it is a
+   follow-up.
 9. **Schema version.** `app_config.schema_version` is mentioned in v1
    docs but not written by Restaurant OS. The migration lock is the real version.
 10. **One company.** Enforced by query, not by a constraint. A second row

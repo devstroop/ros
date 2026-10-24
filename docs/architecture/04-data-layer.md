@@ -186,8 +186,8 @@ prevent.
 The app declares the `sqlite` capability in `app.json`. The SDK compiles
 its SQLite engine into the app, generates a migrations module from
 `src/schema/*.sql`, and opens the database migrated at boot. The
-append-only authority is `src/schema/migrations.lock.json` (version 11,
-10 hashes).
+append-only authority is `src/schema/migrations.lock.json` (version 16,
+16 hashes).
 
 The app does not open the database, set PRAGMAs, or run migrations
 itself. That is deliberate: the engine owns the connection.
@@ -196,15 +196,17 @@ itself. That is deliberate: the engine owns the connection.
 
 | Value | Shape | Rule |
 |---|---|---|
-| Order `id` | `i64` wall clock ms | Not a sequence; two orders in the same millisecond collide |
-| Order `order_no` | wall clock seconds as text | `UNIQUE`; two orders in the same second collide |
-| Order line `id` | order id + line index | Collides if an order is rewritten in the same ms |
+| Order `id` | `i64` wall clock ms, with a per-device floor | The local row key. Local sales are positive; orders received from a peer are negative. Not comparable across databases. |
+| Order origin | `(origin_device, origin_id)` | The stable cross-device name: the device that took the sale and that device's order id. |
+| Order `order_no` | six-digit sequence, assigned by the local database | `UNIQUE`; a retry does not consume a second number. Local to each database. |
+| Order line `id` | `local_order_id * 128 + line index` | Namespaced under the local order. A received line is remapped the same way; the wire line id is not trusted. |
+| Request key | device token + attempt id | `UNIQUE`; a retry is the same sale. |
 | `placed_at`, `created_at`, `updated_at` | epoch ms UTC | Integer, never a string |
 | `pin_salt` | 64 hex chars in `app_config` | Per installation |
 
-The ID scheme is documented as **provisional** in
-[ADR-0013](../decisions/0013-clock-based-order-ids.md). A dedicated
-sequence or UUID is the target.
+The local identity is settled in
+[ADR-0014](../decisions/0014-order-identity.md); the cross-device half is
+[ADR-0019](../decisions/0019-cross-device-order-identity.md).
 
 ## Error taxonomy
 

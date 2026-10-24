@@ -104,7 +104,7 @@ rules.
 |---|---|
 | App model | `apps/admin/src/core/model.zig`, `msg.zig`, `update.zig`, `navigation.zig`, `rbac.zig`, `theme.zig`, `bump.zig` |
 | View | `apps/admin/src/app.native` plus nine templates in `apps/admin/src/screens/` |
-| Data | `apps/admin/src/data/repos.zig`, `page.zig`, `auth.zig`; ten migrations in `apps/admin/src/schema/` (43 `STRICT` tables) |
+| Data | `apps/admin/src/data/repos.zig`, `page.zig`, `auth.zig`; sixteen migrations in `apps/admin/src/schema/` (44 `STRICT` tables) |
 | Manifest | `apps/admin/app.json`, `apps/admin/src/main.zig` |
 | Rules | `apps/admin/src/tests.zig` + `tests_data.zig` — 15 authored headless tests and 12 in-memory DB tests |
 

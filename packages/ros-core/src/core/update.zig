@@ -2453,7 +2453,12 @@ fn placeOrder(model: *Model, fx: *Effects) void {
     var count: usize = 0;
     for (model.cart[0..model.cart_len]) |line| {
         lines[count] = .{
-            .id = order_id + @as(i64, @intCast(count)),
+            // Namespace the line under the order. A plain
+            // `order_id + index` can collide with the next order's id
+            // when two sales land in adjacent milliseconds, and a
+            // remote line id is namespaced the same way under the
+            // receiver's negative local order id.
+            .id = order_id * 128 + @as(i64, @intCast(count)),
             .order_id = order_id,
             .product_id = line.product_id,
             // The line carries the station that cooks it, so the kitchen

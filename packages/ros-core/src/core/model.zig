@@ -126,7 +126,7 @@ pub fn allows_role(role: Role) bool {
 pub const products_buffer = 96 * 1024;
 pub const tables_buffer = 24 * 1024;
 pub const employees_buffer = 16 * 1024;
-pub const orders_buffer = 48 * 1024;
+pub const orders_buffer = 64 * 1024;
 pub const customers_buffer = 32 * 1024;
 pub const categories_buffer = 16 * 1024;
 pub const order_lines_buffer = 48 * 1024;

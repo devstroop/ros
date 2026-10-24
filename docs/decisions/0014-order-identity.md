@@ -1,12 +1,13 @@
 # ADR-0014: The order identity
 
-> **Status:** Accepted
+> **Status:** Accepted; the cross-device half is [ADR-0019](0019-cross-device-order-identity.md)
 > **Date:** 2026-10-21
 > **Deciders:** Devstroop maintainers
 > **Related:** [`architecture/04`](../architecture/04-data-layer.md),
 > [`architecture/05`](../architecture/05-schema.md),
 > [`plan/status.md`](../plan/status.md),
 > [ADR-0013](0013-clock-based-order-ids.md) (superseded),
+> [ADR-0019](0019-cross-device-order-identity.md) (cross-device identity),
 > [ADR-0006](0006-integer-money-epoch-ms.md)
 
 ## Context
@@ -67,9 +68,10 @@ The number is six digits, so it sorts as the string it is.
 ### Negative
 
 - The id is still unique only within a device. Two devices with two
-  databases can mint the same id, and the sync track has to settle that
-  when it merges them. The request key is device-scoped, so they cannot
-  mistake each other's sale for a retry in the meantime.
+  databases can mint the same id. The cross-device identity is the
+  origin pair in [ADR-0019](0019-cross-device-order-identity.md); the
+  request key is device-scoped, so they cannot mistake each other's
+  sale for a retry in the meantime.
 - The number is a global count, not a per-day one. A jurisdiction that
   wants a per-day sequence gets it by reading the date and the number
   off the order; if the sequence itself has to be per day, the name of
@@ -80,8 +82,10 @@ The number is six digits, so it sorts as the string it is.
 
 ### Follow-ups
 
-- The sync track owns the cross-device identity: a device-scoped id, or
-  a merge that can tell two devices' orders apart.
+- The cross-device identity is settled in
+  [ADR-0019](0019-cross-device-order-identity.md): the local id stays
+  the row key, and `(origin_device, origin_id)` names the sale across
+  databases.
 - The question of whether the number may repeat across devices or days
   is a question for accounting, not for the database, and it is open.
 - Refunds and voids need numbers of their own, and they are not
@@ -89,11 +93,10 @@ The number is six digits, so it sorts as the string it is.
 
 ## Alternatives considered
 
-- **A UUIDv7 or ULID for the id.** Rejected for now: the id is the key
-  everything points at, and the sync track will have to give it a
-  cross-device story anyway. Making it a 128-bit value now would move
-  the schema, the model, and the sync keys for a problem that is not
-  yet real. The floor keeps the id unique where the id is minted.
+- **A UUIDv7 or ULID for the id.** Rejected: the id is the key
+  everything points at. [ADR-0019](0019-cross-device-order-identity.md)
+  keeps the local `i64` and adds the origin pair, so the id stays cheap
+  and the sync key carries the cross-device identity.
 - **Letting the database assign the id as an autoincrement.** Rejected
   for the same reason, and for one more: the app would have to read
   the order back before it could pay for it, and the payment is taken

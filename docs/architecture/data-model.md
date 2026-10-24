@@ -3,11 +3,11 @@
 > **Scope:** the database schema in `apps/admin/src/schema/`, the
 > repository layer in `apps/admin/src/data/`, and the rules that connect
 > the two.
-> **Source:** `apps/admin/src/schema/0001..0010_*.sql`,
+> **Source:** `apps/admin/src/schema/0001..0016_*.sql`,
 > `apps/admin/src/schema/migrations.lock.json`, `apps/admin/src/data/*.zig`,
 > `apps/admin/src/core/update.zig`.
-> **Method:** read from source. The Native SDK CLI (`native`) is not on the
-> PATH in this workspace, so no migration run backs the claims here.
+> **Method:** read from source and verified by `scripts/verify-all.sh`
+> (schema check, in-memory migrations, and the split test suites).
 
 ---
 
@@ -158,11 +158,12 @@ as epochs.
 the platform when the database opens:
 
 ```
-0001_core.sql        0006_inventory.sql
-0002_catalog.sql     0007_ops.sql
-0003_floor.sql       0008_compliance.sql
-0004_customers.sql   0009_printing.sql
-0005_orders.sql      0010_sync.sql
+0001_core.sql        0006_inventory.sql     0011_default_tax_slab.sql
+0002_catalog.sql     0007_ops.sql           0012_order_sequence.sql
+0003_floor.sql       0008_compliance.sql    0013_order_request_key.sql
+0004_customers.sql   0009_printing.sql      0014_payment_once.sql
+0005_orders.sql      0010_sync.sql          0015_currency_decimals.sql
+                                            0016_order_origin.sql
 ```
 
 ### Creating one
@@ -182,20 +183,9 @@ authority on what has shipped:
 
 ```json
 {
-  "version": 10,
-  "hashes": [
-    "67a2b24c455e923d11520555649bf369408a2b43920e7baf61836aab6c1e230b",
-    "9b59ec3868b0cbd712d9738b0753e0f500dc38f0191aed4a00cae391ffefec02",
-    "b678a92d2f7d922a543c629328ecb6bff399068ccc85e0547fbf07214bebd4f4",
-    "1907a2e378a225a3b2454ac30a3919d248457719839182b347908e17f81e777b",
-    "769eccc09a5687349fa54600698f3bdcd0d07a587ca001310a731504a8dce51a",
-    "244e39ee03d06fac0892f47ffe4d322f9afcca73611befa7536ce36161f56be5",
-    "dc66e13cd19e7ad798c3c5020f5477bea277dd5d0ed85ee6d351ab4192772e7f",
-    "41d3f920fc0f90b9cbb2e8d47c966d4c2b6efaf857dc6a7720456874a5dae4e9",
-    "5f740d8d3b1321f34c45426fc586d8ab4a0387c577a7070c2e6aba1695d4d370",
-    "be27f5053ddc2bb79125137a28f2a80e82b73f8eef89f44f0375904fb5bc7ad1"
-  ],
-  "schema_hash": "c4a4e65ae64780c512c53bba046386c7f9e5dade159304d44a974dd5ae887925"
+  "version": 16,
+  "hashes": ["…one SHA-256 per migration, in order…"],
+  "schema_hash": "…one hash over the whole set…"
 }
 ```
 
@@ -244,7 +234,7 @@ migration. Once a release ships, that stops.
 
 ## 3. Table inventory
 
-43 tables across ten migrations, every one `STRICT`. One line each.
+44 tables across sixteen migrations, every one `STRICT`. One line each.
 
 ### 0001 — `core.sql` (4 tables)
 
@@ -301,12 +291,12 @@ rewrite yesterday's bill.
 
 | Table | Holds | Key columns |
 |---|---|---|
-| `orders` | The order header | `id`, `order_no` (UNIQUE), `order_type` (0–2), `status` (0–5), `dining_table_id`, `customer_id`, `employee_id`, `subtotal_minor`, `tax_minor`, `discount_minor`, `total_minor`, `placed_at`, `created_at`, `updated_at` |
-| `order_line` | One line of an order, with the name and price frozen at the sale | `id`, `order_id` → `orders` (CASCADE), `product_id`, `product_name`, `qty`, `unit_price_minor`, `tax_bps`, `discount_minor`, `station_id`, `created_at` |
+| `orders` | The order header | `id`, `order_no` (UNIQUE), `order_type` (0–2), `status` (0–5), `dining_table_id`, `customer_id`, `employee_id`, `subtotal_minor`, `tax_minor`, `discount_minor`, `total_minor`, `placed_at`, `notes`, `created_at`, `updated_at`, `origin_device`/`origin_id` (0016) |
+| `order_line` | One line of an order, with the name and price frozen at the sale | `id` (namespaced under the local order), `order_id` → `orders` (CASCADE), `product_id`, `product_name`, `qty`, `unit_price_minor`, `tax_bps`, `discount_minor`, `station_id`, `created_at` |
 | `order_line_modifier` | The frozen modifier choice on a line | `id`, `order_line_id` → `order_line` (CASCADE), `modifier_id`, `modifier_name`, `price_delta_minor` |
 | `order_discount` | A discount applied to an order | `id`, `order_id` → `orders` (CASCADE), `discount_id`, `name`, `amount_minor` |
 | `order_status_history` | The lifecycle ledger, written in the same transaction as the status change | `id`, `order_id` → `orders` (CASCADE), `status` (0–5), `changed_at`, `changed_by` |
-| `payment` | One payment against an order | `id`, `order_id` → `orders` (CASCADE), `mode` (0–4), `amount_minor`, `reference`, `paid_at` |
+| `payment` | One payment against an order; the id is the local order id | `id`, `order_id` → `orders` (CASCADE), `mode` (0–4), `amount_minor`, `reference`, `paid_at` |
 | `reservation` | A booking | `id`, `customer_id`, `dining_table_id`, `name`, `phone`, `guests`, `reserved_at`, `status` (0–2), `notes` |
 
 ### 0006 — `inventory.sql` (4 tables)
@@ -360,8 +350,9 @@ print job and a sidecar process owns the device.
 ### 0010 — `sync.sql` (3 tables)
 
 The operation log. v1 spoke WebSocket to a sync host from inside the
-app. Restaurant OS does not: the app writes its changes here and watches this
-table; a sidecar process owns the socket and the mDNS announcement.
+app. Restaurant OS does not: the app writes its changes here, watches this
+table, and carries the listener itself
+([ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md)).
 
 | Table | Holds | Key columns |
 |---|---|---|
@@ -370,15 +361,25 @@ table; a sidecar process owns the socket and the mDNS announcement.
 | `sync_state` | The local logical clock and sync metadata | `key` (PK), `value` |
 
 The conflict rule is last-writer-wins on `(logical_clock, device_id)`.
-The sidecar bumps the local clock to `max(local, highest seen) + 1`.
+The writer bumps its own clock to `max(local, highest seen) + 1`; the
+op's `device_id` is the writer, and the vector cursor is per writer.
+
+An order's cross-device name is the pair
+`(orders.origin_device, orders.origin_id)`, not the op's `device_id`.
+For a create op the writer is normally the origin; for a status or
+payment op written on a remapped copy it is not. The origin travels in
+the op's data. See
+[ADR-0019](../decisions/0019-cross-device-order-identity.md).
 
 ### Indexes
 
-Twenty-six indexes exist, at the columns the current queries touch:
+Twenty-eight indexes exist, at the columns the current queries touch:
 `employee(active)`, `product(category_id)`, `product(active)`,
 `modifier(group_id)`, `dining_table(category_id)`, `customer(name)`,
 `customer_loyalty(customer_id)`, `orders(status)`, `orders(placed_at)`,
-`orders(dining_table_id)`, `order_line(order_id)`,
+`orders(dining_table_id)`, `orders(origin_device, origin_id)`,
+`orders(origin_device, origin_id) WHERE id < 0` (partial unique),
+`order_line(order_id)`,
 `order_line_modifier(order_line_id)`, `order_status_history(order_id)`,
 `payment(order_id)`, `reservation(reserved_at)`,
 `purchase_order(supplier_id)`, `purchase_order_item(purchase_order_id)`,
@@ -600,7 +601,7 @@ The buffers are fixed-size and named in `core/model.zig`:
 pub const products_buffer = 96 * 1024;
 pub const tables_buffer = 24 * 1024;
 pub const employees_buffer = 16 * 1024;
-pub const orders_buffer = 48 * 1024;
+pub const orders_buffer = 64 * 1024;
 pub const customers_buffer = 32 * 1024;
 pub const categories_buffer = 16 * 1024;
 pub const order_lines_buffer = 48 * 1024;
@@ -922,7 +923,7 @@ comments the Restaurant OS code carries about its predecessor.
 | Money in `REAL` columns — `grandTotal REAL`, `mrpPrice REAL`, `discountRate REAL` | Money in `INTEGER` minor units; rates in basis points | Binary floats lose cents. A day's total cannot be reconstructed exactly from them. |
 | `employee.pin TEXT` — the PIN in the clear | `employee.pin_hash TEXT` — a salted SHA-256 digest | A curious operator with a database file could read any PIN, and a stolen file leaked every PIN at once. |
 | `company.password TEXT` | Removed; the company row carries no credential | One credential, one place, one algorithm. |
-| 39 tables with loose affinity, no `STRICT` | 43 tables, every one `STRICT`, every enum constrained by a `CHECK` | A declared type has to mean something, or the mistake surfaces three layers away. |
+| 39 tables with loose affinity, no `STRICT` | 44 tables, every one `STRICT`, every enum constrained by a `CHECK` | A declared type has to mean something, or the mistake surfaces three layers away. |
 | No type discipline on enums — `productType INTEGER`, `type INTEGER` with no allowed set | `CHECK (product_type IN (0, 1, 2, 3, 4))`, `CHECK (status IN (0, 1, 2, 3, 4, 5))`, `CHECK (role IN (0, 1, 2, 3))` | The database refuses an impossible state, not the app. |
 | Order lines referenced the product, so a price change rewrote history | `order_line.product_name` and `unit_price_minor` are frozen at the sale | "A price change tomorrow must not rewrite yesterday's bills." |
 | No lifecycle ledger | `order_status_history`, written in the same transaction as the status change | The kitchen board and the receipt both read it, and it cannot disagree with the order's current status. |
@@ -969,7 +970,7 @@ comments the Restaurant OS code carries about its predecessor.
 
 | Gotcha | Detail |
 |---|---|
-| The order id is the wall clock in milliseconds | Two orders in the same millisecond collide. `order_no` is the wall clock in seconds and is `UNIQUE`, so two orders in the same second collide too. The scheme is provisional — see [ADR-0013](../decisions/0013-clock-based-order-ids.md). |
+| The order id is the wall clock in milliseconds | It is the local row key, with a per-device floor. Two devices can mint the same id; the cross-device name is `(origin_device, origin_id)` and a remote order gets a negative local id. See [ADR-0014](../decisions/0014-order-identity.md) and [ADR-0019](../decisions/0019-cross-device-order-identity.md). |
 | `config_sql` is hard-coded | `SELECT key, value FROM app_config WHERE key = 'pin_salt' LIMIT 1;` — a generic config read is a small future refactor. |
 | `orders_sql` caps at 200 | `WHERE status <> 5 ORDER BY placed_at DESC LIMIT 200`. There is no "load more". |
 | `loadAll` does not load customers | `repos.loadCustomers` has no caller today. |

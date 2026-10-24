@@ -339,10 +339,10 @@ An operation is one line:
 |---|---|---|
 | `id` | `id` | Globally unique: `<device_id>:<clock>:<sequence>` |
 | `entity_table` | `entity_table` | What the operation touched |
-| `entity_id` | `entity_id` | The row's key |
+| `entity_id` | `entity_id` | The row's key; for an order, status or payment, the order id on the origin device |
 | `operation` | `operation` | `create`, `update` or `delete` |
 | `logical_clock` | `logical_clock` | The Lamport counter of the writer |
-| `device_id` | `device_id` | The writer |
+| `device_id` | `device_id` | The writer. For a create this is normally the origin device; for a status or payment it can be a device that only holds a remapped copy. |
 | `created_at` | `created_at` | Epoch milliseconds |
 | `data` | `data_json` | The row snapshot after the operation |
 
@@ -369,6 +369,28 @@ Two rules govern every value on the wire:
 - **Money is an integer in minor units.** No float crosses the wire, and
   the decoder rejects a fractional part rather than truncating it.
 - **Time is epoch milliseconds.** One shape for every timestamp.
+
+### Order identity on the wire
+
+The op's `device_id` is the writer, and the vector cursor is keyed by it.
+It is not the order's cross-device name. An order's stable name is the
+pair `(origin_device, origin_id)`: the device that took the sale and
+that device's local order id.
+
+- A create op carries `origin_device` in its snapshot. The receiver uses
+  it; a create written before the origin columns existed falls back to
+  the op's `device_id`.
+- A status or payment op carries `origin_device` too, because the writer
+  may only hold a remapped copy. The receiver resolves the pair to its
+  own local id. The id in the snapshot is the origin id, not the
+  receiver's row key.
+- A local order keeps a positive `orders.id`; an order received from a
+  peer gets a negative local id. Lines are namespaced under the local
+  order id (`local_order_id * 128 + index`), and the line id on the wire
+  is informational.
+- `entity_id` for an order, status or payment is the origin order id.
+
+See [ADR-0019](../decisions/0019-cross-device-order-identity.md).
 
 ### Clocks
 

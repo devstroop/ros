@@ -64,7 +64,7 @@ allocator. Rows live in `bump.Bump(capacity)` byte buffers:
 | `products_buffer` | 96 KiB | Menu rows and their names |
 | `tables_buffer` | 24 KiB | Floor rows |
 | `employees_buffer` | 16 KiB | Staff rows |
-| `orders_buffer` | 48 KiB | Order rows |
+| `orders_buffer` | 64 KiB | Order rows |
 | `customers_buffer` | 32 KiB | Customer rows |
 | `categories_buffer` | 16 KiB | Category rows |
 | `order_lines_buffer` | 48 KiB | Order line rows |
