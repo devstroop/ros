@@ -73,7 +73,7 @@ If you are changing the database, read
 | [02-app-model-and-effects](architecture/02-app-model-and-effects.md) | Model, Msg, update, boot, effects, bump storage | Implemented |
 | [03-navigation-and-rbac](architecture/03-navigation-and-rbac.md) | Roles, 45-screen enum, stack, permission matrix, rail | Implemented core / Partial coverage |
 | [04-data-layer](architecture/04-data-layer.md) | Reads, writes, page format, repositories, ownership | Partial |
-| [05-schema](architecture/05-schema.md) | 44 tables, conventions, migration policy, usage | Scaffolded beyond core |
+| [05-schema](architecture/05-schema.md) | 46 tables, conventions, migration policy, usage | Scaffolded beyond core |
 | [06-ui-markup-and-theming](architecture/06-ui-markup-and-theming.md) | Markup subset, templates, tokens, layout, a11y | Implemented subset |
 | [07-windowing-and-desktop](architecture/07-windowing-and-desktop.md) | Shell, GPU surface, target multi-window, packaging | Single window implemented / multi-window planned |
 | [08-sync](architecture/08-sync.md) | OpLog, ownership, failure modes, and the original sidecar design | Implemented core |

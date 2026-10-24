@@ -1494,6 +1494,35 @@ test "an event during a pull schedules one more pull when it lands" {
     try testing.expect(found_follow_up);
 }
 
+test "a peer that compacted past the cursor answers 409, and the app asks for its snapshot" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    withPeer(&model);
+    net_bridge.poll(&model, &fx);
+
+    // The poll is in flight when the peer says the range is gone.
+    const ops_key = net_bridge.sync_fetch_key_base;
+    try testing.expectEqual(ops_key, model.peers[0].sync_key);
+    try fx.feedResponse(ops_key, 409, "{\"error\":\"snapshot required\",\"snapshot\":\"/v1/snapshot\"}\n");
+    drainFx(&fx, &model);
+
+    // The pull is retired and a snapshot fetch replaces it, from the
+    // top: a partial bootstrap must never look complete.
+    try testing.expectEqual(@as(u64, 0), model.peers[0].sync_key);
+    try testing.expectEqual(net_bridge.snapshot_fetch_key_base, model.peers[0].snapshot_key);
+
+    var found_snapshot = false;
+    for (0..fx.pendingFetchCount()) |index| {
+        const request = fx.pendingFetchAt(index).?;
+        if (request.key != net_bridge.snapshot_fetch_key_base) continue;
+        found_snapshot = true;
+        try testing.expectEqualStrings("http://127.0.0.1:45871/v1/snapshot?after=0&version=0", request.url);
+    }
+    try testing.expect(found_snapshot);
+}
+
 test "a failed event stream is counted, and the next poll reopens it" {
     var fx = try fakeFx();
     defer fx.deinit();

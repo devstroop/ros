@@ -234,7 +234,7 @@ migration. Once a release ships, that stops.
 
 ## 3. Table inventory
 
-44 tables across sixteen migrations, every one `STRICT`. One line each.
+46 tables across seventeen migrations, every one `STRICT`. One line each.
 
 ### 0001 — `core.sql` (4 tables)
 
@@ -357,7 +357,7 @@ table, and carries the listener itself
 | Table | Holds | Key columns |
 |---|---|---|
 | `device` | This device's identity and role | `id` (TEXT PK), `name`, `role` ('admin', 'waiter', 'kds', 'display'), `last_seen_at`, `created_at` |
-| `op_log` | The append-only mutation log | `id` (TEXT PK), `entity_table`, `entity_id`, `operation` ('create', 'update', 'delete'), `data_json`, `previous_json`, `logical_clock`, `device_id`, `host_id`, `parent_id`, `created_at` |
+| `op_log` | The append-only mutation log | `id` (TEXT PK), `entity_table`, `entity_id`, `operation` ('create', 'update', 'delete'), `data_json`, `previous_json`, `logical_clock`, `device_id`, `host_id`, `parent_id`, `created_at`, `compacted_at` |
 | `sync_state` | The local logical clock and sync metadata | `key` (PK), `value` |
 
 The conflict rule is last-writer-wins on `(logical_clock, device_id)`.
@@ -371,9 +371,22 @@ payment op written on a remapped copy it is not. The origin travels in
 the op's data. See
 [ADR-0019](../decisions/0019-cross-device-order-identity.md).
 
+### 0017 — `sync_snapshot.sql` (2 tables)
+
+The compacted base state. Compaction writes one generation of synthetic
+wire ops and the vector clocks it was taken at; `/v1/snapshot` pages over
+them. The deleted range is the floor, kept in `sync_state`; a peer below
+it is sent here instead of replaying. See
+[ADR-0020](../decisions/0020-late-join-and-compaction.md).
+
+| Table | Holds | Key columns |
+|---|---|---|
+| `sync_snapshot` | One compacted generation and its clocks | `version` (PK), `clocks`, `created_at` |
+| `sync_snapshot_op` | The encoded wire lines of that generation | `version` → `sync_snapshot`, `seq`, `line`; PK `(version, seq)` |
+
 ### Indexes
 
-Twenty-eight indexes exist, at the columns the current queries touch:
+Twenty-nine indexes exist, at the columns the current queries touch:
 `employee(active)`, `product(category_id)`, `product(active)`,
 `modifier(group_id)`, `dining_table(category_id)`, `customer(name)`,
 `customer_loyalty(customer_id)`, `orders(status)`, `orders(placed_at)`,
@@ -387,11 +400,11 @@ Twenty-eight indexes exist, at the columns the current queries touch:
 `expense(spent_at)`, `compliance_report(generated_at)`,
 `void_log_entry(order_id)`, `auto_print(printer_id)`,
 `op_log(entity_table, entity_id)`, `op_log(logical_clock)`,
-`op_log(device_id)`.
+`op_log(device_id)`, `op_log(device_id, logical_clock)`.
 
 Not yet indexed, and needed later: order lines by `product_id` for
 sales-by-item reports, payments by `paid_at` for shift reconciliation,
-reservations by `status`, and `op_log` by `created_at` for pruning.
+and reservations by `status`.
 
 ---
 
@@ -923,7 +936,7 @@ comments the Restaurant OS code carries about its predecessor.
 | Money in `REAL` columns — `grandTotal REAL`, `mrpPrice REAL`, `discountRate REAL` | Money in `INTEGER` minor units; rates in basis points | Binary floats lose cents. A day's total cannot be reconstructed exactly from them. |
 | `employee.pin TEXT` — the PIN in the clear | `employee.pin_hash TEXT` — a salted SHA-256 digest | A curious operator with a database file could read any PIN, and a stolen file leaked every PIN at once. |
 | `company.password TEXT` | Removed; the company row carries no credential | One credential, one place, one algorithm. |
-| 39 tables with loose affinity, no `STRICT` | 44 tables, every one `STRICT`, every enum constrained by a `CHECK` | A declared type has to mean something, or the mistake surfaces three layers away. |
+| 39 tables with loose affinity, no `STRICT` | 46 tables, every one `STRICT`, every enum constrained by a `CHECK` | A declared type has to mean something, or the mistake surfaces three layers away. |
 | No type discipline on enums — `productType INTEGER`, `type INTEGER` with no allowed set | `CHECK (product_type IN (0, 1, 2, 3, 4))`, `CHECK (status IN (0, 1, 2, 3, 4, 5))`, `CHECK (role IN (0, 1, 2, 3))` | The database refuses an impossible state, not the app. |
 | Order lines referenced the product, so a price change rewrote history | `order_line.product_name` and `unit_price_minor` are frozen at the sale | "A price change tomorrow must not rewrite yesterday's bills." |
 | No lifecycle ledger | `order_status_history`, written in the same transaction as the status change | The kitchen board and the receipt both read it, and it cannot disagree with the order's current status. |

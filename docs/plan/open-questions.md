@@ -1,7 +1,7 @@
 # Open questions
 
 > **Status:** Living document. Expected to grow.
-> **Last reviewed:** 2026-10-21.
+> **Last reviewed:** 2026-10-24.
 > **Related:** [`risks.md`](risks.md), [`status.md`](status.md).
 
 This page exists because the most expensive mistakes in a rewrite are the
@@ -114,17 +114,17 @@ date before that phase starts.
 | D2 | Which tables and columns sync? | Scope and conflict surface | Data model review | Eng | Open |
 | D3 | Is LWW acceptable, or must concurrent field edits merge? | Data loss vs complexity | Product decision | Product | Open |
 | D4 | How are deletes represented? | Convergence correctness | Design | Eng | Open |
-| D5 | How long are ops retained, and when is compaction safe? | Database growth and restore | Design + load test | Eng | Open |
+| D5 | How long are ops retained, and when is compaction safe? | Database growth and restore | Design + load test | Eng | Answered - [ADR-0020](../decisions/0020-late-join-and-compaction.md), [#111](https://github.com/devstroop/ros/issues/111): compact after 128 durable new ops, retain 64 clocks per device, floor in `sync_state`, one transaction |
 | D6 | Does a single-device install run the sidecar? | Simplicity vs one code path | Design | Eng | Open |
 | D7 | Must Restaurant OS interoperate with the Flutter app during rollout? | Protocol compatibility | Product rollout plan | Product | Open |
 | D8 | Is a cloud relay ever required? | Architecture | Product strategy | Product | Open |
 | D9 | Who is the host, and what happens when it leaves? | Availability | Design + test | Eng | Open |
 | D10 | What happens after a restore from backup with an old clock? | Correctness | Design + test | Eng | Open |
-| D11 | How does a new device bootstrap: full snapshot or replay? | Time to join, data size | Design | Eng | Open |
+| D11 | How does a new device bootstrap: full snapshot or replay? | Time to join, data size | Design | Eng | Answered - [ADR-0020](../decisions/0020-late-join-and-compaction.md), [#111](https://github.com/devstroop/ros/issues/111): durable replay above the floor, snapshot when the cursor does not cover it |
 | D12 | Are there regulatory constraints on LAN traffic? | Security | Legal/IT review | Product | Open |
 | D13 | Are peers authenticated, and with what? | A trusted LAN means any device on the wire is a device in the restaurant. A shared secret in the handshake is the smallest answer that is not nothing. | Design | Eng | Open |
 | D14 | Which app owns which entity, formally? | The ownership table in `architecture/12` is a proposal. Moving an entity between owners later is a protocol change. | Design review | Eng | Open |
-| D15 | How are ops compacted into a snapshot, and when? | The log grows without bound and a device that joins late replays it. | Design + load test | Eng | Open |
+| D15 | How are ops compacted into a snapshot, and when? | The log grows without bound and a device that joins late replays it. | Design + load test | Eng | Answered - [ADR-0020](../decisions/0020-late-join-and-compaction.md), [#111](https://github.com/devstroop/ros/issues/111): synthetic ops in `sync_snapshot_op`, header clocks adopted after the last page |
 | D16 | What happens to the ops of a device that is removed from the restaurant? | The history of a sale outlives the till that took it | Product decision | Product | Open |
 | D17 | What is the acceptable convergence latency, and is a poll enough? | The kitchen board must show a ticket when it is placed, not on the next tick | Measurement | Product | Open |
 | D18 | Is the admin app the preferred bootstrap peer and the reference-data seed? | A peer design does not need a seed, but a restaurant with one always-on machine should not pay for a slower join | Design | Eng | Open |
@@ -240,6 +240,9 @@ listed so the team treats them as discovery work, not as solved.
 | Should we port Lottie/custom paint? | No; markup only | ADR-0010 |
 | Should the schema be STRICT? | Yes; required by the SDK and better | ADR-0005 |
 | Is there a pie chart? | No; use bar/stacked bar | ADR-0010 |
+| How long are ops retained, and when is compaction safe? | 128 new ops trigger it; keep 64 clocks per device; delete below the floor in one transaction | ADR-0020, #111, tests |
+| How does a new device bootstrap? | Replay the durable log; if its cursor is below the floor, fetch and apply the snapshot first | ADR-0020, #111, tests |
+| How are ops compacted, and when? | Synthetic create/status/payment ops in `sync_snapshot_op`, clocks in the header, adopted after the last page | ADR-0020, #111, tests |
 
 ## Adding a question
 

@@ -38,6 +38,30 @@ pub const Vector = struct {
         return self.get(device_id) >= clock;
     }
 
+    /// True when this cursor covers every position in `floor`. A
+    /// compaction deletes the ops below its floor; a peer that does not
+    /// cover the floor cannot replay the log and needs a snapshot.
+    pub fn coversVector(self: *const Vector, floor: *const Vector) bool {
+        for (0..floor.len) |index| {
+            const device = floor.ids[index][0..floor.id_lengths[index]];
+            if (self.get(device) < floor.clocks[index]) return false;
+        }
+        return true;
+    }
+
+    /// Write the cursor as a JSON object. The op-log query uses this so
+    /// one parameter can carry a vector of device positions.
+    pub fn writeJson(self: *const Vector, writer: *std.Io.Writer) !void {
+        try writer.writeByte('{');
+        for (0..self.len) |index| {
+            if (index != 0) try writer.writeByte(',');
+            try std.json.Stringify.value(self.ids[index][0..self.id_lengths[index]], .{}, writer);
+            try writer.writeByte(':');
+            try writer.print("{d}", .{self.clocks[index]});
+        }
+        try writer.writeByte('}');
+    }
+
     /// Record that this device has applied `clock` from `device_id`.
     ///
     /// The position only moves forward: an op delivered out of order
@@ -186,6 +210,39 @@ test "a malformed cursor is refused rather than guessed at" {
     try std.testing.expectError(error.CursorMalformed, cursor.parse("dev-1:"));
     try std.testing.expectError(error.CursorMalformed, cursor.parse(":12"));
     try std.testing.expectError(error.CursorMalformed, cursor.parse("dev-1:twelve"));
+}
+
+test "a cursor covers a compaction floor only when every device is there" {
+    var floor: Vector = .{};
+    try floor.observe("dev-a", 10);
+    try floor.observe("dev-b", 4);
+
+    var cursor: Vector = .{};
+    try cursor.observe("dev-a", 10);
+    try cursor.observe("dev-b", 4);
+    try std.testing.expect(cursor.coversVector(&floor));
+
+    var behind: Vector = .{};
+    try behind.observe("dev-a", 10);
+    try behind.observe("dev-b", 3);
+    try std.testing.expect(!behind.coversVector(&floor));
+
+    var empty: Vector = .{};
+    try std.testing.expect(!empty.coversVector(&floor));
+}
+
+test "the cursor writes a JSON object for the op-log query" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var cursor: Vector = .{};
+    try cursor.observe("dev-a", 12);
+    try cursor.observe("dev-b", 7);
+
+    var out = std.Io.Writer.Allocating.init(arena);
+    try cursor.writeJson(&out.writer);
+    try std.testing.expectEqualStrings("{\"dev-a\":12,\"dev-b\":7}", out.written());
 }
 
 test "the cursor has a bound and says so instead of forgetting" {

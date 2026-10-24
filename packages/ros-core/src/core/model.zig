@@ -43,6 +43,30 @@ pub const Stack = nav.Stack;
 /// window over it, reset when it fills.
 pub const sync_cache_slots = 8;
 
+/// Compact after this many new ops. The counter is durable, so a device
+/// that restarts every day still compacts.
+pub const sync_compact_after_ops: u32 = 128;
+
+/// Keep this many clocks of the log per device. A peer that is further
+/// behind than this tail gets a snapshot instead of a replay.
+pub const sync_retain_clocks: u64 = 64;
+
+/// The largest op-log page a `/v1/ops` query asks for. The body is
+/// capped by the frame size; the client asks again for the rest.
+pub const sync_ops_page_rows: usize = 64;
+
+/// The largest snapshot page a `/v1/snapshot` query asks for. One page
+/// is a header plus at most this many encoded op lines.
+pub const sync_snapshot_page_rows: usize = 16;
+
+/// A short request waiting on a database read. The net thread handles
+/// one short request at a time, so there is at most one.
+pub const SyncPending = enum {
+    none,
+    ops,
+    snapshot,
+};
+
 pub const SyncCacheMeta = struct {
     device: [cursor.max_device_id_len]u8 = undefined,
     device_len: usize = 0,
@@ -77,6 +101,11 @@ pub const Peer = struct {
     /// An event arrived during that pull, so one more pull is due as
     /// soon as the current answer is applied.
     sync_pending: bool = false,
+    /// A snapshot bootstrap in flight for this peer, and the page it
+    /// asked for. Zero means no snapshot.
+    snapshot_key: u64 = 0,
+    snapshot_after: i64 = 0,
+    snapshot_version: u64 = 0,
 
     pub fn id(self: *const Peer) []const u8 {
         return self.device[0..self.device_len];
@@ -315,11 +344,40 @@ pub const Model = struct {
     sync_skipped: u32 = 0,
     sync_rejected: u32 = 0,
     /// The recent op lines, in the order they were written or applied.
-    /// A peer that pulls asks for what is above its cursor; the lines
-    /// here are what this device can answer without a database read.
+    /// This is a recent window for diagnostics, not the source of
+    /// `/v1/ops`: a peer pulls from the durable log, so a restart does
+    /// not lose the middle of a range.
     sync_cache_buf: bump.Bump(24 * 1024) = .{},
     sync_cache_meta: [sync_cache_slots]SyncCacheMeta = [_]SyncCacheMeta{.{}} ** sync_cache_slots,
     sync_cache_count: usize = 0,
+
+    /// Compaction state. The log keeps a tail per device; the floor is
+    /// the highest clock that was deleted, and a peer below it needs a
+    /// snapshot. The snapshot clocks are what the last snapshot covers.
+    sync_ops_since_compact: u32 = 0,
+    sync_compacting: bool = false,
+    sync_snapshot_version: u64 = 0,
+    sync_snapshot_at: i64 = 0,
+    sync_snapshot_clocks: cursor.Vector = .{},
+    sync_op_floor: cursor.Vector = .{},
+    sync_compactions: u32 = 0,
+    sync_snapshot_ops: u32 = 0,
+    sync_snapshots: u32 = 0,
+
+    /// The compaction in flight. The committed fields above move only
+    /// after the transaction reports success, so a failed compaction
+    /// cannot make a peer ask for a snapshot that was never written.
+    sync_compaction_version: u64 = 0,
+    sync_compaction_at: i64 = 0,
+    sync_compaction_ops: u32 = 0,
+    sync_compaction_clocks: cursor.Vector = .{},
+    sync_compaction_floor: cursor.Vector = .{},
+
+    /// The short request waiting on a database read, if any. The net
+    /// thread serialises short requests, so one slot is enough.
+    sync_pending: SyncPending = .none,
+    sync_pending_conn: u32 = 0,
+    sync_pending_after: i64 = 0,
 
     /// The devices heard on the LAN. A beacon updates a row; a tick
     /// forgets one that has gone quiet.
@@ -759,6 +817,14 @@ pub const Model = struct {
         if (key == 0) return null;
         for (model.peers[0..model.peer_count]) |*peer| {
             if (peer.sync_key == key) return peer;
+        }
+        return null;
+    }
+
+    pub fn findPeerBySnapshotKey(model: *Model, key: u64) ?*Peer {
+        if (key == 0) return null;
+        for (model.peers[0..model.peer_count]) |*peer| {
+            if (peer.snapshot_key == key) return peer;
         }
         return null;
     }
@@ -2203,7 +2269,7 @@ pub const KitchenDish = struct {
 /// of the app, and this version must not write to it. A test counts
 /// the tables in the migrations and says when the two disagree, so a
 /// new migration that adds a table cannot slip past.
-pub const known_table_count: i64 = 44;
+pub const known_table_count: i64 = 46;
 
 /// One food marking, as the product form offers it.
 pub const FoodTypeOption = struct {

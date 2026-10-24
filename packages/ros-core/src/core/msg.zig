@@ -414,6 +414,14 @@ pub const Msg = union(enum) {
     event_done: native_sdk.EffectResponse,
     /// A peer's op was applied to the database.
     sync_applied: native_sdk.EffectDbResult,
+    /// A page of durable ops is ready to answer a peer's pull.
+    sync_ops_loaded: native_sdk.EffectDbResult,
+    /// A page of snapshot lines is ready to answer a peer's bootstrap.
+    sync_snapshot_loaded: native_sdk.EffectDbResult,
+    /// The log was compacted and the snapshot is ready.
+    sync_compacted: native_sdk.EffectDbResult,
+    /// A peer's snapshot page.
+    snapshot: native_sdk.EffectResponse,
     /// A peer's reference snapshot.
     reference: native_sdk.EffectResponse,
     /// The reference version moved, so the admin rebuilds the document.
@@ -499,6 +507,10 @@ pub const Msg = union(enum) {
         "net_event",
         "event_done",
         "sync_applied",
+        "sync_ops_loaded",
+        "sync_snapshot_loaded",
+        "sync_compacted",
+        "snapshot",
         "reference",
         "reference_bumped",
         "reference_loaded",

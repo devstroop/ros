@@ -21,6 +21,7 @@ const nav = @import("../core/navigation.zig");
 const record = @import("../net/record.zig");
 const reference = @import("../net/reference.zig");
 const cursor_mod = @import("../net/cursor.zig");
+const snapshot_mod = @import("../net/snapshot.zig");
 pub const page = @import("page.zig");
 const starter = @import("starter.zig");
 
@@ -100,6 +101,9 @@ pub const key_reference_bump = 60;
 pub const key_reference_snapshot = 61;
 pub const key_reference_version = 62;
 pub const key_reference_apply = 63;
+pub const key_sync_ops = 64;
+pub const key_sync_snapshot = 65;
+pub const key_sync_compact = 66;
 
 // ------------------------------------------------------------ queries
 
@@ -351,11 +355,12 @@ pub const table_counts_sql =
     \\UNION ALL SELECT 'subscription' AS name, (SELECT COUNT(*) FROM subscription) AS n
     \\UNION ALL SELECT 'supplier' AS name, (SELECT COUNT(*) FROM supplier) AS n
     \\UNION ALL SELECT 'sync_state' AS name, (SELECT COUNT(*) FROM sync_state) AS n
+    \\UNION ALL SELECT 'sync_snapshot' AS name, (SELECT COUNT(*) FROM sync_snapshot) AS n
+    \\UNION ALL SELECT 'sync_snapshot_op' AS name, (SELECT COUNT(*) FROM sync_snapshot_op) AS n
     \\UNION ALL SELECT 'tax_slab' AS name, (SELECT COUNT(*) FROM tax_slab) AS n
     \\UNION ALL SELECT 'time_entry' AS name, (SELECT COUNT(*) FROM time_entry) AS n
     \\UNION ALL SELECT 'void_log_entry' AS name, (SELECT COUNT(*) FROM void_log_entry) AS n
 ;
-
 
 /// The devices that have been in this restaurant.
 pub const devices_sql =
@@ -526,7 +531,6 @@ pub fn saveTableCategory(fx: *Effects, key: u64, id: i64, name: []const u8) void
 }
 
 /// Load the devices and the sync state, for the control centre.
-
 pub fn loadDevices(model: *Model, fx: *Effects) void {
     query(model, fx, key_devices, devices_sql, &.{}, Effects.dbMsg(.devices_loaded));
 }
@@ -1256,6 +1260,16 @@ pub fn decodeSyncState(model: *Model, bytes: []const u8) void {
             model.sync_clock = std.fmt.parseInt(u64, row.value, 10) catch 0;
         } else if (std.mem.eql(u8, row.key, "cursor")) {
             model.sync_cursor.parse(row.value) catch {};
+        } else if (std.mem.eql(u8, row.key, "ops_since_compact")) {
+            model.sync_ops_since_compact = std.fmt.parseInt(u32, row.value, 10) catch 0;
+        } else if (std.mem.eql(u8, row.key, "snapshot_version")) {
+            model.sync_snapshot_version = std.fmt.parseInt(u64, row.value, 10) catch 0;
+        } else if (std.mem.eql(u8, row.key, "snapshot_at")) {
+            model.sync_snapshot_at = std.fmt.parseInt(i64, row.value, 10) catch 0;
+        } else if (std.mem.eql(u8, row.key, "snapshot_clocks")) {
+            model.sync_snapshot_clocks.parse(row.value) catch {};
+        } else if (std.mem.eql(u8, row.key, "op_floor")) {
+            model.sync_op_floor.parse(row.value) catch {};
         }
     }
 }
@@ -2262,6 +2276,10 @@ fn saveCursor(model: *Model, fx: *Effects) void {
 /// window, not the log: when it fills it starts over, and a peer that
 /// missed the window falls back to the durable op_log.
 pub fn cacheOp(model: *Model, op: record.Op, line: []const u8) void {
+    // Every op that reaches the cache also reaches the op log. Counting
+    // here keeps the compaction trigger independent of which write path
+    // produced the op.
+    model.sync_ops_since_compact +%= 1;
     if (line.len == 0) return;
     if (model.sync_cache_count == model_mod.sync_cache_slots or
         model.sync_cache_buf.free() < line.len)
@@ -2298,6 +2316,513 @@ pub fn writeCachedOps(model: *const Model, since: []const u8, body: []u8) usize 
         writer.writeAll(line) catch break;
     }
     return writer.end;
+}
+
+// --------------------------------------------------- durable op pages
+//
+// The in-memory cache is a recent window for diagnostics, not the log.
+// `/v1/ops` reads the durable table; the query is filtered by the vector
+// cursor and paged by the frame size. The client applies a page, moves
+// its cursor, and asks again.
+
+/// The op log above a vector cursor. `json_each` turns the cursor
+/// object into one row per device, so a single parameter carries the
+/// whole vector.
+pub const sync_ops_sql =
+    \\SELECT id, entity_table, entity_id, operation, data_json,
+    \\       logical_clock, device_id, created_at
+    \\FROM op_log
+    \\WHERE logical_clock > COALESCE(
+    \\  (SELECT CAST(value AS INTEGER) FROM json_each(?1)
+    \\   WHERE key = op_log.device_id), 0)
+    \\ORDER BY rowid
+    \\LIMIT ?2;
+;
+
+pub fn loadSyncOps(fx: *Effects, since: []const u8) void {
+    var parsed: cursor_mod.Vector = .{};
+    parsed.parse(since) catch {};
+
+    var cursor_buffer: [2048]u8 = undefined;
+    var cursor_writer = std.Io.Writer.fixed(&cursor_buffer);
+    parsed.writeJson(&cursor_writer) catch return;
+
+    var params: [2]native_sdk.EffectDbValue = .{
+        .{ .text = cursor_writer.buffered() },
+        .{ .integer = @intCast(model_mod.sync_ops_page_rows) },
+    };
+    fx.dbQuery(.{
+        .key = key_sync_ops,
+        .sql = sync_ops_sql,
+        .params = &params,
+        .on_result = Effects.dbMsg(.sync_ops_loaded),
+    });
+}
+
+pub const OpsPage = struct {
+    len: usize = 0,
+    overflow: bool = false,
+};
+
+/// Turn a page of op_log rows back into NDJSON. A line that does not
+/// fit stops the page; the requester's cursor has moved only over the
+/// lines that were sent, so the next pull asks for the rest.
+pub fn writeSyncOpsPage(bytes: []const u8, body: []u8) OpsPage {
+    var reader = page.Reader.init(bytes);
+    if (!reader.readHeader()) return .{};
+
+    var values: [page.max_columns]page.Value = undefined;
+    var writer = std.Io.Writer.fixed(body);
+    while (reader.nextRow(&values)) {
+        const operation_text = reader.textOf(&values, "operation");
+        const operation = std.meta.stringToEnum(record.Operation, operation_text) orelse continue;
+        const clock = reader.intOf(&values, "logical_clock", 0);
+        if (clock <= 0) continue;
+
+        const op: record.Op = .{
+            .id = reader.textOf(&values, "id"),
+            .entity_table = reader.textOf(&values, "entity_table"),
+            .entity_id = reader.textOf(&values, "entity_id"),
+            .operation = operation,
+            .logical_clock = @intCast(clock),
+            .device_id = reader.textOf(&values, "device_id"),
+            .created_at = reader.intOf(&values, "created_at", 0),
+            .data_json = reader.textOf(&values, "data_json"),
+        };
+        record.validate(op) catch continue;
+
+        const before = writer.end;
+        record.encode(&writer, op) catch {
+            writer.end = before;
+            return .{ .len = before, .overflow = true };
+        };
+    }
+    return .{ .len = writer.end };
+}
+
+// ------------------------------------------------------ snapshot pages
+
+pub const sync_snapshot_page_sql =
+    \\SELECT s.version AS version, s.clocks AS clocks,
+    \\       o.seq AS seq, o.line AS line
+    \\FROM sync_snapshot s
+    \\LEFT JOIN sync_snapshot_op o
+    \\  ON o.version = s.version AND o.seq > ?1
+    \\WHERE s.version = (SELECT MAX(version) FROM sync_snapshot)
+    \\ORDER BY o.seq
+    \\LIMIT ?2;
+;
+
+pub fn loadSyncSnapshotPage(fx: *Effects, after: i64) void {
+    var params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = after },
+        .{ .integer = @intCast(model_mod.sync_snapshot_page_rows + 1) },
+    };
+    fx.dbQuery(.{
+        .key = key_sync_snapshot,
+        .sql = sync_snapshot_page_sql,
+        .params = &params,
+        .on_result = Effects.dbMsg(.sync_snapshot_loaded),
+    });
+}
+
+pub const SnapshotPage = struct {
+    found: bool = false,
+    len: usize = 0,
+    next: i64 = 0,
+    done: bool = true,
+    overflow: bool = false,
+};
+
+/// Build one snapshot page: the header first, then the encoded op
+/// lines. The header is built after the lines because `next` and `done`
+/// depend on how many lines fit.
+pub fn writeSyncSnapshotPage(bytes: []const u8, after: i64, body: []u8) SnapshotPage {
+    var reader = page.Reader.init(bytes);
+    if (!reader.readHeader()) return .{};
+
+    var values: [page.max_columns]page.Value = undefined;
+    if (!reader.nextRow(&values)) return .{};
+
+    const version = reader.intOf(&values, "version", 0);
+    if (version <= 0) return .{};
+    const clocks = reader.textOf(&values, "clocks");
+
+    // Leave room for the header. The clocks vector is at most sixteen
+    // devices, so 2 KiB is more than it can need.
+    const reserve = @min(@as(usize, 2048), body.len);
+    var line_len: usize = 0;
+    var last_seq = after;
+    var included: usize = 0;
+    var overflow = false;
+    var page_full = false;
+
+    while (true) {
+        const seq = reader.intOf(&values, "seq", 0);
+        const line = reader.textOf(&values, "line");
+        if (seq > after and line.len > 0) {
+            if (included == model_mod.sync_snapshot_page_rows) {
+                page_full = true;
+                break;
+            }
+            if (line_len + line.len + 1 > body.len - reserve) {
+                overflow = true;
+                break;
+            }
+            @memcpy(body[reserve + line_len ..][0..line.len], line);
+            line_len += line.len;
+            body[reserve + line_len] = '\n';
+            line_len += 1;
+            last_seq = seq;
+            included += 1;
+        }
+
+        if (!reader.nextRow(&values)) break;
+    }
+
+    const done = reader.rows_left == 0 and !overflow and !page_full;
+    var header_buffer: [2048]u8 = undefined;
+    var header_writer = std.Io.Writer.fixed(&header_buffer);
+    snapshot_mod.encode(&header_writer, .{
+        .version = @intCast(version),
+        .clocks = clocks,
+        .after = after,
+        .next = last_seq,
+        .done = done,
+    }) catch return .{ .found = true, .overflow = true };
+    const header_len = header_writer.end;
+    if (header_len > reserve) return .{ .found = true, .overflow = true };
+
+    @memcpy(body[0..header_len], header_buffer[0..header_len]);
+    std.mem.copyForwards(u8, body[header_len..][0..line_len], body[reserve..][0..line_len]);
+    return .{
+        .found = true,
+        .len = header_len + line_len,
+        .next = last_seq,
+        .done = done,
+        .overflow = overflow and included == 0,
+    };
+}
+
+// --------------------------------------------------------- compaction
+
+/// Compact after enough new ops, or after a boot that found a large
+/// durable counter. The caller runs this after a successful write; it
+/// is cheap when the threshold has not been reached.
+pub fn maybeCompact(model: *Model, fx: *Effects) void {
+    if (model.sync_compacting) return;
+    if (model.sync_ops_since_compact < model_mod.sync_compact_after_ops) return;
+    compactSyncLog(model, fx);
+}
+
+const delete_snapshot_ops_sql = "DELETE FROM sync_snapshot_op;";
+const delete_snapshot_sql = "DELETE FROM sync_snapshot;";
+
+const insert_snapshot_sql =
+    \\INSERT INTO sync_snapshot (version, clocks, created_at)
+    \\VALUES (?1, ?2, ?3);
+;
+
+const insert_snapshot_orders_sql =
+    \\WITH snapshot_orders AS (
+    \\  SELECT
+    \\    id, origin_device, origin_id, order_type, status, dining_table_id,
+    \\    customer_id, employee_id, subtotal_minor, tax_minor, discount_minor,
+    \\    total_minor, placed_at, notes, updated_at,
+    \\    row_number() OVER (ORDER BY placed_at, origin_device, origin_id) AS seq
+    \\  FROM orders
+    \\)
+    \\INSERT INTO sync_snapshot_op (version, seq, line)
+    \\SELECT ?1, seq, json_object(
+    \\  'id', printf('%s:1:%d', COALESCE(NULLIF(origin_device, ''), ?2), seq),
+    \\  'entity_table', 'order',
+    \\  'entity_id', CAST(COALESCE(NULLIF(origin_id, 0), id) AS TEXT),
+    \\  'operation', 'create',
+    \\  'logical_clock', 1,
+    \\  'device_id', COALESCE(NULLIF(origin_device, ''), ?2),
+    \\  'created_at', placed_at,
+    \\  'data', json_object(
+    \\    'id', COALESCE(NULLIF(origin_id, 0), id),
+    \\    'origin_device', COALESCE(NULLIF(origin_device, ''), ?2),
+    \\    'order_type', order_type,
+    \\    'status', status,
+    \\    'dining_table_id', dining_table_id,
+    \\    'customer_id', customer_id,
+    \\    'employee_id', employee_id,
+    \\    'subtotal_minor', subtotal_minor,
+    \\    'tax_minor', tax_minor,
+    \\    'discount_minor', discount_minor,
+    \\    'total_minor', total_minor,
+    \\    'placed_at', placed_at,
+    \\    'notes', notes,
+    \\    'lines', (
+    \\      SELECT json_group_array(json_object(
+    \\        'id', order_line.id,
+    \\        'product_id', order_line.product_id,
+    \\        'product_name', order_line.product_name,
+    \\        'qty', order_line.qty,
+    \\        'unit_price_minor', order_line.unit_price_minor,
+    \\        'tax_bps', order_line.tax_bps,
+    \\        'notes', order_line.notes
+    \\      ))
+    \\      FROM order_line WHERE order_line.order_id = snapshot_orders.id
+    \\    )
+    \\  )
+    \\)
+    \\FROM snapshot_orders;
+;
+
+const insert_snapshot_statuses_sql =
+    \\WITH snapshot_orders AS (
+    \\  SELECT
+    \\    id, origin_device, origin_id, status, placed_at, updated_at,
+    \\    row_number() OVER (ORDER BY placed_at, origin_device, origin_id) AS seq
+    \\  FROM orders
+    \\)
+    \\INSERT INTO sync_snapshot_op (version, seq, line)
+    \\SELECT ?1, 1000000000 + seq, json_object(
+    \\  'id', printf('%s:1:%d', COALESCE(NULLIF(origin_device, ''), ?2), 1000000000 + seq),
+    \\  'entity_table', 'order_status',
+    \\  'entity_id', CAST(COALESCE(NULLIF(origin_id, 0), id) AS TEXT),
+    \\  'operation', 'create',
+    \\  'logical_clock', 1,
+    \\  'device_id', COALESCE(NULLIF(origin_device, ''), ?2),
+    \\  'created_at', updated_at,
+    \\  'data', json_object(
+    \\    'id', COALESCE(NULLIF(origin_id, 0), id),
+    \\    'origin_device', COALESCE(NULLIF(origin_device, ''), ?2),
+    \\    'status', status,
+    \\    'changed_at', updated_at
+    \\  )
+    \\)
+    \\FROM snapshot_orders
+    \\WHERE status > 0;
+;
+
+const insert_snapshot_payments_sql =
+    \\WITH snapshot_orders AS (
+    \\  SELECT
+    \\    id, origin_device, origin_id, placed_at,
+    \\    row_number() OVER (ORDER BY placed_at, origin_device, origin_id) AS seq
+    \\  FROM orders
+    \\)
+    \\INSERT INTO sync_snapshot_op (version, seq, line)
+    \\SELECT ?1, 2000000000 + snapshot_orders.seq, json_object(
+    \\  'id', printf('%s:1:%d', COALESCE(NULLIF(snapshot_orders.origin_device, ''), ?2),
+    \\               2000000000 + snapshot_orders.seq),
+    \\  'entity_table', 'payment',
+    \\  'entity_id', CAST(COALESCE(NULLIF(snapshot_orders.origin_id, 0), snapshot_orders.id) AS TEXT),
+    \\  'operation', 'create',
+    \\  'logical_clock', 1,
+    \\  'device_id', COALESCE(NULLIF(snapshot_orders.origin_device, ''), ?2),
+    \\  'created_at', payment.paid_at,
+    \\  'data', json_object(
+    \\    'order_id', COALESCE(NULLIF(snapshot_orders.origin_id, 0), snapshot_orders.id),
+    \\    'origin_device', COALESCE(NULLIF(snapshot_orders.origin_device, ''), ?2),
+    \\    'mode', payment.mode,
+    \\    'amount_minor', payment.amount_minor,
+    \\    'paid_at', payment.paid_at
+    \\  )
+    \\)
+    \\FROM snapshot_orders
+    \\JOIN payment ON payment.order_id = snapshot_orders.id;
+;
+
+const delete_compacted_ops_sql =
+    \\DELETE FROM op_log
+    \\WHERE device_id = ?1 AND logical_clock <= ?2;
+;
+
+const mark_retained_ops_sql = "UPDATE op_log SET compacted_at = ?1;";
+
+const save_snapshot_state_sql =
+    \\INSERT INTO sync_state (key, value) VALUES
+    \\  ('snapshot_version', ?1),
+    \\  ('snapshot_clocks', ?2),
+    \\  ('snapshot_at', ?3),
+    \\  ('op_floor', ?4),
+    \\  ('ops_since_compact', '0')
+    \\ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+;
+
+/// Summarise the current order state, keep a tail of the log, and move
+/// the floor. The snapshot rows are ordinary op lines, so a receiver
+/// applies them through the same idempotent path as a live op.
+///
+/// The transaction is ordered: the snapshot is built before the old
+/// rows are deleted, and the floor is written after both. A crash rolls
+/// the whole thing back, leaving the old log and the old snapshot.
+pub fn compactSyncLog(model: *Model, fx: *Effects) void {
+    if (model.sync_compacting) return;
+
+    const version = model.sync_snapshot_version + 1;
+    const now = model.now_ms;
+
+    var clocks_buffer: [2048]u8 = undefined;
+    var clocks_writer = std.Io.Writer.fixed(&clocks_buffer);
+    model.sync_cursor.write(&clocks_writer) catch return;
+
+    var floor: cursor_mod.Vector = .{};
+    var cutoff_params: [cursor_mod.max_devices][2]native_sdk.EffectDbValue = undefined;
+    var cutoff_count: usize = 0;
+    for (0..model.sync_cursor.len) |index| {
+        const clock = model.sync_cursor.clocks[index];
+        if (clock <= model_mod.sync_retain_clocks) continue;
+        const cutoff = clock - model_mod.sync_retain_clocks;
+        const device = model.sync_cursor.ids[index][0..model.sync_cursor.id_lengths[index]];
+        floor.observe(device, cutoff) catch continue;
+        cutoff_params[cutoff_count] = .{
+            .{ .text = device },
+            .{ .integer = @intCast(cutoff) },
+        };
+        cutoff_count += 1;
+    }
+
+    var floor_buffer: [2048]u8 = undefined;
+    var floor_writer = std.Io.Writer.fixed(&floor_buffer);
+    floor.write(&floor_writer) catch return;
+
+    var version_buffer: [32]u8 = undefined;
+    const version_text = std.fmt.bufPrint(&version_buffer, "{d}", .{version}) catch return;
+    var at_buffer: [32]u8 = undefined;
+    const at_text = std.fmt.bufPrint(&at_buffer, "{d}", .{now}) catch return;
+
+    var statements: [32]native_sdk.EffectDbStatement = undefined;
+    var count: usize = 0;
+    statements[count] = .{ .sql = delete_snapshot_ops_sql };
+    count += 1;
+    statements[count] = .{ .sql = delete_snapshot_sql };
+    count += 1;
+
+    var meta_params: [3]native_sdk.EffectDbValue = .{
+        .{ .integer = @intCast(version) },
+        .{ .text = clocks_writer.buffered() },
+        .{ .integer = now },
+    };
+    statements[count] = .{ .sql = insert_snapshot_sql, .params = &meta_params };
+    count += 1;
+
+    var snapshot_params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = @intCast(version) },
+        .{ .text = syncDeviceId(model) },
+    };
+    statements[count] = .{ .sql = insert_snapshot_orders_sql, .params = &snapshot_params };
+    count += 1;
+    statements[count] = .{ .sql = insert_snapshot_statuses_sql, .params = &snapshot_params };
+    count += 1;
+    statements[count] = .{ .sql = insert_snapshot_payments_sql, .params = &snapshot_params };
+    count += 1;
+
+    for (0..cutoff_count) |index| {
+        statements[count] = .{
+            .sql = delete_compacted_ops_sql,
+            .params = &cutoff_params[index],
+        };
+        count += 1;
+    }
+
+    var mark_params: [1]native_sdk.EffectDbValue = .{.{ .integer = now }};
+    statements[count] = .{ .sql = mark_retained_ops_sql, .params = &mark_params };
+    count += 1;
+
+    var state_params: [4]native_sdk.EffectDbValue = .{
+        .{ .text = version_text },
+        .{ .text = clocks_writer.buffered() },
+        .{ .text = at_text },
+        .{ .text = floor_writer.buffered() },
+    };
+    statements[count] = .{ .sql = save_snapshot_state_sql, .params = &state_params };
+    count += 1;
+
+    model.sync_compacting = true;
+    model.sync_compaction_version = version;
+    model.sync_compaction_at = now;
+    model.sync_compaction_ops = model.sync_ops_since_compact;
+    model.sync_compaction_clocks = model.sync_cursor;
+    model.sync_compaction_floor = floor;
+
+    fx.dbExec(.{
+        .key = key_sync_compact,
+        .statements = statements[0..count],
+        .on_result = Effects.dbMsg(.sync_compacted),
+    });
+}
+
+/// The compaction committed. The snapshot metadata is now the floor a
+/// peer must cover; a failure leaves the old metadata untouched.
+pub fn onSyncCompacted(model: *Model, result: native_sdk.EffectDbResult) void {
+    if (result.outcome != .ok) {
+        model.sync_compacting = false;
+        model.sync_rejected +%= 1;
+        return;
+    }
+    model.sync_snapshot_version = model.sync_compaction_version;
+    model.sync_snapshot_at = model.sync_compaction_at;
+    model.sync_snapshot_clocks = model.sync_compaction_clocks;
+    model.sync_op_floor = model.sync_compaction_floor;
+    model.sync_ops_since_compact -|= model.sync_compaction_ops;
+    model.sync_compactions +%= 1;
+    model.sync_compacting = false;
+}
+
+// ------------------------------------------------------ snapshot apply
+
+/// Apply one synthetic snapshot op. It is the live apply path with the
+/// op-log write and the cursor move removed: a snapshot line is state,
+/// not a new operation, and the cursor is adopted from the header after
+/// the last page.
+pub fn applySnapshotOp(model: *Model, fx: *Effects, op: record.Op) bool {
+    var arena_buffer: [16 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&arena_buffer);
+    const arena = fba.allocator();
+
+    if (std.mem.eql(u8, op.entity_table, "order")) {
+        const snapshot = record.parseOrder(arena, op.data_json) catch return false;
+        applyOrder(fx, op, snapshot, false);
+    } else if (std.mem.eql(u8, op.entity_table, "order_status")) {
+        const snapshot = record.parseOrderStatus(arena, op.data_json) catch return false;
+        applyOrderStatus(fx, op, snapshot, false);
+    } else if (std.mem.eql(u8, op.entity_table, "payment")) {
+        const snapshot = record.parsePayment(arena, op.data_json) catch return false;
+        applyPayment(fx, op, snapshot, false);
+    } else {
+        return false;
+    }
+    model.sync_snapshot_ops +%= 1;
+    return true;
+}
+
+/// Adopt the header's clocks after the last snapshot page. The local
+/// cursor only moves forward: a device that already had newer state
+/// keeps it, and the snapshot fills in what it was missing.
+pub fn adoptSnapshotCursor(model: *Model, fx: *Effects, clocks: []const u8, version: u64) void {
+    var parsed: cursor_mod.Vector = .{};
+    parsed.parse(clocks) catch return;
+
+    for (0..parsed.len) |index| {
+        const device = parsed.ids[index][0..parsed.id_lengths[index]];
+        model.sync_cursor.observe(device, parsed.clocks[index]) catch {};
+    }
+    model.sync_clock = @max(model.sync_clock, parsed.highest());
+    if (version > 0) model.sync_snapshot_version = version;
+
+    var cursor_buffer: [2048]u8 = undefined;
+    var cursor_writer = std.Io.Writer.fixed(&cursor_buffer);
+    model.sync_cursor.write(&cursor_writer) catch return;
+
+    var clock_buffer: [32]u8 = undefined;
+    const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{model.sync_clock}) catch return;
+
+    var clock_params: [1]native_sdk.EffectDbValue = .{.{ .text = clock_text }};
+    var cursor_params: [1]native_sdk.EffectDbValue = .{.{ .text = cursor_writer.buffered() }};
+    fx.dbExec(.{
+        .key = key_sync_cursor,
+        .statements = &.{
+            .{ .sql = save_clock_sql, .params = &clock_params },
+            .{ .sql = save_cursor_sql, .params = &cursor_params },
+        },
+        .on_result = Effects.dbMsg(.sync_applied),
+    });
 }
 
 /// Write one order and its lines as a single transaction. The engine
@@ -2684,19 +3209,19 @@ pub fn applyOp(model: *Model, fx: *Effects, op: record.Op) void {
             model.sync_rejected += 1;
             return;
         };
-        applyOrder(fx, op, snapshot);
+        applyOrder(fx, op, snapshot, true);
     } else if (std.mem.eql(u8, op.entity_table, "order_status")) {
         const snapshot = record.parseOrderStatus(arena, op.data_json) catch {
             model.sync_rejected += 1;
             return;
         };
-        applyOrderStatus(fx, op, snapshot);
+        applyOrderStatus(fx, op, snapshot, true);
     } else if (std.mem.eql(u8, op.entity_table, "payment")) {
         const snapshot = record.parsePayment(arena, op.data_json) catch {
             model.sync_rejected += 1;
             return;
         };
-        applyPayment(fx, op, snapshot);
+        applyPayment(fx, op, snapshot, true);
     } else {
         // The other tables arrive with their own slices. Refusing an
         // op we do not understand is safer than writing half of it.
@@ -2723,7 +3248,7 @@ pub fn applyOp(model: *Model, fx: *Effects, op: record.Op) void {
     saveCursor(model, fx);
 }
 
-fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot) void {
+fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persist: bool) void {
     var statements: [4 + max_order_lines]native_sdk.EffectDbStatement = undefined;
     var count: usize = 0;
 
@@ -2845,14 +3370,16 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot) void 
         .{ .text = op.device_id },
         .{ .integer = op.created_at },
     };
-    statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
-    count += 1;
+    if (persist) {
+        statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
+        count += 1;
 
-    var clock_buffer: [32]u8 = undefined;
-    const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{op.logical_clock}) catch return;
-    var clock_params: [1]native_sdk.EffectDbValue = .{.{ .text = clock_text }};
-    statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
-    count += 1;
+        var clock_buffer: [32]u8 = undefined;
+        const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{op.logical_clock}) catch return;
+        var clock_params: [1]native_sdk.EffectDbValue = .{.{ .text = clock_text }};
+        statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
+        count += 1;
+    }
 
     fx.dbExec(.{
         .key = key_sync_apply,
@@ -2861,7 +3388,7 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot) void 
     });
 }
 
-fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSnapshot) void {
+fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSnapshot, persist: bool) void {
     var statements: [4]native_sdk.EffectDbStatement = undefined;
     var params: [4]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.id },
@@ -2917,14 +3444,16 @@ fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSna
         .{ .text = op.device_id },
         .{ .integer = op.created_at },
     };
-    statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
-    count += 1;
+    if (persist) {
+        statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
+        count += 1;
 
-    var clock_buffer: [32]u8 = undefined;
-    const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{op.logical_clock}) catch return;
-    var clock_params: [1]native_sdk.EffectDbValue = .{.{ .text = clock_text }};
-    statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
-    count += 1;
+        var clock_buffer: [32]u8 = undefined;
+        const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{op.logical_clock}) catch return;
+        var clock_params: [1]native_sdk.EffectDbValue = .{.{ .text = clock_text }};
+        statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
+        count += 1;
+    }
 
     fx.dbExec(.{
         .key = key_sync_apply,
@@ -2933,7 +3462,7 @@ fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSna
     });
 }
 
-fn applyPayment(fx: *Effects, op: record.Op, snapshot: record.PaymentSnapshot) void {
+fn applyPayment(fx: *Effects, op: record.Op, snapshot: record.PaymentSnapshot, persist: bool) void {
     var statements: [6]native_sdk.EffectDbStatement = undefined;
 
     // The payment is keyed by the local order id, so a second delivery
@@ -3023,14 +3552,16 @@ fn applyPayment(fx: *Effects, op: record.Op, snapshot: record.PaymentSnapshot) v
         .{ .text = op.device_id },
         .{ .integer = op.created_at },
     };
-    statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
-    count += 1;
+    if (persist) {
+        statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
+        count += 1;
 
-    var clock_buffer: [32]u8 = undefined;
-    const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{op.logical_clock}) catch return;
-    var clock_params: [1]native_sdk.EffectDbValue = .{.{ .text = clock_text }};
-    statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
-    count += 1;
+        var clock_buffer: [32]u8 = undefined;
+        const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{op.logical_clock}) catch return;
+        var clock_params: [1]native_sdk.EffectDbValue = .{.{ .text = clock_text }};
+        statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
+        count += 1;
+    }
 
     fx.dbExec(.{
         .key = key_sync_apply,

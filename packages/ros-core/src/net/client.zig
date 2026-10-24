@@ -45,6 +45,19 @@ pub fn formatOps(buffer: []u8, host: []const u8, port: u16, cursor: *const curso
     );
 }
 
+/// `http://<host>:<port>/v1/snapshot?after=<seq>&version=<version>`
+///
+/// A snapshot is paged: the client asks for the next sequence until the
+/// header says `done`. The version is a hint; the server always serves
+/// its current snapshot.
+pub fn formatSnapshot(buffer: []u8, host: []const u8, port: u16, after: i64, version: u64) ![]const u8 {
+    return std.fmt.bufPrint(
+        buffer,
+        "http://{s}:{d}{s}?after={d}&version={d}",
+        .{ host, port, protocol.endpoints.snapshot, after, version },
+    );
+}
+
 /// `http://<host>:<port>/v1/reference?after=<version>`
 pub fn formatReference(buffer: []u8, host: []const u8, port: u16, after: u64) ![]const u8 {
     return std.fmt.bufPrint(

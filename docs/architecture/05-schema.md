@@ -1,9 +1,9 @@
 # Schema
 
-> **Status:** Scaffolded — 44 tables across 16 migrations; only the core
+> **Status:** Scaffolded — 46 tables across 17 migrations; only the core
 > subset is used by repositories or UI.
 > **Last verified:** 2026-10-24, by source review and the migration lock.
-> **Source:** `src/schema/0001_core.sql` … `0016_order_origin.sql`,
+> **Source:** `src/schema/0001_core.sql` … `0017_sync_snapshot.sql`,
 > `src/schema/migrations.lock.json`.
 
 ## Conventions
@@ -26,7 +26,7 @@ partly by review.
 ## Migration policy
 
 - Files are numbered `NNNN_name.sql` in `src/schema/`.
-- `migrations.lock.json` is the authority: version 16 and sixteen hashes.
+- `migrations.lock.json` is the authority: version 17 and seventeen hashes.
 - `native db new-migration <name>` is the intended authoring path.
 - The engine opens the database **already migrated** at boot; the app
   never runs migration code.
@@ -145,6 +145,20 @@ The local `orders.id` stays the row key. Local sales are positive; a
 received sale gets a negative local id. See
 [ADR-0019](../decisions/0019-cross-device-order-identity.md).
 
+### 0017 — Sync snapshot (2 tables)
+
+| Table | Purpose | Used today |
+|---|---|---|
+| `sync_snapshot` | The compacted base state: one row per generation with the vector clocks it was taken at | Yes |
+| `sync_snapshot_op` | The encoded wire lines of that generation, ordered by `seq` and paged by `/v1/snapshot` | Yes |
+
+The migration also adds `op_log.compacted_at`, an index on
+`op_log(device_id, logical_clock)` for retention, and a trigger that
+keeps `sync_state('ops_since_compact')` durable across restarts. The
+deleted range is recorded per device in `sync_state('op_floor')`; a
+peer below it is sent to `/v1/snapshot`. See
+[ADR-0020](../decisions/0020-late-join-and-compaction.md).
+
 ## Indexes
 
 Indexes exist where the current queries need them:
@@ -169,15 +183,16 @@ Indexes exist where the current queries need them:
 - `compliance_report(generated_at)`
 - `void_log_entry(order_id)`
 - `auto_print(printer_id)`
-- `op_log(entity_table, entity_id)`, `op_log(logical_clock)`, `op_log(device_id)`
+- `op_log(entity_table, entity_id)`, `op_log(logical_clock)`, `op_log(device_id)`,
+  `op_log(device_id, logical_clock)` for retention
 
 Missing indexes that the target will need: order lines by product for
 sales-by-item reports, payments by `paid_at` for shift reconciliation,
-reservations by status, and `op_log` by `created_at` for pruning.
+and reservations by status.
 
 ## Relationship to the Flutter schema
 
-The v1 app had 39 tables in `assets/db/schema.sql`. Restaurant OS has 44, rewritten
+The v1 app had 39 tables in `assets/db/schema.sql`. Restaurant OS has 46, rewritten
 as STRICT. The differences that matter:
 
 | v1 | Restaurant OS | Why |

@@ -69,7 +69,7 @@ accounting date (#77); the status page and the suites are the evidence.
 | [6](phase-6-sync-sidecar.md) | Sync sidecar | 10 d | Superseded by phase 9 | No |
 | [7](phase-7-printing-hardware.md) | Printing & hardware | 8 d | Scaffolded | No |
 | [8](phase-8-packaging-cutover.md) | Packaging & cutover | 5 d | Planned | No |
-| [9](phase-9-three-apps-and-ipc.md) | Three apps over TCP/IP | 42 d | In progress (9.0–9.6 and 9.8 done: blockers, split, wire, op log, discovery, reference, push and shells; 9.7 bootstrap/compaction and 9.9 packaging remain) | No |
+| [9](phase-9-three-apps-and-ipc.md) | Three apps over TCP/IP | 42 d | In progress (9.0–9.8 done: blockers, split, wire, op log, discovery, reference, push, bootstrap/compaction and shells; 9.9 packaging remains) | No |
 
 Estimates are engineer-days for one developer familiar with Zig but new
 to the Native SDK, carried from the port plan. They do not include the

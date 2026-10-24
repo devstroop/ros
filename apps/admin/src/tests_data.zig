@@ -34,6 +34,7 @@ const repos = @import("ros_core").repos;
 const auth = @import("ros_core").auth;
 const domain = @import("ros_core").models;
 const record = @import("ros_core").net.record;
+const snapshot = @import("ros_core").net.snapshot;
 const protocol = @import("ros_core").net.protocol;
 const bridge = @import("ros_core").net.bridge;
 
@@ -65,13 +66,14 @@ const migration_sql = [_][]const u8{
     @embedFile("schema/0014_payment_once.sql"),
     @embedFile("schema/0015_currency_decimals.sql"),
     @embedFile("schema/0016_order_origin.sql"),
+    @embedFile("schema/0017_sync_snapshot.sql"),
 };
 
 const migration_names = [_][]const u8{
-    "core", "catalog", "floor", "customers", "orders",
-    "inventory", "ops", "compliance", "printing", "sync", "default_tax_slab",
-    "order_sequence", "order_request_key", "payment_once", "currency_decimals",
-    "order_origin",
+    "core",             "catalog",        "floor",             "customers",    "orders",
+    "inventory",        "ops",            "compliance",        "printing",     "sync",
+    "default_tax_slab", "order_sequence", "order_request_key", "payment_once", "currency_decimals",
+    "order_origin",     "sync_snapshot",
 };
 
 /// A model, a real database and a real effects channel, together.
@@ -2172,7 +2174,8 @@ test "the owner counts the stock, and the count says why it moved" {
     try testing.expectEqual(nav.Screen.inventory_items, harness.model.screen());
     try testing.expectEqual(@as(i64, 18), harness.model.stock_items()[0].stock_qty);
 
-    const rows = try rowsOf(&harness,
+    const rows = try rowsOf(
+        &harness,
         "SELECT delta, reason FROM stock_adjustment WHERE product_id = 1;",
     );
     defer rows.deinit();
@@ -3786,6 +3789,499 @@ test "a remapped order's payment travels back to its origin" {
     try testing.expectEqual(@as(i64, 1), payments);
 }
 
+/// Apply one create op for a remote or local order, the way the wire
+/// carries it. Used by the convergence tests to write history without
+/// driving a whole sale through the UI.
+fn applyOrderCreate(harness: *Harness, device: []const u8, clock: u64, order_id: i64, note: []const u8) !void {
+    var data_buffer: [4096]u8 = undefined;
+    const data = try std.fmt.bufPrint(&data_buffer,
+        \\{{"id":{d},"origin_device":"{s}","order_type":0,"status":0,"employee_id":7,"subtotal_minor":1000,"tax_minor":0,"discount_minor":0,"total_minor":1000,"placed_at":{d},"notes":"{s}","lines":[{{"id":1,"product_id":1,"product_name":"{s}","qty":1,"unit_price_minor":1000,"tax_bps":0,"notes":""}}]}}
+    , .{ order_id, device, 1_700_000_000_000 + @as(i64, @intCast(clock)), note, note });
+    var id_buffer: [64]u8 = undefined;
+    const op_id = try std.fmt.bufPrint(&id_buffer, "{s}:{d}:0", .{ device, clock });
+    var entity_buffer: [32]u8 = undefined;
+    const entity_id = try std.fmt.bufPrint(&entity_buffer, "{d}", .{order_id});
+    repos.applyOp(&harness.model, harness.fx, .{
+        .id = op_id,
+        .entity_table = "order",
+        .entity_id = entity_id,
+        .operation = .create,
+        .logical_clock = clock,
+        .device_id = device,
+        .created_at = 1_700_000_000_000 + @as(i64, @intCast(clock)),
+        .data_json = data,
+    });
+    harness.drain();
+}
+
+/// One snapshot page, through the same pending-answer path the net
+/// thread uses. Returns the NDJSON body (header plus lines).
+fn snapshotPageBody(harness: *Harness, conn: u32, after: i64, out: []u8) ![]const u8 {
+    harness.model.sync_pending = .snapshot;
+    harness.model.sync_pending_conn = conn;
+    harness.model.sync_pending_after = after;
+    repos.loadSyncSnapshotPage(harness.fx, after);
+    harness.drain();
+    const len = bridge.takeAnswer(conn, out) orelse return error.NoAnswer;
+    return responseBody(out[0..len]);
+}
+
+/// One durable op page, above `since`, through the pending-answer path.
+fn opsPageBody(harness: *Harness, conn: u32, since: []const u8, out: []u8) ![]const u8 {
+    harness.model.sync_pending = .ops;
+    harness.model.sync_pending_conn = conn;
+    repos.loadSyncOps(harness.fx, since);
+    harness.drain();
+    const len = bridge.takeAnswer(conn, out) orelse return error.NoAnswer;
+    return responseBody(out[0..len]);
+}
+
+/// The body of a formatted response. Responses end their head with
+/// CRLF, unlike the request heads `server.splitBody` reads.
+fn responseBody(answer: []const u8) []const u8 {
+    const at = std.mem.indexOf(u8, answer, "\r\n\r\n") orelse return "";
+    return answer[at + 4 ..];
+}
+
+/// Apply one status op. The writer can differ from the origin: a device
+/// holding a remapped copy advances the sale and names the origin.
+fn applyOrderStatusOp(harness: *Harness, writer: []const u8, origin: []const u8, clock: u64, order_id: i64, status: i64) !void {
+    var data_buffer: [256]u8 = undefined;
+    const data = try std.fmt.bufPrint(&data_buffer,
+        \\{{"id":{d},"origin_device":"{s}","status":{d},"changed_at":{d}}}
+    , .{ order_id, origin, status, 1_700_000_000_000 + @as(i64, @intCast(clock)) });
+    var id_buffer: [64]u8 = undefined;
+    const op_id = try std.fmt.bufPrint(&id_buffer, "{s}:{d}:0", .{ writer, clock });
+    var entity_buffer: [32]u8 = undefined;
+    const entity_id = try std.fmt.bufPrint(&entity_buffer, "{d}", .{order_id});
+    repos.applyOp(&harness.model, harness.fx, .{
+        .id = op_id,
+        .entity_table = "order_status",
+        .entity_id = entity_id,
+        .operation = .create,
+        .logical_clock = clock,
+        .device_id = writer,
+        .created_at = 1_700_000_000_000 + @as(i64, @intCast(clock)),
+        .data_json = data,
+    });
+    harness.drain();
+}
+
+/// Apply one payment op, keyed by the origin pair.
+fn applyPaymentOp(harness: *Harness, writer: []const u8, origin: []const u8, clock: u64, order_id: i64, amount: i64) !void {
+    var data_buffer: [256]u8 = undefined;
+    const data = try std.fmt.bufPrint(&data_buffer,
+        \\{{"order_id":{d},"origin_device":"{s}","mode":0,"amount_minor":{d},"paid_at":{d}}}
+    , .{ order_id, origin, amount, 1_700_000_000_000 + @as(i64, @intCast(clock)) });
+    var id_buffer: [64]u8 = undefined;
+    const op_id = try std.fmt.bufPrint(&id_buffer, "{s}:{d}:0", .{ writer, clock });
+    var entity_buffer: [32]u8 = undefined;
+    const entity_id = try std.fmt.bufPrint(&entity_buffer, "{d}", .{order_id});
+    repos.applyOp(&harness.model, harness.fx, .{
+        .id = op_id,
+        .entity_table = "payment",
+        .entity_id = entity_id,
+        .operation = .create,
+        .logical_clock = clock,
+        .device_id = writer,
+        .created_at = 1_700_000_000_000 + @as(i64, @intCast(clock)),
+        .data_json = data,
+    });
+    harness.drain();
+}
+
+test "a compacted log keeps a tail and a late joiner applies the snapshot" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    a.model.now_ms = 1_700_000_100_000;
+
+    // Sixty-five creates from one device, then a status and a payment.
+    // That is enough to push the retained tail below the first op, so
+    // the floor is real and the old create is gone from op_log.
+    var clock: u64 = 0;
+    for (1..66) |index| {
+        clock += 1;
+        var data_buffer: [768]u8 = undefined;
+        const data = try std.fmt.bufPrint(&data_buffer,
+            \\{{"id":{d},"origin_device":"dev-a","order_type":0,"status":0,"employee_id":7,"subtotal_minor":1000,"tax_minor":0,"discount_minor":0,"total_minor":1000,"placed_at":{d},"notes":"snapshot","lines":[{{"id":1,"product_id":1,"product_name":"Snapshot","qty":1,"unit_price_minor":1000,"tax_bps":0,"notes":""}}]}}
+        , .{ index, 1_700_000_000_000 + index });
+        var id_buffer: [64]u8 = undefined;
+        const op_id = try std.fmt.bufPrint(&id_buffer, "dev-a:{d}:0", .{clock});
+        var entity_buffer: [32]u8 = undefined;
+        const entity_id = try std.fmt.bufPrint(&entity_buffer, "{d}", .{index});
+        repos.applyOp(&a.model, a.fx, .{
+            .id = op_id,
+            .entity_table = "order",
+            .entity_id = entity_id,
+            .operation = .create,
+            .logical_clock = clock,
+            .device_id = "dev-a",
+            .created_at = 1_700_000_000_000 + @as(i64, @intCast(index)),
+            .data_json = data,
+        });
+        a.drain();
+    }
+
+    clock += 1;
+    const status_data =
+        \\{"id":1,"origin_device":"dev-a","status":4,"changed_at":1700000000500}
+    ;
+    repos.applyOp(&a.model, a.fx, .{
+        .id = "dev-a:66:0",
+        .entity_table = "order_status",
+        .entity_id = "1",
+        .operation = .create,
+        .logical_clock = clock,
+        .device_id = "dev-a",
+        .created_at = 1_700_000_000_500,
+        .data_json = status_data,
+    });
+    a.drain();
+
+    clock += 1;
+    const payment_data =
+        \\{"order_id":1,"origin_device":"dev-a","mode":0,"amount_minor":1000,"paid_at":1700000000500}
+    ;
+    repos.applyOp(&a.model, a.fx, .{
+        .id = "dev-a:67:0",
+        .entity_table = "payment",
+        .entity_id = "1",
+        .operation = .create,
+        .logical_clock = clock,
+        .device_id = "dev-a",
+        .created_at = 1_700_000_000_500,
+        .data_json = payment_data,
+    });
+    a.drain();
+
+    try testing.expectEqual(@as(u64, 67), a.model.sync_cursor.get("dev-a"));
+
+    repos.compactSyncLog(&a.model, a.fx);
+    a.drain();
+
+    // The snapshot committed, the old metadata is gone, and the tail
+    // is the last sixty-four clocks.
+    try testing.expectEqual(@as(u32, 1), a.model.sync_compactions);
+    try testing.expectEqual(@as(u64, 1), a.model.sync_snapshot_version);
+    try testing.expectEqual(@as(u64, 3), a.model.sync_op_floor.get("dev-a"));
+    try testing.expectEqual(@as(u64, 67), a.model.sync_snapshot_clocks.get("dev-a"));
+
+    const kept = try countRows(&a, "SELECT COUNT(*) AS n FROM op_log;", &.{});
+    try testing.expectEqual(@as(i64, 64), kept);
+    const old = try countRows(&a, "SELECT COUNT(*) AS n FROM op_log WHERE logical_clock <= 3;", &.{});
+    try testing.expectEqual(@as(i64, 0), old);
+    const snapshot_rows = try countRows(&a, "SELECT COUNT(*) AS n FROM sync_snapshot_op;", &.{});
+    try testing.expectEqual(@as(i64, 67), snapshot_rows);
+
+    // The server side: a page of the snapshot, and a page of the
+    // retained ops. Both go through the request path the net thread
+    // uses, so the endpoint routing and the async answer are covered.
+    var answer_buffer: [32 * 1024]u8 = undefined;
+    _ = bridge.takeAnswer(3, &answer_buffer);
+
+    main.update(&a.model, .{ .net = .{
+        .key = 2,
+        .kind = .data,
+        .bytes = "CONN 3\nGET /v1/snapshot?after=0 HTTP/1.1\n\n",
+    } }, a.fx);
+    a.drain();
+    const snapshot_answer_len = bridge.takeAnswer(3, &answer_buffer) orelse return error.NoAnswer;
+    const snapshot_answer = answer_buffer[0..snapshot_answer_len];
+    try testing.expect(std.mem.indexOf(u8, snapshot_answer, "200 OK") != null);
+    const snapshot_body_at = std.mem.indexOf(u8, snapshot_answer, "\r\n\r\n") orelse return error.NoBody;
+    const snapshot_body = snapshot_answer[snapshot_body_at + 4 ..];
+    try testing.expect(std.mem.startsWith(u8, snapshot_body, "{\"snapshot\":1"));
+    try testing.expect(std.mem.indexOf(u8, snapshot_answer, "\"snapshot\":1") != null);
+    try testing.expect(std.mem.indexOf(u8, snapshot_answer, "\"version\":1") != null);
+    try testing.expect(std.mem.indexOf(u8, snapshot_answer, "\"clocks\":\"dev-a:67\"") != null);
+    try testing.expect(std.mem.indexOf(u8, snapshot_answer, "\"done\":false") != null);
+    try testing.expect(std.mem.indexOf(u8, snapshot_answer, "\"entity_table\":\"order\"") != null);
+
+    // A cursor below the floor cannot be replayed: the answer points at
+    // the snapshot instead of pretending the missing range never was.
+    main.update(&a.model, .{ .net = .{
+        .key = 2,
+        .kind = .data,
+        .bytes = "CONN 4\nGET /v1/ops?since=dev-a:2 HTTP/1.1\n\n",
+    } }, a.fx);
+    const refused_len = bridge.takeAnswer(4, &answer_buffer) orelse return error.NoAnswer;
+    const refused = answer_buffer[0..refused_len];
+    try testing.expect(std.mem.indexOf(u8, refused, "409 Conflict") != null);
+    try testing.expect(std.mem.indexOf(u8, refused, "snapshot required") != null);
+    try testing.expect(std.mem.indexOf(u8, refused, "/v1/snapshot") != null);
+
+    // A cursor that covers the floor is served from the durable tail.
+    _ = bridge.takeAnswer(3, &answer_buffer);
+    main.update(&a.model, .{ .net = .{
+        .key = 2,
+        .kind = .data,
+        .bytes = "CONN 3\nGET /v1/ops?since=dev-a:3 HTTP/1.1\n\n",
+    } }, a.fx);
+    a.drain();
+    const ops_answer_len = bridge.takeAnswer(3, &answer_buffer) orelse return error.NoAnswer;
+    const ops_answer = answer_buffer[0..ops_answer_len];
+    try testing.expect(std.mem.indexOf(u8, ops_answer, "200 OK") != null);
+    try testing.expect(std.mem.indexOf(u8, ops_answer, "\"entity_table\":\"order\"") != null);
+    try testing.expect(std.mem.indexOf(u8, ops_answer, "\"logical_clock\":4,") != null);
+    try testing.expect(std.mem.indexOf(u8, ops_answer, "\"logical_clock\":3,") == null);
+
+    // A device that has never seen the restaurant starts with the
+    // snapshot lines and then adopts the header clocks. It writes no
+    // op_log rows of its own: the snapshot is state, not history.
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+
+    const lines = try rowsOf(&a, "SELECT line FROM sync_snapshot_op ORDER BY seq;");
+    defer lines.deinit();
+    for (lines.rows) |row| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const op = try record.decode(arena_state.allocator(), row[0].asText());
+        try testing.expect(repos.applySnapshotOp(&b.model, b.fx, op));
+        b.drain();
+    }
+
+    const meta = try rowsOf(&a, "SELECT clocks FROM sync_snapshot LIMIT 1;");
+    defer meta.deinit();
+    try testing.expectEqual(@as(usize, 1), meta.rows.len);
+    repos.adoptSnapshotCursor(&b.model, b.fx, meta.rows[0][0].asText(), 1);
+    b.drain();
+
+    try testing.expectEqual(@as(u64, 67), b.model.sync_cursor.get("dev-a"));
+    try testing.expectEqual(@as(u64, 1), b.model.sync_snapshot_version);
+    try testing.expectEqual(@as(u32, 67), b.model.sync_snapshot_ops);
+
+    const b_ops = try countRows(&b, "SELECT COUNT(*) AS n FROM op_log;", &.{});
+    try testing.expectEqual(@as(i64, 0), b_ops);
+    const b_orders = try countRows(&b, "SELECT COUNT(*) AS n FROM orders;", &.{});
+    try testing.expectEqual(@as(i64, 65), b_orders);
+    const b_lines = try countRows(&b, "SELECT COUNT(*) AS n FROM order_line;", &.{});
+    try testing.expectEqual(@as(i64, 65), b_lines);
+    const b_paid = try countRows(&b, "SELECT COUNT(*) AS n FROM orders WHERE origin_device = 'dev-a' AND origin_id = 1 AND status = 4;", &.{});
+    try testing.expectEqual(@as(i64, 1), b_paid);
+    const b_payment = try countRows(&b, "SELECT COUNT(*) AS n FROM payment WHERE order_id = (SELECT id FROM orders WHERE origin_device = 'dev-a' AND origin_id = 1);", &.{});
+    try testing.expectEqual(@as(i64, 1), b_payment);
+}
+
+test "a device off for a week converges through the snapshot and the tail" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    a.model.now_ms = 1_700_000_100_000;
+
+    // A week of trading: enough ops to compact the log and delete the
+    // range a device that was off would have asked for. The durable
+    // counter compacts on its own at 128, so no manual call here.
+    var clock: u64 = 0;
+    for (1..131) |index| {
+        clock += 1;
+        try applyOrderCreate(&a, "dev-a", clock, @intCast(index), "week");
+    }
+    try testing.expectEqual(@as(u32, 1), a.model.sync_compactions);
+    try testing.expectEqual(@as(u64, 1), a.model.sync_snapshot_version);
+
+    // B was last awake when the first order was written, seven days
+    // ago. Its cursor is real, and it no longer covers the floor.
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    try b.model.sync_cursor.observe("dev-a", 1);
+
+    // The pull is refused; the snapshot is the only way back. B reads
+    // every page, applies every line, and adopts the header clocks only
+    // after the last page.
+    var after: i64 = 0;
+    var pages: usize = 0;
+    var applied: usize = 0;
+    var clocks_buffer: [2048]u8 = undefined;
+    var clocks_len: usize = 0;
+    var snapshot_version: u64 = 0;
+    while (true) {
+        var answer_buffer: [32 * 1024]u8 = undefined;
+        const body = try snapshotPageBody(&a, 7, after, &answer_buffer);
+        const newline = std.mem.indexOfScalar(u8, body, '\n') orelse return error.NoHeader;
+
+        var header_arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer header_arena.deinit();
+        const header = try snapshot.decode(header_arena.allocator(), body[0..newline]);
+        try testing.expect(header.clocks.len <= clocks_buffer.len);
+        @memcpy(clocks_buffer[0..header.clocks.len], header.clocks);
+        clocks_len = header.clocks.len;
+        snapshot_version = header.version;
+
+        var lines = std.mem.splitScalar(u8, body[newline + 1 ..], '\n');
+        while (lines.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            if (trimmed.len == 0) continue;
+            var op_arena = std.heap.ArenaAllocator.init(testing.allocator);
+            defer op_arena.deinit();
+            const op = try record.decode(op_arena.allocator(), trimmed);
+            try testing.expect(repos.applySnapshotOp(&b.model, b.fx, op));
+            b.drain();
+            applied += 1;
+        }
+
+        pages += 1;
+        if (header.done) break;
+        after = header.next;
+        try testing.expect(pages < 32);
+    }
+
+    try testing.expect(pages > 1);
+    try testing.expectEqual(@as(usize, 128), applied);
+    repos.adoptSnapshotCursor(&b.model, b.fx, clocks_buffer[0..clocks_len], snapshot_version);
+    b.drain();
+    try testing.expectEqual(@as(u64, 128), b.model.sync_cursor.get("dev-a"));
+
+    // The week did not stop after the snapshot: orders 129 to 133 land
+    // while B is catching up, and B pulls exactly the durable tail.
+    for (131..134) |index| {
+        clock += 1;
+        try applyOrderCreate(&a, "dev-a", clock, @intCast(index), "tail");
+    }
+
+    var ops_buffer: [32 * 1024]u8 = undefined;
+    const tail = try opsPageBody(&a, 8, "dev-a:128", &ops_buffer);
+    var tail_applied: usize = 0;
+    var tail_lines = std.mem.splitScalar(u8, tail, '\n');
+    while (tail_lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        var op_arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer op_arena.deinit();
+        const op = try record.decode(op_arena.allocator(), trimmed);
+        repos.applyOp(&b.model, b.fx, op);
+        b.drain();
+        tail_applied += 1;
+    }
+    try testing.expectEqual(@as(usize, 5), tail_applied);
+
+    // Both devices hold the same 133 orders; the snapshot did not have
+    // to be re-read, and the tail was enough.
+    const a_orders = try countRows(&a, "SELECT COUNT(*) AS n FROM orders;", &.{});
+    const b_orders = try countRows(&b, "SELECT COUNT(*) AS n FROM orders;", &.{});
+    try testing.expectEqual(@as(i64, 133), a_orders);
+    try testing.expectEqual(a_orders, b_orders);
+    try testing.expectEqual(@as(u64, 133), b.model.sync_cursor.get("dev-a"));
+}
+
+test "the kitchen and the till keep converging while the admin is closed for an hour" {
+    // Three devices, three databases. A is the admin. Once it goes
+    // quiet, B and C still take orders, move tickets and take money
+    // from each other for a simulated hour of service: the admin is
+    // not a hub the restaurant needs. Logical time advances with the
+    // ops; the test does not sleep.
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    var c = try seeded(testing.allocator);
+    defer c.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    @memcpy(c.model.device_token_buf[0..6], "test03");
+    c.model.device_token_len = 6;
+
+    // While the admin is up, its first order reaches both peers.
+    try applyOrderCreate(&a, "dev-a", 1, 1, "admin");
+    try applyOrderCreate(&b, "dev-a", 1, 1, "admin");
+    try applyOrderCreate(&c, "dev-a", 1, 1, "admin");
+
+    // The admin closes here. Over the next sixty minutes B sells a
+    // ticket a minute, B moves it, and C takes the money. Every op is
+    // applied directly on the other device, the way the pull would.
+    var b_clock: u64 = 1;
+    var c_clock: u64 = 0;
+    for (1..61) |minute| {
+        const order_id: i64 = 100 + @as(i64, @intCast(minute));
+
+        b_clock += 1;
+        try applyOrderCreate(&b, "dev-b", b_clock, order_id, "hour");
+        try applyOrderCreate(&c, "dev-b", b_clock, order_id, "hour");
+
+        b_clock += 1;
+        try applyOrderStatusOp(&b, "dev-b", "dev-b", b_clock, order_id, 4);
+        try applyOrderStatusOp(&c, "dev-b", "dev-b", b_clock, order_id, 4);
+
+        c_clock += 1;
+        try applyPaymentOp(&c, "dev-c", "dev-b", c_clock, order_id, 1000);
+        try applyPaymentOp(&b, "dev-c", "dev-b", c_clock, order_id, 1000);
+    }
+
+    // The admin still holds only the order it took before closing.
+    const a_orders = try countRows(&a, "SELECT COUNT(*) AS n FROM orders;", &.{});
+    try testing.expectEqual(@as(i64, 1), a_orders);
+
+    // B and C agree on all sixty-one orders and the sixty payments,
+    // and both compacted their own logs during the hour.
+    for ([_]*Harness{ &b, &c }) |device| {
+        const orders = try countRows(device, "SELECT COUNT(*) AS n FROM orders;", &.{});
+        try testing.expectEqual(@as(i64, 61), orders);
+        const completed = try countRows(device, "SELECT COUNT(*) AS n FROM orders WHERE origin_device = 'dev-b' AND status = 4;", &.{});
+        try testing.expectEqual(@as(i64, 60), completed);
+        const payments = try countRows(device, "SELECT COUNT(*) AS n FROM payment;", &.{});
+        try testing.expectEqual(@as(i64, 60), payments);
+        try testing.expect(device.model.sync_compactions >= 1);
+    }
+
+    try testing.expectEqual(@as(u64, 1), b.model.sync_cursor.get("dev-a"));
+    try testing.expectEqual(@as(u64, 121), b.model.sync_cursor.get("dev-b"));
+    try testing.expectEqual(@as(u64, 60), b.model.sync_cursor.get("dev-c"));
+    try testing.expectEqual(@as(u64, 1), c.model.sync_cursor.get("dev-a"));
+    try testing.expectEqual(@as(u64, 121), c.model.sync_cursor.get("dev-b"));
+    try testing.expectEqual(@as(u64, 60), c.model.sync_cursor.get("dev-c"));
+}
+
+test "an op page that fills returns the lines that fit, and the next pull gets the rest" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+
+    // Forty orders with long notes: more than one 32 KiB frame can
+    // carry, so the page fills before the sixty-four-row limit.
+    var long_note: [600]u8 = undefined;
+    @memset(&long_note, 'x');
+    for (1..41) |index| {
+        try applyOrderCreate(&a, "dev-a", index, @intCast(index), &long_note);
+    }
+
+    var answer_buffer: [32 * 1024]u8 = undefined;
+    var since_buffer: [64]u8 = undefined;
+    var since: []const u8 = "";
+    var pulled: usize = 0;
+    var rounds: usize = 0;
+    while (true) {
+        const body = try opsPageBody(&a, 9, since, &answer_buffer);
+        var last_clock: u64 = 0;
+        var lines = std.mem.splitScalar(u8, body, '\n');
+        while (lines.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            if (trimmed.len == 0) continue;
+            var op_arena = std.heap.ArenaAllocator.init(testing.allocator);
+            defer op_arena.deinit();
+            const op = try record.decode(op_arena.allocator(), trimmed);
+            repos.applyOp(&b.model, b.fx, op);
+            b.drain();
+            pulled += 1;
+            last_clock = op.logical_clock;
+        }
+
+        rounds += 1;
+        try testing.expect(rounds < 20);
+        if (last_clock == 40) break;
+        try testing.expect(last_clock > 0);
+        since = try std.fmt.bufPrint(&since_buffer, "dev-a:{d}", .{last_clock});
+    }
+
+    try testing.expect(rounds > 1);
+    try testing.expectEqual(@as(usize, 40), pulled);
+    const orders = try countRows(&b, "SELECT COUNT(*) AS n FROM orders;", &.{});
+    try testing.expectEqual(@as(i64, 40), orders);
+}
+
 test "a beacon adds a peer once and updates it in place" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();
@@ -3943,9 +4439,7 @@ test "a reference too large to stage is retried, not wedged" {
     var i: usize = 0;
     while (i < 513) : (i += 1) {
         if (i > 0) try body.append(testing.allocator, ',');
-        const row = try std.fmt.allocPrint(testing.allocator,
-            "{{\"id\":{d},\"name\":\"c{d}\",\"sort_order\":0,\"active\":1}}",
-            .{ i + 1, i + 1 });
+        const row = try std.fmt.allocPrint(testing.allocator, "{{\"id\":{d},\"name\":\"c{d}\",\"sort_order\":0,\"active\":1}}", .{ i + 1, i + 1 });
         defer testing.allocator.free(row);
         try body.appendSlice(testing.allocator, row);
     }
