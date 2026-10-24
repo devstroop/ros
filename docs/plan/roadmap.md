@@ -39,12 +39,13 @@ Everything else is a prerequisite for one of those six, or it is later.
 | [3](#phase-3--the-waiter-and-kiosk-surfaces) | The waiter and kiosk surfaces | The waiter and the two kiosks are usable on their own | Not started | — |
 | [4](#phase-4--sync-sidecar) | Sync sidecar | Two devices converge over a LAN with no cloud | Scaffolded | **Long pole** |
 | [5](#phase-5--printing-sidecar) | Printing sidecar | Receipts and kitchen tickets print on a real device | Scaffolded | **Long pole** |
-| [6](#phase-6--packaging-and-cutover) | Packaging and cutover | A signed build installs on a clean machine and runs a service | Not started | — |
+| [6](#phase-6--packaging-and-cutover) | Packaging and cutover | A signed build installs on a clean machine and runs a service | Started (three macOS artifacts package and verify in CI; the clean-machine release remains) | — |
 
 Phase 4 and Phase 5 are the long poles: each needs a second program, a
-device integration the SDK does not have, and a packaging story that does
-not exist yet. They must be *started* inside Phase 1, not scheduled after
-Phase 3. The detail is in the dependency graph below.
+device integration the SDK does not have, and a packaging story that is
+only partly in place (macOS first; Linux/Windows and the release
+credentials remain). They must be *started* inside Phase 1, not scheduled
+after Phase 3. The detail is in the dependency graph below.
 
 ## Dependency graph
 

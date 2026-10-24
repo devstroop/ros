@@ -144,3 +144,64 @@ jobs:
           native automate assert 'gpu_nonblank=true'
           native automate screenshot main-canvas
           test -s .zig-cache/native-sdk-automation/screenshot-main-canvas.png
+
+  package:
+    name: Package (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Zig
+        uses: vercel-labs/setup-zig@v1
+        with:
+          version: ${{ env.NATIVE_ZIG_VERSION }}
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Restore the Native SDK checkout
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: ~/native-sdk
+          key: native-sdk-${{ runner.os }}-${{ env.NATIVE_SDK_TAG }}-zig${{ env.NATIVE_ZIG_VERSION }}-b2
+      - name: Fetch and build the SDK CLI
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$NATIVE_SDK_TAG" https://github.com/vercel-labs/native.git "$HOME/native-sdk"
+          cd "$HOME/native-sdk"
+          zig build -Doptimize=ReleaseFast -Dcpu=baseline
+      - name: Put the SDK CLI on PATH
+        run: |
+          test -x "$HOME/native-sdk/zig-out/bin/native"
+          echo "$HOME/native-sdk/zig-out/bin" >> "$GITHUB_PATH"
+      - name: Install the SDK TypeScript toolchain
+        run: |
+          set -euo pipefail
+          cd "$HOME/native-sdk/packages/core"
+          npm ci --include=dev
+      - name: Point the app builds at the SDK
+        run: ln -sfn "$HOME/native-sdk" "$GITHUB_WORKSPACE/.native-sdk"
+      - name: Cache the Zig compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-cache-${{ runner.os }}-${{ env.NATIVE_SDK_TAG }}-zig${{ env.NATIVE_ZIG_VERSION }}
+      - name: Package the three apps (ad-hoc signing)
+        # No Apple signing secret is configured in this repository yet.
+        # Ad-hoc signing proves the packaging, the bundle ids, the kiosk
+        # Local Network key and the DMGs. A release sets
+        # ROS_SIGNING_IDENTITY and ROS_NOTARY_PROFILE and runs the same
+        # script; see docs/operations/release.md.
+        run: bash scripts/package.sh --ci
+      - name: Verify the artifacts without rebuilding
+        run: bash scripts/package.sh --check
+      - name: Upload the install artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ros-macos-packages
+          path: |
+            dist/*.dmg
+            dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 14
