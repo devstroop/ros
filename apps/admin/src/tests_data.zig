@@ -4292,6 +4292,93 @@ test "a payment op closes the order on the second database" {
     try testing.expectEqual(@as(i64, 1), again);
 }
 
+test "a payment op does not pay a voided ticket" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // The bill was voided before the other device's payment arrived.
+    harness.fx.dbExec(.{
+        .key = 958,
+        .statements = &.{.{
+            .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at, origin_device, origin_id) VALUES (1, 'A-1', 0, 5, 1, NULL, 7, 1000, 0, 0, 1000, 1700000000000, '', 1700000000000, 1700000000000, 'dev-a', 4242);",
+            .params = &.{},
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    const payment_json = "{\"order_id\":4242,\"origin_device\":\"dev-a\",\"mode\":0,\"amount_minor\":1000,\"paid_at\":1700000000100}";
+    const payment_op = record.Op{
+        .id = "dev-a:1:0",
+        .entity_table = "payment",
+        .entity_id = "4242",
+        .operation = .create,
+        .logical_clock = 1,
+        .device_id = "dev-a",
+        .created_at = 1700000000100,
+        .data_json = payment_json,
+    };
+    repos.applyOp(&harness.model, harness.fx, payment_op);
+    harness.drain();
+
+    // Money cannot attach to a bill that was voided, and the void is
+    // not undone by the payment.
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM payment;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.voided)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = 1;", &.{}),
+    );
+}
+
+test "a line op does not add a dish to a paid ticket" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.fx.dbExec(.{
+        .key = 959,
+        .statements = &.{.{
+            .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at, origin_device, origin_id) VALUES (1, 'A-1', 0, 4, 1, NULL, 7, 1000, 0, 0, 1000, 1700000000000, '', 1700000000000, 1700000000000, 'dev-a', 4242);",
+            .params = &.{},
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    // The waiter's last plate arrives after the guest has paid.
+    const order_json =
+        \\{"id":4242,"origin_device":"dev-a","order_type":0,"status":4,
+        \\ "dining_table_id":1,"employee_id":7,"subtotal_minor":1000,
+        \\ "tax_minor":0,"discount_minor":0,"total_minor":1000,
+        \\ "placed_at":1700000000000,"notes":"","lines":[
+        \\ {"id":1,"product_id":1,"product_name":"Paneer Tikka","qty":1,
+        \\  "unit_price_minor":1000,"tax_bps":0,"notes":""}]}
+    ;
+    const order_op = record.Op{
+        .id = "dev-a:2:0",
+        .entity_table = "order",
+        .entity_id = "4242",
+        .operation = .update,
+        .logical_clock = 2,
+        .device_id = "dev-a",
+        .created_at = 1700000000200,
+        .data_json = order_json,
+    };
+    repos.applyOp(&harness.model, harness.fx, order_op);
+    harness.drain();
+
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM order_line;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 1000),
+        try countRows(&harness, "SELECT total_minor AS n FROM orders WHERE id = 1;", &.{}),
+    );
+}
+
 test "a remapped order's status travels back to its origin" {
     var a = try seeded(testing.allocator);
     defer a.deinit();

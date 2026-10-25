@@ -3846,7 +3846,7 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
     count += 1;
 
     const first_line_statement = count;
-    var line_params: [max_order_lines][10]native_sdk.EffectDbValue = undefined;
+    var line_params: [max_order_lines][11]native_sdk.EffectDbValue = undefined;
     for (snapshot.lines, 0..) |line, index| {
         // Two slots are reserved for the op row and the clock.
         if (count + 3 > statements.len) break;
@@ -3862,6 +3862,11 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
             .{ .text = origin_device },
             .{ .integer = origin_id },
             .{ .integer = snapshot.placed_at },
+            // A create op is the ticket being born (or restored from a
+            // snapshot), so its lines go in even when the ticket is
+            // already closed. An update is a late plate: it must not
+            // add a dish to a bill that has been paid for.
+            .{ .integer = if (op.operation == .create) 1 else 0 },
         };
         statements[count] = .{
             .sql =
@@ -3873,7 +3878,9 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
             \\  (SELECT id FROM product WHERE id = ?1),
             \\  ?2, ?3, ?4, ?5, ?6, ?10
             \\WHERE EXISTS (
-            \\  SELECT 1 FROM orders WHERE origin_device = ?8 AND origin_id = ?9
+            \\  SELECT 1 FROM orders
+            \\  WHERE origin_device = ?8 AND origin_id = ?9
+            \\    AND (status < 4 OR ?11 = 1)
             \\)
             \\ON CONFLICT DO NOTHING;
             ,
@@ -4024,14 +4031,20 @@ fn applyPayment(fx: *Effects, op: record.Op, snapshot: record.PaymentSnapshot, p
     // is the same row, not a second charge. The op names the order by
     // its origin pair; an op from before the origin columns existed
     // falls back to the old rule, where the local id was the origin id.
-    var payment_params: [5]native_sdk.EffectDbValue = .{
+    var payment_params: [6]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.order_id },
         .{ .integer = snapshot.mode },
         .{ .integer = snapshot.amount_minor },
         .{ .integer = snapshot.paid_at },
         .{ .text = snapshot.origin_device },
+        .{ .integer = @intFromEnum(domain.OrderStatus.voided) },
     };
     statements[0] = .{
+        // The money never attaches to a VOIDED bill. A payment that
+        // loses the race to a void would otherwise leave the books
+        // with money taken against a ticket the restaurant cancelled.
+        // A completed ticket is still payable: the payment may simply
+        // arrive after the status did.
         .sql =
         \\INSERT INTO payment (id, order_id, mode, amount_minor, reference, paid_at, created_at)
         \\SELECT id, id, ?2, ?3, '', ?4, ?4
@@ -4042,6 +4055,7 @@ fn applyPayment(fx: *Effects, op: record.Op, snapshot: record.PaymentSnapshot, p
         \\    ELSE (SELECT id FROM orders WHERE origin_device = ?5 AND origin_id = ?1)
         \\  END
         \\)
+        \\  AND status < ?6
         \\ON CONFLICT(id) DO NOTHING;
         ,
         .params = &payment_params,
