@@ -3105,6 +3105,82 @@ test "a waiter's line carries the tax the counter would charge" {
     try testing.expectEqual(@as(i64, 500), harness.model.order_lines[0].tax_bps);
 }
 
+test "a waiter's table order and its plates reach the kitchen" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+
+    a.model.employee_id = 7;
+    a.model.tables = &.{
+        .{ .id = 1, .category_id = 1, .name = "T1", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 0, .pos_y = 0 },
+    };
+    a.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The waiter opens a table.
+    a.send(.{ .select_table = 1 });
+    a.drain();
+
+    const create_op = try latestOp(&a, arena);
+    try testing.expectEqualStrings("order", create_op.entity_table);
+    try testing.expectEqual(record.Operation.create, create_op.operation);
+
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    repos.applyOp(&b.model, b.fx, create_op);
+    b.drain();
+
+    // The kitchen has the ticket, and the table is busy there too.
+    repos.loadOrders(&b.model, b.fx);
+    b.drain();
+    try testing.expectEqual(@as(usize, 1), b.model.orders.len);
+    try testing.expectEqual(@as(i64, 1), b.model.orders[0].dining_table_id);
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&b, "SELECT status AS n FROM dining_table WHERE id = 1;", &.{}),
+    );
+
+    // A plate goes on the order.
+    a.send(.{ .add_to_order = 1 });
+    a.drain();
+    const line_op = try latestOp(&a, arena);
+    try testing.expectEqualStrings("order", line_op.entity_table);
+    try testing.expectEqual(record.Operation.update, line_op.operation);
+    try testing.expectEqualStrings(create_op.entity_id, line_op.entity_id);
+
+    repos.applyOp(&b.model, b.fx, line_op);
+    b.drain();
+    repos.loadOrders(&b.model, b.fx);
+    b.drain();
+    try testing.expectEqual(@as(i64, 24500), b.model.orders[0].subtotal_minor);
+    try testing.expectEqual(@as(i64, 24500), b.model.orders[0].total_minor);
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&b, "SELECT COUNT(*) AS n FROM order_line;", &.{}),
+    );
+
+    // A second plate extends the same ticket, and the total follows.
+    a.send(.{ .add_to_order = 1 });
+    a.drain();
+    const second_op = try latestOp(&a, arena);
+    repos.applyOp(&b.model, b.fx, second_op);
+    b.drain();
+    repos.loadOrders(&b.model, b.fx);
+    b.drain();
+    try testing.expectEqual(@as(i64, 49000), b.model.orders[0].subtotal_minor);
+    try testing.expectEqual(@as(i64, 49000), b.model.orders[0].total_minor);
+    try testing.expectEqual(
+        @as(i64, 2),
+        try countRows(&b, "SELECT COUNT(*) AS n FROM order_line;", &.{}),
+    );
+}
+
 test "a table that already has an order is joined, not duplicated" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();

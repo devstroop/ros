@@ -267,6 +267,7 @@ pub const Model = struct {
         "salt_state",
         "last_issued_order_id",
         "advance_order_id",
+        "add_line_pending",
         "voiding_order_id",
         "void_reason_buf",
         "login_hash",
@@ -644,6 +645,10 @@ pub const Model = struct {
     /// The order being voided, so the result handler can tell a void
     /// from an ordinary status move and leave the detail screen.
     voiding_order_id: i64 = 0,
+    /// True while a waiter's plate is on its way to the database. A
+    /// second tap would build its snapshot from a ticket that does not
+    /// have the first plate yet, and the kitchen would lose one.
+    add_line_pending: bool = false,
     /// The order that was just placed: the confirmation screen shows
     /// it and the payment is taken against it.
     active_table_name_field: []const u8 = "",

@@ -132,6 +132,9 @@ fn keepActiveOrder(model: *Model) void {
 /// The waiter picked a table. If the table already has an open order,
 /// the waiter joins it; if it is free, a new order is opened for it.
 fn selectTable(model: *Model, fx: *Effects, table_id: i64) void {
+    // The order is being opened; a second tap would open a second one
+    // for the same table.
+    if (model.pending_order_id != 0) return;
     const table = findTable(model, table_id) orelse return;
     model.waiter_buf.reset();
     model.active_table_id = table.id;
@@ -155,7 +158,7 @@ fn selectTable(model: *Model, fx: *Effects, table_id: i64) void {
     // sequence, and the database assigns it.
     const order_id = nextOrderId(model, fx.wallMs());
     model.pending_order_id = order_id;
-    repos.openOrderForTable(fx, repos.key_open_order, table.id, model.employee_id, order_id);
+    repos.openOrderForTable(model, fx, repos.key_open_order, table.id, model.employee_id, order_id);
 }
 
 /// Add a product to the open order the waiter is serving.
@@ -164,7 +167,14 @@ fn addToOrder(model: *Model, fx: *Effects, product_id: i64) void {
         model.error_text = "Pick a table first";
         return;
     }
+    // One plate at a time. The op carries the whole ticket, so the
+    // second plate has to see the first one in the list.
+    if (model.add_line_pending) {
+        model.error_text = "The last item is still being added";
+        return;
+    }
     const product = findProduct(model, product_id) orelse return;
+    model.add_line_pending = true;
     repos.addOrderLine(
         model,
         fx,
@@ -1542,6 +1552,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .add_to_order => |product_id| addToOrder(model, fx, product_id),
 
         .order_line_added => |result| {
+            model.add_line_pending = false;
             if (result.outcome != .ok) {
                 model.error_text = "Could not add the item";
                 return;
@@ -2296,6 +2307,7 @@ fn resetSession(model: *Model, gate: Screen) void {
     model.cart_attempt_id = 0;
     model.sale_pending = false;
     model.payment_pending = false;
+    model.add_line_pending = false;
     model.void_reason_buf.set("");
     model.voiding_order_id = 0;
     model.search.set("");

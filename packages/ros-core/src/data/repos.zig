@@ -1585,56 +1585,169 @@ pub fn decodeCompany(model: *Model, bytes: []const u8) void {
     model.currency_decimals = reader.intOf(&values, "currency_decimals", 2);
 }
 
+/// The pieces of an order op, built on the caller's stack and good
+/// until the write that carries them runs.
+const OrderOp = struct {
+    params: [8]native_sdk.EffectDbValue = undefined,
+    clock_params: [1]native_sdk.EffectDbValue = undefined,
+    ready: bool = false,
+};
+
+/// Build the op row for an order change. The buffers are the caller's
+/// because the op's texts point into them; they must outlive the
+/// transaction the op joins. A failure to build one leaves `ready`
+/// false, and the local write still happens: a device that cannot
+/// describe a change to its peers still has to record it.
+fn buildOrderOp(
+    model: *Model,
+    out: *OrderOp,
+    json_buffer: []u8,
+    op_id_buffer: []u8,
+    entity_buffer: []u8,
+    clock_buffer: []u8,
+    snapshot: record.OrderSnapshot,
+    operation: record.Operation,
+    at: i64,
+) void {
+    var json_writer = std.Io.Writer.fixed(json_buffer);
+    std.json.Stringify.value(snapshot, .{}, &json_writer) catch return;
+    const data_json = json_writer.buffered();
+
+    const device_id = syncDeviceId(model);
+    const clock = nextSyncClock(model);
+    const op_id = record.formatId(op_id_buffer, device_id, clock, 0) catch return;
+    const entity_id = std.fmt.bufPrint(entity_buffer, "{d}", .{snapshot.id}) catch return;
+    const clock_text = std.fmt.bufPrint(clock_buffer, "{d}", .{clock}) catch return;
+
+    out.params = .{
+        .{ .text = op_id },
+        .{ .text = "order" },
+        .{ .text = entity_id },
+        .{ .text = operation.label() },
+        .{ .text = data_json },
+        .{ .integer = @intCast(clock) },
+        .{ .text = device_id },
+        .{ .integer = at },
+    };
+    out.clock_params = .{.{ .text = clock_text }};
+
+    // The device has now seen its own op. A peer that echoes it back
+    // is a duplicate, not a new order.
+    model.sync_cursor.observe(device_id, clock) catch {};
+
+    const wire_op: record.Op = .{
+        .id = op_id,
+        .entity_table = "order",
+        .entity_id = entity_id,
+        .operation = operation,
+        .logical_clock = clock,
+        .device_id = device_id,
+        .created_at = at,
+        .data_json = data_json,
+    };
+    var wire_buffer: [8 * 1024]u8 = undefined;
+    var wire_writer = std.Io.Writer.fixed(&wire_buffer);
+    if (record.encode(&wire_writer, wire_op)) {
+        cacheOp(model, wire_op, wire_writer.buffered());
+    } else |_| {}
+
+    out.ready = true;
+}
+
 /// Open an order for a table. A table that already has an open order
 /// is not given a second one: the waiter keeps adding to the order the
 /// table already has.
+///
+/// The order travels as an op in the same transaction. A table order
+/// that stays on the waiter's device is a guest nobody cooks for.
 pub fn openOrderForTable(
+    model: *Model,
     fx: *Effects,
     key: u64,
     table_id: i64,
     employee_id: i64,
     at: i64,
 ) void {
+    const origin_device = syncDeviceId(model);
+
+    var json_buffer: [16 * 1024]u8 = undefined;
+    var op_id_buffer: [96]u8 = undefined;
+    var entity_buffer: [32]u8 = undefined;
+    var clock_buffer: [32]u8 = undefined;
+    var order_op: OrderOp = .{};
+    buildOrderOp(model, &order_op, &json_buffer, &op_id_buffer, &entity_buffer, &clock_buffer, .{
+        .id = at,
+        .origin_device = origin_device,
+        .order_type = @intFromEnum(domain.OrderType.dine_in),
+        .status = @intFromEnum(domain.OrderStatus.pending),
+        .dining_table_id = table_id,
+        .employee_id = if (employee_id == 0) null else employee_id,
+        .subtotal_minor = 0,
+        .tax_minor = 0,
+        .discount_minor = 0,
+        .total_minor = 0,
+        .placed_at = at,
+        .notes = "",
+        .lines = &.{},
+    }, .create, at);
+
     // The order number is a sequence, and the database assigns it: the
     // statement that takes the next number and the statement that
     // stores the order are one transaction.
     var sequence_params: [1]native_sdk.EffectDbValue = .{.{ .integer = at }};
-    var order_params: [3]native_sdk.EffectDbValue = .{
+    var order_params: [4]native_sdk.EffectDbValue = .{
         .{ .integer = at },
         .{ .integer = table_id },
         .{ .integer = employee_id },
+        .{ .text = origin_device },
     };
+    var statements: [5]native_sdk.EffectDbStatement = undefined;
+    statements[0] = .{
+        .sql =
+        \\INSERT INTO sequence (name, value, updated_at) VALUES ('order_no', 1, ?1)
+        \\ON CONFLICT(name) DO UPDATE SET value = value + 1, updated_at = ?1;
+        ,
+        .params = &sequence_params,
+    };
+    statements[1] = .{
+        // The local row id and the origin id are the same on the device
+        // that opens the order. A peer gives it an id of its own and
+        // keeps the pair.
+        .sql =
+        \\INSERT INTO orders (id, order_no, order_type, status, dining_table_id,
+        \\  customer_id, employee_id, subtotal_minor, tax_minor, discount_minor,
+        \\  total_minor, placed_at, notes, created_at, updated_at,
+        \\  origin_device, origin_id)
+        \\VALUES (?1, (SELECT printf('%06d', value) FROM sequence WHERE name = 'order_no'),
+        \\  0, 0, ?2, NULL, ?3, 0, 0, 0, 0, ?1, '', ?1, ?1, ?4, ?1);
+        ,
+        .params = &order_params,
+    };
+    statements[2] = .{
+        // The table is occupied now that it has an order. The board
+        // shows what is true, and a table that says "Free" while a
+        // guest is sitting at it is a lie the whole floor has to work
+        // around.
+        .sql = "UPDATE dining_table SET status = 1 WHERE id = ?1;",
+        .params = &.{.{ .integer = table_id }},
+    };
+    var count: usize = 3;
+    if (order_op.ready) {
+        statements[count] = .{ .sql = insert_op_log_sql, .params = &order_op.params };
+        count += 1;
+        statements[count] = .{ .sql = save_clock_sql, .params = &order_op.clock_params };
+        count += 1;
+    }
+
     fx.dbExec(.{
         .key = key,
-        .statements = &.{
-            .{
-                .sql =
-                \\INSERT INTO sequence (name, value, updated_at) VALUES ('order_no', 1, ?1)
-                \\ON CONFLICT(name) DO UPDATE SET value = value + 1, updated_at = ?1;
-                ,
-                .params = &sequence_params,
-            },
-            .{
-                .sql =
-                \\INSERT INTO orders (id, order_no, order_type, status, dining_table_id,
-                \\  customer_id, employee_id, subtotal_minor, tax_minor, discount_minor,
-                \\  total_minor, placed_at, notes, created_at, updated_at)
-                \\VALUES (?1, (SELECT printf('%06d', value) FROM sequence WHERE name = 'order_no'),
-                \\  0, 0, ?2, NULL, ?3, 0, 0, 0, 0, ?1, '', ?1, ?1);
-                ,
-                .params = &order_params,
-            },
-            .{
-                // The table is occupied now that it has an order. The
-                // board shows what is true, and a table that says
-                // "Free" while a guest is sitting at it is a lie the
-                // whole floor has to work around.
-                .sql = "UPDATE dining_table SET status = 1 WHERE id = ?1;",
-                .params = &.{.{ .integer = table_id }},
-            },
-        },
+        .statements = statements[0..count],
         .on_result = Effects.dbMsg(.order_opened),
     });
+    // The cursor is a cache, but the clock it covers is the one the op
+    // was written under. A restart that forgot it would re-apply our
+    // own ticket.
+    saveCursor(model, fx);
 }
 
 /// Add one line to an open order and bring the order's total up with
@@ -1674,37 +1787,125 @@ pub fn addOrderLine(
         .{ .integer = total_tax },
         .{ .integer = at },
     };
+
+    // The kitchen board reads an order and its lines, so the new plate
+    // travels with the whole ticket. The handler has read the order
+    // back after the previous add, and adds are serialized, so this
+    // list is the one the database holds.
+    const origin = orderOrigin(model, order_id);
+    var order_type: i64 = @intFromEnum(domain.OrderType.dine_in);
+    var order_status: i64 = @intFromEnum(domain.OrderStatus.pending);
+    var table_id: ?i64 = if (model.active_table_id == 0) null else model.active_table_id;
+    var employee: ?i64 = if (model.employee_id == 0) null else model.employee_id;
+    var placed_at = at;
+    var order_tax = line_tax;
+    var discount: i64 = 0;
+    var subtotal = unit_price_minor;
+    var snapshot_lines: [max_order_lines]record.OrderLineSnapshot = undefined;
+    var snapshot_count: usize = 0;
+    for (model.order_lines) |line| {
+        if (line.order_id != order_id) continue;
+        // One slot is kept for the plate being added now.
+        if (snapshot_count + 1 >= max_order_lines) break;
+        snapshot_lines[snapshot_count] = .{
+            .id = line.id,
+            .product_id = if (line.product_id == 0) null else line.product_id,
+            .product_name = line.product_name,
+            .qty = line.qty,
+            .unit_price_minor = line.unit_price_minor,
+            .tax_bps = line.tax_bps,
+            .notes = line.notes,
+        };
+        subtotal += line.unit_price_minor * line.qty;
+        snapshot_count += 1;
+    }
+    for (model.orders) |order| {
+        if (order.id != order_id) continue;
+        order_type = @intFromEnum(order.order_type);
+        order_status = @intFromEnum(order.status);
+        table_id = if (order.dining_table_id == 0) null else order.dining_table_id;
+        employee = if (order.employee_id == 0) null else order.employee_id;
+        placed_at = order.placed_at;
+        // The order's stored tax plus this plate's, which is exactly
+        // what the write below leaves in the row.
+        order_tax = order.tax_minor + line_tax;
+        discount = order.discount_minor;
+        break;
+    }
+    snapshot_lines[snapshot_count] = .{
+        .id = order_id * 128 + @as(i64, @intCast(snapshot_count)),
+        .product_id = if (product_id == 0) null else product_id,
+        .product_name = product_name,
+        .qty = 1,
+        .unit_price_minor = unit_price_minor,
+        .tax_bps = tax_bps,
+        .notes = "",
+    };
+    snapshot_count += 1;
+    // An inclusive menu already has the tax inside the price.
+    const snapshot_total = subtotal + (if (model.tax_inclusive) 0 else order_tax);
+
+    var json_buffer: [16 * 1024]u8 = undefined;
+    var op_id_buffer: [96]u8 = undefined;
+    var entity_buffer: [32]u8 = undefined;
+    var clock_buffer: [32]u8 = undefined;
+    var order_op: OrderOp = .{};
+    buildOrderOp(model, &order_op, &json_buffer, &op_id_buffer, &entity_buffer, &clock_buffer, .{
+        .id = origin.id,
+        .origin_device = origin.device,
+        .order_type = order_type,
+        .status = order_status,
+        .dining_table_id = table_id,
+        .customer_id = null,
+        .employee_id = employee,
+        .subtotal_minor = subtotal,
+        .tax_minor = order_tax,
+        .discount_minor = discount,
+        .total_minor = snapshot_total,
+        .placed_at = placed_at,
+        .notes = "",
+        .lines = snapshot_lines[0..snapshot_count],
+    }, .update, at);
+
+    var statements: [4]native_sdk.EffectDbStatement = undefined;
+    statements[0] = .{
+        // The line id is left to SQLite: two lines added in the same
+        // millisecond are still two lines.
+        .sql =
+        \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
+        \\  unit_price_minor, tax_bps, notes, created_at)
+        \\VALUES (NULL, ?1, ?2, ?3, 1, ?4, ?5, '', ?6);
+        ,
+        .params = &line_params,
+    };
+    statements[1] = .{
+        // The tax is added one plate at a time, with the exact amount
+        // worked out here. Summing the rounded tax of every line in SQL
+        // would charge a different total than the counter does.
+        .sql =
+        \\UPDATE orders SET
+        \\  subtotal_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1),
+        \\  tax_minor = tax_minor + ?2,
+        \\  total_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1) + ?3,
+        \\  updated_at = ?4
+        \\WHERE id = ?1;
+        ,
+        .params = &order_params,
+    };
+    var count: usize = 2;
+    if (order_op.ready) {
+        statements[count] = .{ .sql = insert_op_log_sql, .params = &order_op.params };
+        count += 1;
+        statements[count] = .{ .sql = save_clock_sql, .params = &order_op.clock_params };
+        count += 1;
+    }
+
     fx.dbExec(.{
         .key = key,
-        .statements = &.{
-            .{
-                // The line id is left to SQLite: two lines added in the
-                // same millisecond are still two lines.
-                .sql =
-                \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
-                \\  unit_price_minor, tax_bps, notes, created_at)
-                \\VALUES (NULL, ?1, ?2, ?3, 1, ?4, ?5, '', ?6);
-                ,
-                .params = &line_params,
-            },
-            .{
-                // The tax is added one plate at a time, with the exact
-                // amount worked out here. Summing the rounded tax of
-                // every line in SQL would charge a different total than
-                // the counter does.
-                .sql =
-                \\UPDATE orders SET
-                \\  subtotal_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1),
-                \\  tax_minor = tax_minor + ?2,
-                \\  total_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1) + ?3,
-                \\  updated_at = ?4
-                \\WHERE id = ?1;
-                ,
-                .params = &order_params,
-            },
-        },
+        .statements = statements[0..count],
         .on_result = Effects.dbMsg(.order_line_added),
     });
+    saveCursor(model, fx);
 }
 
 /// Save the company's details. One statement, one row.
@@ -3488,7 +3689,7 @@ pub fn applyOp(model: *Model, fx: *Effects, op: record.Op) void {
 }
 
 fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persist: bool) void {
-    var statements: [4 + max_order_lines]native_sdk.EffectDbStatement = undefined;
+    var statements: [6 + max_order_lines]native_sdk.EffectDbStatement = undefined;
     var count: usize = 0;
 
     // The origin pair is the stable name. A create op written before
@@ -3563,11 +3764,55 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
     };
     count += 1;
 
+    // An order op carries the whole ticket, so a later op (a waiter
+    // adding a plate) brings the money with it. The update is held to
+    // an open order: a late op must not rewrite a bill that has been
+    // paid for.
+    var money_params: [7]native_sdk.EffectDbValue = .{
+        .{ .integer = snapshot.subtotal_minor },
+        .{ .integer = snapshot.tax_minor },
+        .{ .integer = snapshot.discount_minor },
+        .{ .integer = snapshot.total_minor },
+        .{ .integer = snapshot.placed_at },
+        .{ .text = origin_device },
+        .{ .integer = origin_id },
+    };
+    statements[count] = .{
+        .sql =
+        \\UPDATE orders SET
+        \\  subtotal_minor = ?1, tax_minor = ?2, discount_minor = ?3,
+        \\  total_minor = ?4, updated_at = ?5
+        \\WHERE origin_device = ?6 AND origin_id = ?7 AND status < 4;
+        ,
+        .params = &money_params,
+    };
+    count += 1;
+
+    // A table order occupies its table on the kitchen's device too. A
+    // paid order does not: a late line op must not turn a free table
+    // busy again.
+    var occupy_params: [2]native_sdk.EffectDbValue = .{
+        .{ .text = origin_device },
+        .{ .integer = origin_id },
+    };
+    statements[count] = .{
+        .sql =
+        \\UPDATE dining_table SET status = 1
+        \\WHERE id = (
+        \\  SELECT dining_table_id FROM orders
+        \\  WHERE origin_device = ?1 AND origin_id = ?2 AND status < 4
+        \\);
+        ,
+        .params = &occupy_params,
+    };
+    count += 1;
+
+    const first_line_statement = count;
     var line_params: [max_order_lines][10]native_sdk.EffectDbValue = undefined;
     for (snapshot.lines, 0..) |line, index| {
         // Two slots are reserved for the op row and the clock.
         if (count + 3 > statements.len) break;
-        const slot = count - 2;
+        const slot = count - first_line_statement;
         line_params[slot] = .{
             nullableIdParam(line.product_id),
             .{ .text = line.product_name },
