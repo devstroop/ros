@@ -2013,7 +2013,8 @@ pub fn addOrderLine(
         \\UPDATE orders SET
         \\  subtotal_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1),
         \\  tax_minor = tax_minor + ?2,
-        \\  total_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1) + ?3,
+        \\  total_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1)
+        \\    + ?3 - discount_minor,
         \\  updated_at = ?4
         \\WHERE id = ?1 AND EXISTS (SELECT 1 FROM order_line WHERE id = ?5);
         ,

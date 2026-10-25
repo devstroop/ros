@@ -3607,6 +3607,73 @@ test "a plate does not land on a paid table" {
     ));
 }
 
+test "a waiter's plate does not drop a bill's discount" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // A discounted sale lives on the board, and a waiter adds a plate
+    // to it. The discount is on the bill, not on the first plate, so
+    // the new total is the new subtotal plus tax minus the discount.
+    harness.fx.dbExec(.{
+        .key = 958,
+        .statements = &.{
+            .{
+                .sql =
+                \\INSERT INTO orders (id, order_no, order_type, status, dining_table_id,
+                \\  customer_id, employee_id, subtotal_minor, tax_minor, discount_minor,
+                \\  total_minor, placed_at, notes, created_at, updated_at)
+                \\VALUES (500, 'A-500', 0, 0, NULL, NULL, 7, 24500, 0, 1000,
+                \\  23500, 1700000000000, '', 1700000000000, 1700000000000);
+                ,
+                .params = &.{},
+            },
+            .{
+                .sql =
+                \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
+                \\  unit_price_minor, tax_bps, notes, stock_taken, created_at)
+                \\VALUES (64000, 500, 1, 'Paneer Tikka', 1, 24500, 0, '', 0,
+                \\  1700000000000);
+                ,
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.orders_loaded),
+    });
+    harness.drain();
+    repos.loadOrders(&harness.model, harness.fx);
+    repos.loadOrderLines(&harness.model, harness.fx);
+    harness.drain();
+
+    try testing.expectEqual(@as(i64, 1), try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM order_line WHERE order_id = 500;",
+        &.{},
+    ));
+
+    repos.addOrderLine(
+        &harness.model,
+        harness.fx,
+        repos.key_add_line,
+        500,
+        1,
+        "Paneer Tikka",
+        24500,
+        1_700_000_000_123,
+    );
+    harness.drain();
+
+    try testing.expectEqual(@as(i64, 48000), try countRows(
+        &harness,
+        "SELECT total_minor AS n FROM orders WHERE id = 500;",
+        &.{},
+    ));
+    try testing.expectEqual(@as(i64, 1000), try countRows(
+        &harness,
+        "SELECT discount_minor AS n FROM orders WHERE id = 500;",
+        &.{},
+    ));
+}
+
 test "an unreadable cash tender is refused" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();
