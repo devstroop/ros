@@ -4316,6 +4316,52 @@ test "a waiter's table order and its plates reach the kitchen" {
     );
 }
 
+test "the kitchen hears a waiter's order from another device" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+
+    // The kitchen's first board is empty. It has still seen the board,
+    // so the next order is a new sale, not the shift's starting point.
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+    try testing.expect(a.model.board_primed);
+    try testing.expectEqual(@as(i64, 0), a.model.last_seen_order_no);
+
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    b.model.employee_id = 7;
+    b.model.tables = &.{
+        .{ .id = 1, .category_id = 1, .name = "T1", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 0, .pos_y = 0 },
+        .{ .id = 2, .category_id = 1, .name = "T2", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 1, .pos_y = 0 },
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    b.send(.{ .select_table = 1 });
+    b.drain();
+    repos.applyOp(&a.model, a.fx, try latestOp(&b, arena));
+    a.drain();
+
+    // The remote order has a negative row id on this device - the old
+    // "highest id" test saw no new sale - but its local order number is
+    // 1, so the kitchen knows to chime.
+    try testing.expect(a.model.orders.len == 1);
+    try testing.expect(a.model.orders[0].id < 0);
+    try testing.expectEqual(@as(i64, 1), a.model.last_seen_order_no);
+
+    b.send(.{ .select_table = 2 });
+    b.drain();
+    repos.applyOp(&a.model, a.fx, try latestOp(&b, arena));
+    a.drain();
+
+    try testing.expectEqual(@as(usize, 2), a.model.orders.len);
+    try testing.expectEqual(@as(i64, 2), a.model.last_seen_order_no);
+}
+
 test "a table that already has an order is joined, not duplicated" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();

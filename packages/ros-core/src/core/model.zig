@@ -352,6 +352,8 @@ pub const Model = struct {
         "theme_dark",
         "salt_state",
         "last_issued_order_id",
+        "last_seen_order_no",
+        "board_primed",
         "advance_order_id",
         "add_line_pending",
         "voiding_order_id",
@@ -658,9 +660,15 @@ pub const Model = struct {
     /// is "every station").
     stations_list: []const domain.KdsStation = &.{},
     station_filter_field: i64 = 0,
-    /// The last order the board has seen. A newer one is a new sale,
-    /// and the kitchen hears about it.
-    last_seen_order_id: i64 = 0,
+    /// The last order number the board has seen. The number is the
+    /// database's local sequence, which rises for every order whether
+    /// this device wrote it or a peer's op delivered it. A local row id
+    /// cannot do this job: a remote order has a negative id, so the
+    /// highest id never moves when a waiter's ticket arrives.
+    last_seen_order_no: i64 = 0,
+    /// True once the board has been read at least once. The first read
+    /// is the shift's starting point, not a new sale.
+    board_primed: bool = false,
 
     // --------------------------------------------------------- the waiter
 

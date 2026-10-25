@@ -75,17 +75,27 @@ fn findEmployee(model: *const Model, id: i64) ?domain.Employee {
 /// A new order on the board gets a sound. The kitchen hears the sale
 /// without looking at the screen - and the cashier hears it too, which
 /// is how a second cashier knows a table needs serving.
+///
+/// "New" is the local order number, not the row id. A remote order is
+/// stored under a negative id, so the highest id never moves when a
+/// waiter's ticket arrives from another device; the order number is a
+/// sequence the database assigns to every order, local or synced.
 fn announceNewOrder(model: *Model, fx: *Effects) void {
-    var newest: i64 = model.last_seen_order_id;
+    var newest: i64 = model.last_seen_order_no;
     for (model.orders) |order| {
-        if (order.id > newest) newest = order.id;
+        const number = std.fmt.parseInt(i64, order.order_no, 10) catch 0;
+        if (number > newest) newest = number;
     }
-    if (newest == model.last_seen_order_id) return;
-    const first_time = model.last_seen_order_id == 0;
-    model.last_seen_order_id = newest;
-    // The first board of the shift is not a new sale: the kitchen has
-    // not been watching yet.
-    if (first_time) return;
+    // The first board of the shift is where the kitchen starts
+    // watching, so its orders are not new sales. An empty first board
+    // still counts as primed: the first order after it is a sale.
+    if (!model.board_primed) {
+        model.board_primed = true;
+        model.last_seen_order_no = newest;
+        return;
+    }
+    if (newest <= model.last_seen_order_no) return;
+    model.last_seen_order_no = newest;
     fx.playAudio(.{
         .key = repos.key_chime,
         .path = "assets/chime.wav",
