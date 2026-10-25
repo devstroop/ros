@@ -126,6 +126,8 @@ pub const Msg = union(enum) {
 
     /// The payment mode the cashier picked.
     set_payment_mode: i64,
+    /// The cash the customer handed over changed.
+    cash_tendered_edit: canvas.TextInputEvent,
     /// Take the payment for the order that was just placed.
     take_payment,
     /// Back to the point of sale for the next order.

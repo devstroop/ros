@@ -417,31 +417,9 @@ fn saveEmployee(model: *Model, fx: *Effects) void {
 
 /// The price as typed, in minor units. A price is a decimal amount, and
 /// a decimal amount is never a float in this app.
-fn parsePrice(text: []const u8) ?i64 {
-    const trimmed = std.mem.trim(u8, text, " ");
-    if (trimmed.len == 0) return null;
-    var whole: i64 = 0;
-    var cents: i64 = 0;
-    var after_dot = false;
-    var digits: usize = 0;
-    for (trimmed) |char| {
-        if (char == '.') {
-            if (after_dot) return null;
-            after_dot = true;
-            continue;
-        }
-        if (!std.ascii.isDigit(char)) return null;
-        if (after_dot) {
-            if (digits == 0) cents += (char - '0') * 10;
-            if (digits == 1) cents += (char - '0');
-            digits += 1;
-        } else {
-            whole = whole * 10 + (char - '0');
-        }
-    }
-    if (digits == 1) cents *= 10;
-    return whole * 100 + cents;
-}
+/// The money parser lives with the model: the discount, the product
+/// price and the cash tender all read a typed amount the same way.
+const parsePrice = model_mod.parsePrice;
 
 /// Save the company. The name is the one field that must not be empty:
 /// it is on every receipt.
@@ -494,6 +472,23 @@ fn takePayment(model: *Model, fx: *Effects) void {
     if (mode == .credit) {
         model.payment_error = "On account is not available - take the payment now";
         return;
+    }
+    // Cash: what the customer handed over has to cover the bill. An
+    // empty field means the exact amount - the common case - and the
+    // change is what the confirmation screen shows. The payment row is
+    // still the bill, not the tender: the change never was revenue.
+    if (mode == .cash) {
+        const tendered_text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
+        if (tendered_text.len > 0) {
+            const tendered = model_mod.parsePrice(tendered_text) orelse {
+                model.payment_error = "The cash received is not an amount";
+                return;
+            };
+            if (tendered < order.total_minor) {
+                model.payment_error = "The cash received is less than the total";
+                return;
+            }
+        }
     }
     model.busy = true;
     model.payment_pending = true;
@@ -1448,6 +1443,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             model.last_order_at = order.placed_at;
             model.payment_error = "";
+            model.cash_tendered_buf.clear();
             go(model, .order_confirmation);
         },
 
@@ -1468,6 +1464,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             model.last_order_at = order.placed_at;
             model.payment_error = "";
+            model.cash_tendered_buf.clear();
             go(model, .order_confirmation);
         },
 
@@ -1597,6 +1594,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .set_payment_mode => |id| model.payment_mode_field = id,
 
+        .cash_tendered_edit => |event| model.cash_tendered_buf.apply(event),
+
         .take_payment => takePayment(model, fx),
 
         .back_to_pos => {
@@ -1608,6 +1607,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.last_order_total_minor = 0;
             model.last_order_items_count = 0;
             model.payment_error = "";
+            model.cash_tendered_buf.clear();
             go(model, .pos);
         },
 
@@ -2365,6 +2365,7 @@ fn resetSession(model: *Model, gate: Screen) void {
     model.last_order_at = 0;
     model.sale_buf.reset();
     model.payment_error = "";
+    model.cash_tendered_buf.clear();
     model.advance_order_id = 0;
 
     model.form_currency_code_buf.set("");
@@ -2628,6 +2629,7 @@ fn placeOrder(model: *Model, fx: *Effects) void {
     for (lines[0..count]) |line| model.last_order_items_count += line.qty;
     model.last_order_at = order.placed_at;
     model.payment_error = "";
+    model.cash_tendered_buf.clear();
 
     model.busy = true;
     model.sale_pending = true;

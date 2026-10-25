@@ -238,6 +238,26 @@
           <toggle-button selected="{mode.id == payment_mode}" on-toggle="set_payment_mode:{mode.id}">{mode.label}</toggle-button>
         </for>
       </row>
+      <if test="{payment_is_cash}">
+        <text-field
+          text="{cash_tendered}"
+          placeholder="Exact amount"
+          label="Cash received"
+          on-input="cash_tendered_edit"
+        />
+        <if test="{cash_change > 0}">
+          <row cross="center">
+            <text grow="1" foreground="text_muted">Change</text>
+            <text size="lg">{currency_symbol}{fixed(cash_change / currency_divisor, currency_decimal_count)}</text>
+          </row>
+        </if>
+        <if test="{cash_short}">
+          <text foreground="destructive">Not enough cash for this bill</text>
+        </if>
+        <if test="{cash_tender_invalid}">
+          <text foreground="destructive">The cash received is not an amount</text>
+        </if>
+      </if>
       <row gap="8">
         <button variant="ghost" on-press="back_to_pos">Another order</button>
         <button variant="primary" grow="1" disabled="{payment_pending}" on-press="take_payment">Take {currency_symbol}{fixed(last_order_total / currency_divisor, currency_decimal_count)}</button>

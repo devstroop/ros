@@ -2709,7 +2709,7 @@ test "voiding an order restores its stock and writes one audit row" {
     harness.send(Msg{ .place_order = {} });
 
     try testing.expectEqual(@as(usize, 1), harness.model.orders.len);
-    const order_id = harness.model.orders[0].id;
+    const order_id = harness.model.last_order_id;
     try testing.expectEqual(
         @as(i64, 8),
         try countRows(&harness, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
@@ -3056,6 +3056,162 @@ test "taking the payment closes the order and records the money" {
     repos.loadOrders(&harness.model, harness.fx);
     harness.drain();
     try testing.expectEqual(nav.Screen.orders, harness.model.screen());
+}
+
+test "cash payment records the bill and the change goes back" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    const order_id = harness.model.last_order_id;
+
+    // The customer hands over 300.00 for a 245.00 bill.
+    harness.send(.{ .set_payment_mode = @intFromEnum(domain.PaymentMode.cash) });
+    harness.send(Msg{ .cash_tendered_edit = .{ .insert_text = "300.00" } });
+    try testing.expect(harness.model.payment_is_cash());
+    try testing.expectEqualStrings("300.00", harness.model.cash_tendered());
+    try testing.expectEqual(@as(i64, 5500), harness.model.cash_change());
+    try testing.expect(!harness.model.cash_short());
+    try testing.expect(!harness.model.cash_tender_invalid());
+
+    harness.send(Msg{ .take_payment = {} });
+    try testing.expectEqualStrings("", harness.model.payment_error_text());
+
+    // The bill - not the tender - is the money the restaurant took.
+    try testing.expectEqual(
+        @as(i64, 24500),
+        try countRows(&harness, "SELECT amount_minor AS n FROM payment WHERE order_id = ?1;", &.{.{ .integer = order_id }}),
+    );
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.completed)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = order_id }}),
+    );
+}
+
+test "cash short of the bill is refused, and the exact amount is taken" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    const order_id = harness.model.last_order_id;
+
+    harness.send(.{ .set_payment_mode = @intFromEnum(domain.PaymentMode.cash) });
+    harness.send(Msg{ .cash_tendered_edit = .{ .insert_text = "200.00" } });
+    try testing.expect(harness.model.cash_short());
+    try testing.expectEqual(@as(i64, 0), harness.model.cash_change());
+
+    harness.send(Msg{ .take_payment = {} });
+    try testing.expectEqualStrings("The cash received is less than the total", harness.model.payment_error_text());
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM payment WHERE order_id = ?1;", &.{.{ .integer = order_id }}),
+    );
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.pending)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = order_id }}),
+    );
+
+    // The exact amount is enough, and no change is owed.
+    harness.model.cash_tendered_buf.clear();
+    harness.send(Msg{ .cash_tendered_edit = .{ .insert_text = "245.00" } });
+    harness.send(Msg{ .take_payment = {} });
+    try testing.expectEqualStrings("", harness.model.payment_error_text());
+    try testing.expectEqual(@as(i64, 0), harness.model.cash_change());
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.completed)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = order_id }}),
+    );
+}
+
+test "an unreadable cash tender is refused" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    const order_id = harness.model.last_order_id;
+
+    harness.send(.{ .set_payment_mode = @intFromEnum(domain.PaymentMode.cash) });
+    harness.send(Msg{ .cash_tendered_edit = .{ .insert_text = "ten" } });
+    try testing.expect(harness.model.cash_tender_invalid());
+
+    harness.send(Msg{ .take_payment = {} });
+    try testing.expectEqualStrings("The cash received is not an amount", harness.model.payment_error_text());
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM payment WHERE order_id = ?1;", &.{.{ .integer = order_id }}),
+    );
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.pending)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = order_id }}),
+    );
+}
+
+test "an empty cash tender is the exact amount" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    const order_id = harness.model.last_order_id;
+
+    harness.send(.{ .set_payment_mode = @intFromEnum(domain.PaymentMode.cash) });
+    try testing.expectEqualStrings("", harness.model.cash_tendered());
+    try testing.expectEqual(@as(i64, 0), harness.model.cash_change());
+    try testing.expect(!harness.model.cash_short());
+
+    harness.send(Msg{ .take_payment = {} });
+    try testing.expectEqualStrings("", harness.model.payment_error_text());
+    try testing.expectEqual(
+        @as(i64, 24500),
+        try countRows(&harness, "SELECT amount_minor AS n FROM payment WHERE order_id = ?1;", &.{.{ .integer = order_id }}),
+    );
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.completed)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = order_id }}),
+    );
+}
+
+test "a short cash tender does not block a card payment" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    const order_id = harness.model.last_order_id;
+
+    harness.send(Msg{ .cash_tendered_edit = .{ .insert_text = "1.00" } });
+    harness.send(.{ .set_payment_mode = @intFromEnum(domain.PaymentMode.card) });
+    try testing.expect(!harness.model.payment_is_cash());
+
+    harness.send(Msg{ .take_payment = {} });
+    try testing.expectEqualStrings("", harness.model.payment_error_text());
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.completed)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = order_id }}),
+    );
 }
 
 test "the waiter opens an order for a free table and adds to it" {
@@ -3693,7 +3849,7 @@ test "an order can be opened, and paid from the order list" {
     harness.drain();
 
     try testing.expectEqual(@as(usize, 1), harness.model.orders.len);
-    const order_id = harness.model.orders[0].id;
+    const order_id = harness.model.last_order_id;
 
     // The order opens, and the detail screen knows what is on it.
     harness.send(.{ .open_order = order_id });

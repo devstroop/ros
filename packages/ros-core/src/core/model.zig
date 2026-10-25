@@ -251,6 +251,38 @@ fn taxOn(price_minor: i64, rate_bps: i64, inclusive: bool) i64 {
     return @divTrunc(price_minor * rate_bps + 5000, 10000);
 }
 
+/// A money amount typed by a person, in minor units.
+///
+/// "24.50" is 2450, "24.5" is 2450 and "24" is 2400. The parser is the
+/// one place the text becomes money: the product price, the discount
+/// and the cash tender all use it, so they cannot disagree about what
+/// "10.5" means.
+pub fn parsePrice(text: []const u8) ?i64 {
+    const trimmed = std.mem.trim(u8, text, " ");
+    if (trimmed.len == 0) return null;
+    var whole: i64 = 0;
+    var cents: i64 = 0;
+    var after_dot = false;
+    var digits: usize = 0;
+    for (trimmed) |char| {
+        if (char == '.') {
+            if (after_dot) return null;
+            after_dot = true;
+            continue;
+        }
+        if (!std.ascii.isDigit(char)) return null;
+        if (after_dot) {
+            if (digits == 0) cents += (char - '0') * 10;
+            if (digits == 1) cents += (char - '0');
+            digits += 1;
+        } else {
+            whole = whole * 10 + (char - '0');
+        }
+    }
+    if (digits == 1) cents *= 10;
+    return whole * 100 + cents;
+}
+
 pub const Model = struct {
     /// Fields the view never binds directly. Keep this list honest:
     /// it is the boundary between "the model" and the interface.
@@ -670,6 +702,10 @@ pub const Model = struct {
     last_issued_order_id: i64 = 0,
     /// The payment mode the cashier picked.
     payment_mode_field: i64 = 0,
+    /// The cash the customer handed over, as typed. It is kept while
+    /// the confirmation is open so the change is visible before the
+    /// cashier takes the money.
+    cash_tendered_buf: canvas.TextBuffer(16) = .{},
     /// Why the payment failed, or empty.
     payment_error: []const u8 = "",
 
@@ -1826,6 +1862,49 @@ pub const Model = struct {
     /// The payment mode the cashier picked.
     pub fn payment_mode(model: *const Model) i64 {
         return model.payment_mode_field;
+    }
+
+    /// True when the cashier is taking cash. Only then does the
+    /// confirmation screen ask how much the customer handed over.
+    pub fn payment_is_cash(model: *const Model) bool {
+        return model.payment_mode_field == @intFromEnum(domain.PaymentMode.cash);
+    }
+
+    /// The cash the customer handed over, as typed.
+    pub fn cash_tendered(model: *const Model) []const u8 {
+        return model.cash_tendered_buf.text();
+    }
+
+    /// The money that goes back to the customer, in minor units.
+    ///
+    /// An empty or unreadable tender shows no change: the screen only
+    /// prints a figure it can stand behind. The payment itself refuses
+    /// a tender below the total rather than inventing one.
+    pub fn cash_change(model: *const Model) i64 {
+        const total = model.last_order_total_minor;
+        if (total <= 0) return 0;
+        const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
+        if (text.len == 0) return 0;
+        const tendered = parsePrice(text) orelse return 0;
+        if (tendered <= total) return 0;
+        return tendered - total;
+    }
+
+    /// True when the customer handed over less than the bill.
+    pub fn cash_short(model: *const Model) bool {
+        const total = model.last_order_total_minor;
+        if (total <= 0) return false;
+        const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
+        if (text.len == 0) return false;
+        const tendered = parsePrice(text) orelse return false;
+        return tendered < total;
+    }
+
+    /// True when the typed tender is not an amount at all.
+    pub fn cash_tender_invalid(model: *const Model) bool {
+        const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
+        if (text.len == 0) return false;
+        return parsePrice(text) == null;
     }
 
     /// Why the last payment failed, or empty.

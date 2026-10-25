@@ -958,6 +958,32 @@ test "the order confirmation screen renders after a sale" {
     _ = try expectByText(tree.root, .button, "Take $245.00");
 }
 
+test "the order confirmation shows the cash change" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = main.initialModel();
+    model.role_chosen = true;
+    model.signed_in = true;
+    model.screen_index = 12; // the order confirmation
+    model.last_order_no_field = "1700000000";
+    model.last_order_type_field = "Dine in";
+    model.last_order_total_minor = 24500;
+    model.last_order_items_count = 2;
+    model.payment_mode_field = @intFromEnum(domain.PaymentMode.cash);
+    model.cash_tendered_buf.set("300.00");
+
+    const tree = try buildTree(arena, &model);
+    _ = try expectByText(tree.root, .text, "Change");
+    _ = try expectByText(tree.root, .text, "$55.00");
+
+    // A card payment is not asked for cash, and keeps no change.
+    model.payment_mode_field = @intFromEnum(domain.PaymentMode.card);
+    const card_tree = try buildTree(arena, &model);
+    try testing.expect(countByText(card_tree.root, .text, "Change") == 0);
+}
+
 test "the setup screen renders on a fresh installation" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
