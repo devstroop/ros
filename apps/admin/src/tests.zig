@@ -653,6 +653,85 @@ test "a currency's decimals are its own" {
     try testing.expectEqual(@as(i64, 1000), model.currency_divisor());
 }
 
+test "money is read in the company's decimals" {
+    // Two decimals: the ordinary case.
+    try testing.expectEqual(@as(?i64, 2450), core.parseMoney("24.50", 2));
+    try testing.expectEqual(@as(?i64, 2450), core.parseMoney("24.5", 2));
+    try testing.expectEqual(@as(?i64, 2400), core.parseMoney("24", 2));
+    try testing.expectEqual(@as(?i64, 2450), core.parseMoney("24.500", 2));
+
+    // A yen has no minor unit, so "1000" is one thousand yen, not a
+    // hundred thousand. Trailing zeroes do not add precision.
+    try testing.expectEqual(@as(?i64, 1000), core.parseMoney("1000", 0));
+    try testing.expectEqual(@as(?i64, 1000), core.parseMoney("1000.00", 0));
+    try testing.expectEqual(@as(?i64, null), core.parseMoney("1000.5", 0));
+
+    // A dinar has three.
+    try testing.expectEqual(@as(?i64, 1234), core.parseMoney("1.234", 3));
+    try testing.expectEqual(@as(?i64, 1200), core.parseMoney("1.2", 3));
+    try testing.expectEqual(@as(?i64, null), core.parseMoney("1.2345", 3));
+
+    // A digit the currency cannot represent is refused, not rounded:
+    // silently dropping it would lose the customer's money.
+    try testing.expectEqual(@as(?i64, null), core.parseMoney("24.501", 2));
+    try testing.expectEqual(@as(?i64, null), core.parseMoney("", 2));
+    try testing.expectEqual(@as(?i64, null), core.parseMoney("1.2.3", 2));
+    try testing.expectEqual(@as(?i64, null), core.parseMoney("abc", 2));
+}
+
+test "a percentage is read in basis points" {
+    // Five percent is five hundred basis points. The percent and the
+    // tax rate share the parser, so they cannot disagree.
+    try testing.expectEqual(@as(?i64, 500), core.parseBps("5"));
+    try testing.expectEqual(@as(?i64, 1275), core.parseBps("12.75"));
+    try testing.expectEqual(@as(?i64, 10000), core.parseBps("100"));
+    try testing.expectEqual(@as(?i64, null), core.parseBps("five"));
+}
+
+test "a price form shows the currency's decimals" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+    var model = main.initialModel();
+    var products = [_]domain.Product{
+        .{ .id = 1, .category_id = 1, .name = "Ramen", .food_label = "Veg", .price_minor = 1000, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+        .{ .id = 2, .category_id = 1, .name = "Kebab", .food_label = "Veg", .price_minor = 1234, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    model.products = &products;
+
+    // A yen price has no decimal point to edit.
+    model.currency_decimals = 0;
+    main.update(&model, .{ .edit_product = 1 }, &fx);
+    try testing.expectEqualStrings("1000", model.form_product_price_buf.text());
+
+    // A dinar price keeps all three.
+    model.currency_decimals = 3;
+    main.update(&model, .{ .edit_product = 2 }, &fx);
+    try testing.expectEqualStrings("1.234", model.form_product_price_buf.text());
+
+    // The ordinary two-decimal price still comes back the way it went
+    // in, including the trailing zero.
+    model.currency_decimals = 2;
+    products[0].price_minor = 2450;
+    main.update(&model, .{ .edit_product = 1 }, &fx);
+    try testing.expectEqualStrings("24.50", model.form_product_price_buf.text());
+}
+
+test "cash change is read in the company's decimals" {
+    var model = main.initialModel();
+    model.last_order_total_minor = 1000;
+
+    // A thousand yen is the bill; fifteen hundred leaves five hundred.
+    model.currency_decimals = 0;
+    model.cash_tendered_buf.set("1500");
+    try testing.expectEqual(@as(i64, 500), model.cash_change());
+    try testing.expect(!model.cash_short());
+
+    // A tender with more precision than the currency has is not an
+    // amount the drawer can take.
+    model.cash_tendered_buf.set("1500.5");
+    try testing.expect(model.cash_tender_invalid());
+}
+
 test "a failed salt write does not make the salt look confirmed" {
     var fx = try fakeFx();
     defer fx.deinit();

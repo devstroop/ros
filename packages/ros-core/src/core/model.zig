@@ -251,17 +251,68 @@ fn taxOn(price_minor: i64, rate_bps: i64, inclusive: bool) i64 {
     return @divTrunc(price_minor * rate_bps + 5000, 10000);
 }
 
-/// A money amount typed by a person, in minor units.
+/// A money amount typed by a person, in minor units, for a currency
+/// with `decimals` decimal places.
 ///
-/// "24.50" is 2450, "24.5" is 2450 and "24" is 2400. The parser is the
-/// one place the text becomes money: the product price, the discount
-/// and the cash tender all use it, so they cannot disagree about what
-/// "10.5" means.
-pub fn parsePrice(text: []const u8) ?i64 {
+/// For a two-decimal currency, "24.50" is 2450, "24.5" is 2450 and
+/// "24" is 2400. The decimals come from the company: a yen has none,
+/// so "1000" is 1000, and a dinar has three, so "1.234" is 1234.
+///
+/// A digit beyond the currency's precision is refused unless it is a
+/// zero, because 24.501 in a two-decimal currency has no exact
+/// representation and quietly dropping a digit would lose money. The
+/// parser is the one place the text becomes money: the product price,
+/// the discount amount and the cash tender all use it, so they cannot
+/// disagree about what "10.5" means.
+pub fn parseMoney(text: []const u8, decimals: i64) ?i64 {
+    if (decimals < 0 or decimals > 9) return null;
+    const trimmed = std.mem.trim(u8, text, " ");
+    if (trimmed.len == 0) return null;
+
+    var whole: i64 = 0;
+    var frac: i64 = 0;
+    var frac_digits: i64 = 0;
+    var after_dot = false;
+    var digits: usize = 0;
+    for (trimmed) |char| {
+        if (char == '.') {
+            if (after_dot) return null;
+            after_dot = true;
+            continue;
+        }
+        if (!std.ascii.isDigit(char)) return null;
+        digits += 1;
+        if (after_dot) {
+            if (frac_digits < decimals) {
+                frac = frac * 10 + (char - '0');
+                frac_digits += 1;
+            } else if (char != '0') {
+                return null;
+            }
+        } else {
+            const digit: i64 = char - '0';
+            if (whole > @divTrunc(std.math.maxInt(i64) - digit, 10)) return null;
+            whole = whole * 10 + digit;
+        }
+    }
+    if (digits == 0) return null;
+
+    const divisor = tenTo(decimals);
+    while (frac_digits < decimals) : (frac_digits += 1) frac *= 10;
+    if (whole > @divTrunc(std.math.maxInt(i64) - frac, divisor)) return null;
+    return whole * divisor + frac;
+}
+
+/// A percentage typed by a person, in basis points.
+///
+/// "5" is 500 and "12.75" is 1275. Tax rates and discount percentages
+/// share this parser: both are percentages of a bill, and both are
+/// stored in hundredths of a percent.
+pub fn parseBps(text: []const u8) ?i64 {
     const trimmed = std.mem.trim(u8, text, " ");
     if (trimmed.len == 0) return null;
     var whole: i64 = 0;
-    var cents: i64 = 0;
+    var frac: i64 = 0;
     var after_dot = false;
     var digits: usize = 0;
     for (trimmed) |char| {
@@ -272,15 +323,18 @@ pub fn parsePrice(text: []const u8) ?i64 {
         }
         if (!std.ascii.isDigit(char)) return null;
         if (after_dot) {
-            if (digits == 0) cents += (char - '0') * 10;
-            if (digits == 1) cents += (char - '0');
+            if (digits == 0) frac += (char - '0') * 10;
+            if (digits == 1) frac += (char - '0');
             digits += 1;
         } else {
-            whole = whole * 10 + (char - '0');
+            const digit: i64 = char - '0';
+            if (whole > @divTrunc(std.math.maxInt(i64) - digit, 10)) return null;
+            whole = whole * 10 + digit;
         }
     }
-    if (digits == 1) cents *= 10;
-    return whole * 100 + cents;
+    if (digits == 1) frac *= 10;
+    if (whole > @divTrunc(std.math.maxInt(i64) - frac, 100)) return null;
+    return whole * 100 + frac;
 }
 
 pub const Model = struct {
@@ -1885,7 +1939,7 @@ pub const Model = struct {
         if (total <= 0) return 0;
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return 0;
-        const tendered = parsePrice(text) orelse return 0;
+        const tendered = parseMoney(text, model.currency_decimals) orelse return 0;
         if (tendered <= total) return 0;
         return tendered - total;
     }
@@ -1896,7 +1950,7 @@ pub const Model = struct {
         if (total <= 0) return false;
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return false;
-        const tendered = parsePrice(text) orelse return false;
+        const tendered = parseMoney(text, model.currency_decimals) orelse return false;
         return tendered < total;
     }
 
@@ -1904,7 +1958,7 @@ pub const Model = struct {
     pub fn cash_tender_invalid(model: *const Model) bool {
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return false;
-        return parsePrice(text) == null;
+        return parseMoney(text, model.currency_decimals) == null;
     }
 
     /// Why the last payment failed, or empty.

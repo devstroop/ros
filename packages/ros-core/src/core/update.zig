@@ -198,7 +198,8 @@ fn openProductForm(model: *Model, id: i64) void {
         for (model.products) |product| {
             if (product.id != id) continue;
             model.form_product_name_buf.set(product.name);
-            model.form_product_price_buf.set(priceAsTyped(product.price_minor));
+            var price_buffer: [24]u8 = undefined;
+            model.form_product_price_buf.set(priceAsTyped(&price_buffer, product.price_minor, model.currency_decimals));
             model.form_product_category_id = product.category_id;
             model.form_product_food_id = @intFromEnum(product.food_type);
             break;
@@ -260,8 +261,9 @@ fn openDiscountForm(model: *Model, id: i64) void {
         for (model.discounts_list) |discount| {
             if (discount.id != id) continue;
             model.form_discount_name_buf.set(discount.name);
-            model.form_discount_percent_buf.set(rateAsTyped(discount.percent_bps));
-            model.form_discount_amount_buf.set(priceAsTyped(discount.amount_minor));
+            var text_buffer: [24]u8 = undefined;
+            model.form_discount_percent_buf.set(rateAsTyped(&text_buffer, discount.percent_bps));
+            model.form_discount_amount_buf.set(priceAsTyped(&text_buffer, discount.amount_minor, model.currency_decimals));
             break;
         }
     }
@@ -278,7 +280,8 @@ fn openTaxSlabForm(model: *Model, id: i64) void {
         for (model.tax_slabs_list) |slab| {
             if (slab.id != id) continue;
             model.form_tax_slab_name_buf.set(slab.name);
-            model.form_tax_slab_rate_buf.set(rateAsTyped(slab.rate_bps));
+            var rate_buffer: [24]u8 = undefined;
+            model.form_tax_slab_rate_buf.set(rateAsTyped(&rate_buffer, slab.rate_bps));
             model.form_tax_slab_inclusive = slab.inclusive;
             break;
         }
@@ -287,25 +290,56 @@ fn openTaxSlabForm(model: *Model, id: i64) void {
 }
 
 /// A rate in basis points, as the form shows it: the percentage, with
-/// no decimals the owner did not type.
-fn rateAsTyped(rate_bps: i64) []const u8 {
-    var buffer: [24]u8 = undefined;
+/// no decimals the owner did not type. The caller owns the buffer: a
+/// slice of a local would point at this function's dead frame.
+fn rateAsTyped(buffer: []u8, rate_bps: i64) []const u8 {
     if (@mod(rate_bps, 100) == 0) {
-        const written = std.fmt.bufPrint(&buffer, "{d}", .{@divTrunc(rate_bps, 100)}) catch return "";
+        const written = std.fmt.bufPrint(buffer, "{d}", .{@divTrunc(rate_bps, 100)}) catch return "";
         return written;
     }
-    const written = std.fmt.bufPrint(&buffer, "{d}.{d:0>2}", .{ @divTrunc(rate_bps, 100), @mod(rate_bps, 100) }) catch return "";
+    const written = std.fmt.bufPrint(buffer, "{d}.{d:0>2}", .{ @divTrunc(rate_bps, 100), @mod(rate_bps, 100) }) catch return "";
     return written;
 }
 
-/// A price in minor units, as the form shows it: the amount with two
-/// decimals and no currency symbol.
-fn priceAsTyped(minor: i64) []const u8 {
-    var buffer: [24]u8 = undefined;
-    const whole = @divTrunc(minor, 100);
-    const cents = @mod(minor, 100);
-    const written = std.fmt.bufPrint(&buffer, "{d}.{d:0>2}", .{ whole, cents }) catch return "";
-    return written;
+/// A price in minor units, as the form shows it: the amount in the
+/// company's currency, with its own number of decimals and no symbol.
+/// The caller owns the buffer for the same reason as `rateAsTyped`.
+fn priceAsTyped(buffer: []u8, minor: i64, decimals: i64) []const u8 {
+    if (decimals <= 0) {
+        return std.fmt.bufPrint(buffer, "{d}", .{minor}) catch return "";
+    }
+    if (decimals > 9) return "";
+    const divisor = tenTo(decimals);
+    const whole = @divTrunc(minor, divisor);
+    const frac = @mod(minor, divisor);
+    const whole_text = std.fmt.bufPrint(buffer, "{d}", .{whole}) catch return "";
+    var written = whole_text.len;
+    if (written + 1 + @as(usize, @intCast(decimals)) > buffer.len) return "";
+    buffer[written] = '.';
+    written += 1;
+    const padded = writePadded(buffer[written..], frac, @intCast(decimals)) orelse return "";
+    return buffer[0 .. written + padded];
+}
+
+/// Write `value` right-aligned in a field of `width` zeroes. The form
+/// needs it because a currency's decimals are not a compile-time two.
+fn writePadded(buffer: []u8, value: i64, width: usize) ?usize {
+    var digits_buffer: [24]u8 = undefined;
+    const digits = std.fmt.bufPrint(&digits_buffer, "{d}", .{value}) catch return null;
+    if (digits.len > width or width > buffer.len) return null;
+    const padding = width - digits.len;
+    @memset(buffer[0..padding], '0');
+    @memcpy(buffer[padding..][0..digits.len], digits);
+    return width;
+}
+
+/// Ten to the power of a small exponent: the divisor a currency's
+/// decimals mean.
+fn tenTo(exponent: i64) i64 {
+    var value: i64 = 1;
+    var index: i64 = 0;
+    while (index < exponent) : (index += 1) value *= 10;
+    return value;
 }
 
 /// Save the discount the form is editing.
@@ -322,14 +356,14 @@ fn saveDiscount(model: *Model, fx: *Effects) void {
     const percent = if (model.form_discount_percent_buf.text().len == 0)
         0
     else
-        parsePrice(model.form_discount_percent_buf.text()) orelse {
+        parseBps(model.form_discount_percent_buf.text()) orelse {
             model.error_text = "The percent must be a number - ten for ten percent";
             return;
         };
     const amount = if (model.form_discount_amount_buf.text().len == 0)
         0
     else
-        parsePrice(model.form_discount_amount_buf.text()) orelse {
+        parseMoney(model.form_discount_amount_buf.text(), model.currency_decimals) orelse {
             model.error_text = "The amount must be a number";
             return;
         };
@@ -358,7 +392,7 @@ fn saveTaxSlab(model: *Model, fx: *Effects) void {
         model.error_text = "The tax slab needs a name";
         return;
     }
-    const rate = parsePrice(model.form_tax_slab_rate_buf.text()) orelse {
+    const rate = parseBps(model.form_tax_slab_rate_buf.text()) orelse {
         model.error_text = "The rate must be a number - five for five percent";
         return;
     };
@@ -379,7 +413,7 @@ fn saveProduct(model: *Model, fx: *Effects) void {
         model.error_text = "The product needs a name";
         return;
     }
-    const price = parsePrice(model.form_product_price_buf.text()) orelse {
+    const price = parseMoney(model.form_product_price_buf.text(), model.currency_decimals) orelse {
         model.error_text = "The price is not a number";
         return;
     };
@@ -417,9 +451,11 @@ fn saveEmployee(model: *Model, fx: *Effects) void {
 
 /// The price as typed, in minor units. A price is a decimal amount, and
 /// a decimal amount is never a float in this app.
-/// The money parser lives with the model: the discount, the product
-/// price and the cash tender all read a typed amount the same way.
-const parsePrice = model_mod.parsePrice;
+/// The money and rate parsers live with the model: the discount, the
+/// product price and the cash tender all read a typed amount the same
+/// way.
+const parseMoney = model_mod.parseMoney;
+const parseBps = model_mod.parseBps;
 
 /// Save the company. The name is the one field that must not be empty:
 /// it is on every receipt.
@@ -480,7 +516,7 @@ fn takePayment(model: *Model, fx: *Effects) void {
     if (mode == .cash) {
         const tendered_text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (tendered_text.len > 0) {
-            const tendered = model_mod.parsePrice(tendered_text) orelse {
+            const tendered = parseMoney(tendered_text, model.currency_decimals) orelse {
                 model.payment_error = "The cash received is not an amount";
                 return;
             };
