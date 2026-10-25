@@ -4205,16 +4205,27 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
             \\    SELECT COALESCE(SUM(unit_price_minor * qty), 0)
             \\    FROM order_line WHERE order_line.order_id = orders.id
             \\  ),
-            \\  tax_minor = (
-            \\    SELECT COALESCE(SUM((unit_price_minor * qty * tax_bps + 5000) / 10000), 0)
-            \\    FROM order_line WHERE order_line.order_id = orders.id
-            \\  ),
+            \\  tax_minor = CASE WHEN COALESCE(
+            \\      (SELECT tax_inclusive FROM company LIMIT 1), 0) = 1
+            \\    THEN (
+            \\      SELECT COALESCE(SUM(
+            \\        (unit_price_minor * qty * tax_bps + (10000 + tax_bps) / 2)
+            \\          / (10000 + tax_bps)), 0)
+            \\      FROM order_line WHERE order_line.order_id = orders.id
+            \\    )
+            \\    ELSE (
+            \\      SELECT COALESCE(SUM(
+            \\        (unit_price_minor * qty * tax_bps + 5000) / 10000), 0)
+            \\      FROM order_line WHERE order_line.order_id = orders.id
+            \\    )
+            \\  END,
             \\  total_minor =
             \\    (SELECT COALESCE(SUM(unit_price_minor * qty), 0)
             \\     FROM order_line WHERE order_line.order_id = orders.id)
             \\    + CASE WHEN COALESCE((SELECT tax_inclusive FROM company LIMIT 1), 0)
             \\        THEN 0
-            \\        ELSE (SELECT COALESCE(SUM((unit_price_minor * qty * tax_bps + 5000) / 10000), 0)
+            \\        ELSE (SELECT COALESCE(SUM(
+            \\               (unit_price_minor * qty * tax_bps + 5000) / 10000), 0)
             \\              FROM order_line WHERE order_line.order_id = orders.id)
             \\      END
             \\    - discount_minor,

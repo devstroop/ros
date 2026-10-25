@@ -4066,6 +4066,113 @@ test "two waiters can add a plate to one table without losing a line" {
     }
 }
 
+test "an inclusive bill keeps its tax when two waiters add plates" {
+    // Both devices trade in inclusive prices: the menu price already
+    // carries the tax, so the tax is a memo and the total is the sum of
+    // the plates. A synced update must not recompute it as if the tax
+    // were added on top.
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    a.fx.dbExec(.{
+        .key = 955,
+        .statements = &.{
+            .{
+                .sql = "UPDATE company SET tax_inclusive = 1 WHERE id = 1;",
+                .params = &.{},
+            },
+            .{
+                .sql = "INSERT INTO tax_slab (id, name, rate_bps, inclusive, active) VALUES (2, 'GST 5%', 500, 0, 1);",
+                .params = &.{},
+            },
+            .{
+                .sql = "UPDATE product SET tax_slab_id = 2 WHERE id = 1;",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    a.drain();
+    repos.loadCompany(&a.model, a.fx);
+    repos.loadProducts(&a.model, a.fx);
+    repos.loadTaxSlabs(&a.model, a.fx);
+    a.drain();
+
+    a.model.employee_id = 7;
+    a.model.tables = &.{
+        .{ .id = 1, .category_id = 1, .name = "T1", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 0, .pos_y = 0 },
+    };
+    a.send(.{ .select_table = 1 });
+    a.send(.{ .add_to_order = 1 });
+    a.drain();
+
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    b.fx.dbExec(.{
+        .key = 955,
+        .statements = &.{
+            .{
+                .sql = "UPDATE company SET tax_inclusive = 1 WHERE id = 1;",
+                .params = &.{},
+            },
+            .{
+                .sql = "INSERT INTO tax_slab (id, name, rate_bps, inclusive, active) VALUES (2, 'GST 5%', 500, 0, 1);",
+                .params = &.{},
+            },
+            .{
+                .sql = "UPDATE product SET tax_slab_id = 2 WHERE id = 1;",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    b.drain();
+    repos.loadCompany(&b.model, b.fx);
+    repos.loadProducts(&b.model, b.fx);
+    repos.loadTaxSlabs(&b.model, b.fx);
+    b.drain();
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const open_op = try latestOp(&a, arena_state.allocator());
+    repos.applyOp(&b.model, b.fx, open_op);
+    b.drain();
+    repos.loadOrders(&b.model, b.fx);
+    repos.loadOrderLines(&b.model, b.fx);
+    b.drain();
+
+    b.model.employee_id = 7;
+    b.model.active_order_id = b.model.orders[0].id;
+    b.model.active_table_id = 1;
+
+    // A and B each add a plate before either sees the other's update.
+    a.send(.{ .add_to_order = 1 });
+    b.send(.{ .add_to_order = 1 });
+    const a_update = try latestOp(&a, arena_state.allocator());
+    const b_update = try latestOp(&b, arena_state.allocator());
+    repos.applyOp(&a.model, a.fx, b_update);
+    a.drain();
+    repos.applyOp(&b.model, b.fx, a_update);
+    b.drain();
+
+    repos.loadOrders(&a.model, a.fx);
+    repos.loadOrders(&b.model, b.fx);
+    repos.loadOrderLines(&a.model, a.fx);
+    repos.loadOrderLines(&b.model, b.fx);
+    a.drain();
+    b.drain();
+
+    // 245.00 at five percent inclusive carries 11.67 of tax, not the
+    // 12.25 an exclusive calculation would add on top.
+    const per_line_tax: i64 = 1167;
+    for ([_]*Harness{ &a, &b }) |harness| {
+        try testing.expectEqual(@as(usize, 3), harness.model.order_lines.len);
+        try testing.expectEqual(@as(i64, 3 * 24500), harness.model.orders[0].total_minor);
+        try testing.expectEqual(@as(i64, 3 * per_line_tax), harness.model.orders[0].tax_minor);
+    }
+}
+
 test "a waiter's table order and its plates reach the kitchen" {
     var a = try seeded(testing.allocator);
     defer a.deinit();
