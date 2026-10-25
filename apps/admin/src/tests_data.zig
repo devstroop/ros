@@ -3278,6 +3278,47 @@ test "paying a table order closes it, frees the table and keeps the stock sold" 
     );
 }
 
+test "paying one of two open orders on a table leaves it occupied" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // Two waiters opened tickets on the same table before either
+    // reached the other. The table is in use by both.
+    harness.fx.dbExec(.{
+        .key = 957,
+        .statements = &.{
+            .{
+                .sql = "UPDATE dining_table SET status = 1 WHERE id = 1;",
+                .params = &.{},
+            },
+            .{
+                .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (1, 'A-1', 0, 3, 1, NULL, 7, 1000, 0, 0, 1000, 1700000000000, '', 1700000000000, 1700000000000), (2, 'A-2', 0, 0, 1, NULL, 7, 500, 0, 0, 500, 1700000001000, '', 1700000001000, 1700000001000);",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+
+    // The first ticket is paid. The second is still being cooked, so
+    // the table is not free.
+    harness.send(.{ .pay_order = 1 });
+    harness.send(.{ .set_payment_mode = 0 });
+    harness.send(Msg{ .take_payment = {} });
+    try testing.expectEqualStrings("", harness.model.payment_error_text());
+
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.completed)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&harness, "SELECT status AS n FROM dining_table WHERE id = 1;", &.{}),
+    );
+}
+
 test "a waiter's table order and its plates reach the kitchen" {
     var a = try seeded(testing.allocator);
     defer a.deinit();

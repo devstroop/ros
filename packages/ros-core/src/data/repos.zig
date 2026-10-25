@@ -2141,12 +2141,23 @@ pub fn takePayment(
     statements[3] = .{
         // The guest has paid and gone, so the table is free again - in
         // the same transaction as the payment, so a table is never free
-        // while the money is still owed.
+        // while the money is still owed. Only the order that was just
+        // closed may free it: another open ticket on the same table
+        // means the room is still in use.
         .sql =
         \\UPDATE dining_table SET status = 0
-        \\WHERE id = (SELECT dining_table_id FROM orders WHERE id = ?1);
+        \\WHERE id = (
+        \\  SELECT dining_table_id FROM orders WHERE id = ?1 AND status = ?2
+        \\)
+        \\  AND NOT EXISTS (
+        \\    SELECT 1 FROM orders
+        \\    WHERE dining_table_id = dining_table.id AND status < ?2
+        \\  );
         ,
-        .params = &.{.{ .integer = order_id }},
+        .params = &.{
+            .{ .integer = order_id },
+            .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
+        },
     };
     var count: usize = 4;
 
@@ -4070,18 +4081,27 @@ fn applyPayment(fx: *Effects, op: record.Op, snapshot: record.PaymentSnapshot, p
         .params = &order_params,
     };
     statements[3] = .{
+        // The table is free only when the paid order really closed and
+        // no other ticket has taken the room since.
         .sql =
         \\UPDATE dining_table SET status = 0
-        \\WHERE id = (SELECT dining_table_id FROM orders WHERE id = (
-        \\  CASE WHEN ?2 = ''
-        \\    THEN (SELECT id FROM orders WHERE id = ?1)
-        \\    ELSE (SELECT id FROM orders WHERE origin_device = ?2 AND origin_id = ?1)
-        \\  END
-        \\  ));
+        \\WHERE id = (
+        \\  SELECT dining_table_id FROM orders WHERE id = (
+        \\    CASE WHEN ?2 = ''
+        \\      THEN (SELECT id FROM orders WHERE id = ?1)
+        \\      ELSE (SELECT id FROM orders WHERE origin_device = ?2 AND origin_id = ?1)
+        \\    END
+        \\  ) AND status = ?3
+        \\)
+        \\  AND NOT EXISTS (
+        \\    SELECT 1 FROM orders
+        \\    WHERE dining_table_id = dining_table.id AND status < ?3
+        \\  );
         ,
         .params = &.{
             .{ .integer = snapshot.order_id },
             .{ .text = snapshot.origin_device },
+            .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
         },
     };
     var count: usize = 4;
