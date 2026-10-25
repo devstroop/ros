@@ -1542,11 +1542,14 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.error_text = "Could not open the table";
                 return;
             }
-            // The order exists: the waiter can add to it.
+            // The order exists: the waiter can add to it. Read the
+            // board back now, so a second tap on the same table joins
+            // this order instead of opening another.
             model.active_order_id = model.pending_order_id;
             model.pending_order_id = 0;
             go(model, .waiter_menu);
             repos.loadOrderLines(model, fx);
+            repos.loadOrders(model, fx);
         },
 
         .add_to_order => |product_id| addToOrder(model, fx, product_id),
