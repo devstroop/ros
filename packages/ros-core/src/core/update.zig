@@ -1469,18 +1469,27 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .set_category_all => model.selected_category = 0,
 
-        .add_to_cart => |product_id| addToCart(model, product_id),
+        .add_to_cart => |product_id| {
+            if (canEditCart(model)) addToCart(model, product_id);
+        },
 
-        .remove_from_cart => |product_id| removeFromCart(model, product_id),
+        .remove_from_cart => |product_id| {
+            if (canEditCart(model)) removeFromCart(model, product_id);
+        },
 
         .set_order_type => |index| {
-            model.cart_order_type = std.enums.fromInt(domain.OrderType, index) orelse return;
+            const next = std.enums.fromInt(domain.OrderType, index) orelse return;
+            if (!canEditCart(model)) return;
+            if (model.cart_order_type != next) model.cart_attempt_id = 0;
+            model.cart_order_type = next;
         },
 
         .apply_discount => |discount_id| {
+            if (!canEditCart(model)) return;
             for (model.discounts_list) |discount| {
                 if (discount.id != discount_id) continue;
                 if (!discount.active) break;
+                if (model.cart_discount_id != discount_id) model.cart_attempt_id = 0;
                 model.cart_discount_id = discount_id;
                 model.error_text = "";
                 return;
@@ -1489,12 +1498,16 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
 
         .clear_discount => {
+            if (!canEditCart(model)) return;
+            if (model.cart_discount_id != 0) model.cart_attempt_id = 0;
             model.cart_discount_id = 0;
         },
 
         .clear_cart => {
+            if (!canEditCart(model)) return;
             model.cart_len = 0;
             model.cart_buf.reset();
+            model.cart_attempt_id = 0;
         },
 
         .place_order => placeOrder(model, fx),
@@ -2387,6 +2400,9 @@ fn addToCart(model: *Model, product_id: i64) void {
     for (model.cart[0..model.cart_len], 0..) |line, index| {
         if (line.product_id == product_id) {
             model.cart[index].qty += 1;
+            // The ticket changed, so a retry is no longer the same
+            // sale. A fresh attempt gets a fresh request key.
+            model.cart_attempt_id = 0;
             return;
         }
     }
@@ -2400,6 +2416,7 @@ fn addToCart(model: *Model, product_id: i64) void {
         .qty = 1,
     };
     model.cart_len += 1;
+    model.cart_attempt_id = 0;
 }
 
 fn removeFromCart(model: *Model, product_id: i64) void {
@@ -2408,6 +2425,7 @@ fn removeFromCart(model: *Model, product_id: i64) void {
         if (model.cart[index].product_id != product_id) continue;
         if (model.cart[index].qty > 1) {
             model.cart[index].qty -= 1;
+            model.cart_attempt_id = 0;
             return;
         }
         // Drop the line and shift the rest down.
@@ -2416,6 +2434,7 @@ fn removeFromCart(model: *Model, product_id: i64) void {
             model.cart[next - 1] = model.cart[next];
         }
         model.cart_len -= 1;
+        model.cart_attempt_id = 0;
         return;
     }
 }
@@ -2439,6 +2458,18 @@ fn findOrder(model: *const Model, order_id: i64) ?domain.Order {
         if (order.id == order_id) return order;
     }
     return null;
+}
+
+/// Whether the cart may change right now. While a sale is being
+/// written the database already has its copy of the ticket; an edit
+/// would either be lost when the sale lands or be missing from the
+/// order that was saved. The edit waits for the answer.
+fn canEditCart(model: *Model) bool {
+    if (model.sale_pending) {
+        model.error_text = "The sale is still being saved";
+        return false;
+    }
+    return true;
 }
 
 /// Whether the confirmation screen may open for this order. A closed

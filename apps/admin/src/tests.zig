@@ -509,6 +509,12 @@ test "a second tap while the sale is in flight does not place a second order" {
     main.update(&model, .{ .place_order = {} }, &fx);
     try testing.expect(model.error_text.len > 0);
     try testing.expectEqual(@as(usize, 1), model.cart_count());
+
+    // Nor can the cart change under the write: an added dish would be
+    // lost when the saved sale clears the cart.
+    main.update(&model, .{ .add_to_cart = 1 }, &fx);
+    main.update(&model, .clear_cart, &fx);
+    try testing.expectEqual(@as(usize, 1), model.cart_count());
 }
 
 test "money stays integer: two hundred and fifty cents is never a float" {

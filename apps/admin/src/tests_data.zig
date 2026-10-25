@@ -1062,6 +1062,57 @@ test "a failed sale does not consume an order number" {
     try testing.expectEqualStrings("000001", harness.model.orders[0].order_no);
 }
 
+test "a cart edited after an attempt is a new sale, not a retry" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+        .{ .id = 2, .category_id = 2, .name = "Masala Chai", .food_label = "Veg", .price_minor = 4000, .product_type = .beverage, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+
+    // The first sale lands.
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqual(@as(usize, 1), harness.model.orders.len);
+    const first_id = harness.model.orders[0].id;
+
+    // The next cart still carries the first attempt's identity, which
+    // is what a lost answer leaves behind.
+    harness.send(.{ .add_to_cart = 1 });
+    harness.model.cart_attempt_id = first_id;
+
+    // A second dish changes the ticket. It is not the same sale, so
+    // the attempt (and its request key) starts again.
+    harness.send(.{ .add_to_cart = 2 });
+    try testing.expectEqual(@as(i64, 0), harness.model.cart_attempt_id);
+
+    harness.send(Msg{ .place_order = {} });
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqual(@as(usize, 2), harness.model.orders.len);
+
+    // The edited ticket was written as its own order, with both lines.
+    var second_id: i64 = 0;
+    for (harness.model.orders) |order| {
+        if (order.id == first_id) continue;
+        second_id = order.id;
+        try testing.expectEqual(@as(i64, 24500 + 4000), order.total_minor);
+    }
+    try testing.expect(second_id != 0);
+
+    repos.loadOrderLines(&harness.model, harness.fx);
+    harness.drain();
+    var line_count: usize = 0;
+    for (harness.model.order_lines) |line| {
+        if (line.order_id == second_id) line_count += 1;
+    }
+    try testing.expectEqual(@as(usize, 2), line_count);
+}
+
 test "a retried write is the same sale" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();
