@@ -487,6 +487,14 @@ fn takePayment(model: *Model, fx: *Effects) void {
         return;
     }
     const mode = std.enums.fromInt(domain.PaymentMode, model.payment_mode_field) orelse domain.PaymentMode.cash;
+    // A sale on account is a receivable: it needs a customer and a due
+    // date, and it is not money the drawer received. Until there is a
+    // book to put it in, the till says so instead of writing a cash
+    // payment that never happened.
+    if (mode == .credit) {
+        model.payment_error = "On account is not available - take the payment now";
+        return;
+    }
     model.busy = true;
     model.payment_pending = true;
     model.payment_error = "";

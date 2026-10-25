@@ -3757,6 +3757,37 @@ test "a paid order cannot be sent to the till again" {
     );
 }
 
+test "on account is refused instead of recording a payment" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    const order = harness.model.orders[0];
+
+    // A message names the credit mode even though the picker does not
+    // offer it. It must not become a payment row.
+    harness.send(.{ .pay_order = order.id });
+    harness.send(.{ .set_payment_mode = @intFromEnum(domain.PaymentMode.credit) });
+    harness.send(Msg{ .take_payment = {} });
+
+    try testing.expect(harness.model.payment_error_text().len > 0);
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM payment;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.pending)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = order.id }}),
+    );
+}
+
 test "a list screen loads its own data when it is opened" {
     var harness = try Harness.start(testing.allocator);
     defer harness.deinit();
