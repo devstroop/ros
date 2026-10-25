@@ -1867,7 +1867,7 @@ pub fn addOrderLine(
         .lines = snapshot_lines[0..snapshot_count],
     }, .update, at);
 
-    var statements: [4]native_sdk.EffectDbStatement = undefined;
+    var statements: [5]native_sdk.EffectDbStatement = undefined;
     statements[0] = .{
         // The line id is left to SQLite: two lines added in the same
         // millisecond are still two lines.
@@ -1878,7 +1878,21 @@ pub fn addOrderLine(
         ,
         .params = &line_params,
     };
+    // The plate leaves the shelf when it is ordered, not when it is
+    // paid for: the kitchen has already cooked it. The guard is the
+    // line insert - a write that did not land does not take stock.
+    var stock_params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = product_id },
+        .{ .integer = at },
+    };
     statements[1] = .{
+        .sql =
+        \\UPDATE product SET stock_qty = COALESCE(stock_qty, 0) - 1, updated_at = ?2
+        \\WHERE id = ?1 AND track_stock = 1 AND changes() = 1;
+        ,
+        .params = &stock_params,
+    };
+    statements[2] = .{
         // The tax is added one plate at a time, with the exact amount
         // worked out here. Summing the rounded tax of every line in SQL
         // would charge a different total than the counter does.
@@ -1892,7 +1906,7 @@ pub fn addOrderLine(
         ,
         .params = &order_params,
     };
-    var count: usize = 2;
+    var count: usize = 3;
     if (order_op.ready) {
         statements[count] = .{ .sql = insert_op_log_sql, .params = &order_op.params };
         count += 1;

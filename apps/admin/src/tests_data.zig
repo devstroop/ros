@@ -3105,6 +3105,50 @@ test "a waiter's line carries the tax the counter would charge" {
     try testing.expectEqual(@as(i64, 500), harness.model.order_lines[0].tax_bps);
 }
 
+test "a waiter's plate comes off the shelf, and a void puts it back" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // A counted dish with ten on the shelf.
+    harness.fx.dbExec(.{
+        .key = 954,
+        .statements = &.{.{
+            .sql = "UPDATE product SET track_stock = 1, stock_qty = 10 WHERE id = 1;",
+            .params = &.{},
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    harness.model.employee_id = 7;
+    harness.model.tables = &.{
+        .{ .id = 1, .category_id = 1, .name = "T1", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 0, .pos_y = 0 },
+    };
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 10, .active = true },
+    };
+
+    harness.send(.{ .select_table = 1 });
+    harness.send(.{ .add_to_order = 1 });
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+
+    // The plate left the shelf when it was ordered, not when it was
+    // paid for: the kitchen has already cooked it.
+    try testing.expectEqual(
+        @as(i64, 9),
+        try countRows(&harness, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+
+    // The guest leaves before eating: the plate goes back.
+    harness.model.void_reason_buf.set("guest left");
+    harness.send(Msg{ .void_order = harness.model.orders[0].id });
+    try testing.expectEqual(
+        @as(i64, 10),
+        try countRows(&harness, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+}
+
 test "a waiter's table order and its plates reach the kitchen" {
     var a = try seeded(testing.allocator);
     defer a.deinit();
