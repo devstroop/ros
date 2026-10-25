@@ -2718,6 +2718,85 @@ test "voiding an order restores its stock and writes one audit row" {
     );
 }
 
+test "voiding a table order frees the table" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.tables = &.{
+        .{ .id = 1, .category_id = 1, .name = "T1", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 0, .pos_y = 0 },
+    };
+
+    // The waiter seats a table and opens its order.
+    harness.send(.{ .select_table = 1 });
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqual(@as(usize, 1), harness.model.orders.len);
+    const order_id = harness.model.orders[0].id;
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&harness, "SELECT status AS n FROM dining_table WHERE id = 1;", &.{}),
+    );
+
+    // The guest leaves before eating. The table must not stay busy.
+    harness.model.void_reason_buf.set("guest left");
+    harness.send(Msg{ .void_order = order_id });
+
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&harness, "SELECT status AS n FROM dining_table WHERE id = 1;", &.{}),
+    );
+}
+
+test "a synced void frees the table on the peer too" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // A table order that came from another device, with the guest
+    // sitting at table 1.
+    harness.fx.dbExec(.{
+        .key = 952,
+        .statements = &.{
+            .{
+                .sql =
+                \\INSERT INTO orders (id, order_no, order_type, status, dining_table_id,
+                \\  customer_id, employee_id, subtotal_minor, tax_minor, discount_minor,
+                \\  total_minor, placed_at, notes, created_at, updated_at,
+                \\  origin_device, origin_id)
+                \\VALUES (42, '42', 0, 0, 1, NULL, 7, 0, 0, 0, 0, 1, '', 1, 1, 'dev-a', 4242);
+                ,
+                .params = &.{},
+            },
+            .{
+                .sql = "UPDATE dining_table SET status = 1 WHERE id = 1;",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    // The same void arrives from the device that took the order.
+    const status_json = "{\"id\":4242,\"origin_device\":\"dev-a\",\"status\":5,\"changed_at\":2}";
+    const status_op = record.Op{
+        .id = "dev-a:1:0",
+        .entity_table = "order_status",
+        .entity_id = "4242",
+        .operation = .update,
+        .logical_clock = 1,
+        .device_id = "dev-a",
+        .created_at = 2,
+        .data_json = status_json,
+    };
+    repos.applyOp(&harness.model, harness.fx, status_op);
+    harness.drain();
+
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&harness, "SELECT status AS n FROM dining_table WHERE id = 1;", &.{}),
+    );
+}
+
 test "a discount is saved, and it takes what the owner said off" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();

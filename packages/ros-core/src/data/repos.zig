@@ -3232,7 +3232,7 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
     const origin = orderOrigin(model, order_id);
     const completed = @intFromEnum(domain.OrderStatus.completed);
 
-    var statements: [6]native_sdk.EffectDbStatement = undefined;
+    var statements: [7]native_sdk.EffectDbStatement = undefined;
 
     var log_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
@@ -3369,6 +3369,31 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
         statements[count] = .{ .sql = save_clock_if_op_written_sql, .params = &clock_params };
         count += 1;
     }
+
+    // The table the voided order was sitting at is free again. The
+    // guard is the order itself: the free happens only when the order
+    // really is voided, and only when no other open order has since
+    // taken the table. A void that lost the race leaves the room
+    // alone.
+    var table_params: [3]native_sdk.EffectDbValue = .{
+        .{ .integer = order_id },
+        .{ .integer = @intFromEnum(domain.OrderStatus.voided) },
+        .{ .integer = completed },
+    };
+    statements[count] = .{
+        .sql =
+        \\UPDATE dining_table SET status = 0
+        \\WHERE id = (
+        \\  SELECT dining_table_id FROM orders WHERE id = ?1 AND status = ?2
+        \\)
+        \\  AND NOT EXISTS (
+        \\    SELECT 1 FROM orders
+        \\    WHERE dining_table_id = dining_table.id AND status < ?3
+        \\  );
+        ,
+        .params = &table_params,
+    };
+    count += 1;
 
     fx.dbExec(.{
         .key = key_write_order,
@@ -3583,7 +3608,7 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
 }
 
 fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSnapshot, persist: bool) void {
-    var statements: [4]native_sdk.EffectDbStatement = undefined;
+    var statements: [6]native_sdk.EffectDbStatement = undefined;
     var params: [4]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.id },
         .{ .integer = snapshot.status },
@@ -3627,6 +3652,39 @@ fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSna
         .params = &params,
     };
     var count: usize = 2;
+
+    // A void frees its table on every device, not only on the one that
+    // pressed the button. The order is named by its origin pair, and
+    // the free happens only when the order really is voided and no
+    // open order has taken the table since.
+    var table_params: [4]native_sdk.EffectDbValue = .{
+        .{ .integer = snapshot.id },
+        .{ .integer = @intFromEnum(domain.OrderStatus.voided) },
+        .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
+        .{ .text = snapshot.origin_device },
+    };
+    if (snapshot.status == @intFromEnum(domain.OrderStatus.voided)) {
+        statements[count] = .{
+            .sql =
+            \\UPDATE dining_table SET status = 0
+            \\WHERE id = (
+            \\  SELECT dining_table_id FROM orders
+            \\  WHERE id = (
+            \\    CASE WHEN ?4 = ''
+            \\      THEN (SELECT id FROM orders WHERE id = ?1)
+            \\      ELSE (SELECT id FROM orders WHERE origin_device = ?4 AND origin_id = ?1)
+            \\    END
+            \\  ) AND status = ?2
+            \\)
+            \\  AND NOT EXISTS (
+            \\    SELECT 1 FROM orders
+            \\    WHERE dining_table_id = dining_table.id AND status < ?3
+            \\  );
+            ,
+            .params = &table_params,
+        };
+        count += 1;
+    }
 
     var op_params: [8]native_sdk.EffectDbValue = .{
         .{ .text = op.id },
