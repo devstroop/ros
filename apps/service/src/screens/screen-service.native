@@ -110,13 +110,14 @@
   </column>
 </template>
 
-<!-- The waiter's open orders: every table that is waiting on food. -->
+<!-- The waiter's open orders: every table that is waiting on food.
+     A closed ticket is not waiting on anybody, so it is not here. -->
 
 <template name="screen-waiter-orders">
   <column grow="1" gap="12" padding="16" background="background">
     <text size="heading">Open orders</text>
 
-    <if test="{order_count == 0}">
+    <if test="{open_order_count == 0}">
       <column background="surface" radius="md" padding="16">
         <text foreground="text_muted">No open orders.</text>
       </column>
@@ -124,7 +125,7 @@
 
     <scroll grow="1">
       <column gap="4">
-        <for each="orders" key="id" as="order">
+        <for each="open_orders" key="id" as="order">
           <row background="surface" radius="md" padding="10" gap="10" cross="center">
             <text grow="1">{order.order_no}</text>
             <badge>{order.status_label}</badge>

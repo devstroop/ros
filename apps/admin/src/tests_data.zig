@@ -3619,6 +3619,52 @@ test "an order can be opened, and paid from the order list" {
     try testing.expectEqual(@as(i64, 24500), harness.model.last_order_total());
 }
 
+test "a paid order cannot be sent to the till again" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // A closed ticket with its payment, as the till left it.
+    harness.fx.dbExec(.{
+        .key = 956,
+        .statements = &.{
+            .{
+                .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (1, 'A-1', 0, 4, NULL, NULL, 7, 1000, 0, 0, 1000, 1700000000000, '', 1700000000000, 1700000000000);",
+                .params = &.{},
+            },
+            .{
+                .sql = "INSERT INTO payment (id, order_id, mode, amount_minor, reference, paid_at, created_at) VALUES (1, 1, 0, 1000, '', 1700000000000, 1700000000000);",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqual(@as(usize, 1), harness.model.orders.len);
+    const order = harness.model.orders[0];
+    try testing.expect(order.paid);
+
+    // The list hides the button. A message that arrives anyway must
+    // not open the confirmation screen for money already taken.
+    harness.send(.{ .open_orders = {} });
+    harness.send(.{ .pay_order = order.id });
+    try testing.expectEqual(nav.Screen.orders, harness.model.screen());
+    try testing.expect(harness.model.error_text_text().len > 0);
+
+    harness.send(.{ .open_order = order.id });
+    harness.send(Msg{ .pay_selected_order = {} });
+    try testing.expectEqual(nav.Screen.order_detail, harness.model.screen());
+    try testing.expect(harness.model.error_text_text().len > 0);
+
+    // One payment row, still.
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM payment;", &.{}),
+    );
+}
+
 test "a list screen loads its own data when it is opened" {
     var harness = try Harness.start(testing.allocator);
     defer harness.deinit();

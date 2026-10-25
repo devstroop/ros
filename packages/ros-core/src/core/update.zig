@@ -478,8 +478,12 @@ fn takePayment(model: *Model, fx: *Effects) void {
         model.payment_error = "That order is no longer on the board";
         return;
     };
-    if (order.status == .completed) {
+    if (order.paid or order.status == .completed) {
         model.payment_error = "This order is already paid";
+        return;
+    }
+    if (order.status == .voided) {
+        model.payment_error = "A voided order cannot be paid";
         return;
     }
     const mode = std.enums.fromInt(domain.PaymentMode, model.payment_mode_field) orelse domain.PaymentMode.cash;
@@ -1423,6 +1427,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             const id = model.selected_order_id;
             if (id == 0) return;
             const order = findOrder(model, id) orelse return;
+            if (!canTakePayment(model, order)) return;
             model.sale_buf.reset();
             model.last_order_id = order.id;
             model.last_order_no_field = model.sale_buf.dupe(order.order_no) orelse "";
@@ -1442,6 +1447,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // The confirmation screen takes the money, so the sale state
             // is filled in from the order that is being paid.
             const order = findOrder(model, id) orelse return;
+            if (!canTakePayment(model, order)) return;
             model.sale_buf.reset();
             model.last_order_id = order.id;
             model.last_order_no_field = model.sale_buf.dupe(order.order_no) orelse "";
@@ -2433,6 +2439,21 @@ fn findOrder(model: *const Model, order_id: i64) ?domain.Order {
         if (order.id == order_id) return order;
     }
     return null;
+}
+
+/// Whether the confirmation screen may open for this order. A closed
+/// ticket has already taken its money; the list stops offering it, and
+/// a message that arrives anyway must not reopen the sale.
+fn canTakePayment(model: *Model, order: domain.Order) bool {
+    if (order.paid or order.status == .completed) {
+        model.error_text = "That order is already paid";
+        return false;
+    }
+    if (order.status == .voided) {
+        model.error_text = "A voided order cannot be paid";
+        return false;
+    }
+    return true;
 }
 
 /// The order lifecycle. A voided order is terminal - it never moves

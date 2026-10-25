@@ -5,24 +5,32 @@
      than that. A file may hold several templates, so a screen that
      shares a file with its neighbours costs nothing. -->
 
-<!-- The order list. Every order on the board, newest first, with the
-     status that the kitchen is working through. The list is the model's
-     live view of the `orders` table - a status change anywhere in the
-     app lands here without a refresh. -->
+<!-- The order list. Open orders first-class, newest first, with the
+     status that the kitchen is working through; closed tickets stay
+     below them so the receipt is still one tap away. The list is the
+     model's live view of the `orders` table - a status change anywhere
+     in the app lands here without a refresh. -->
 
 <template name="screen-orders">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
       <text size="heading" grow="1">Orders</text>
-      <badge>{order_count} open</badge>
+      <badge>{open_order_count} open</badge>
       <button size="sm" variant="ghost" on-press="open_payments">Payments</button>
     </row>
 
     <if test="{order_count == 0}">
       <column background="surface" radius="md" padding="16">
-        <text foreground="text_muted">No open orders.</text>
+        <text foreground="text_muted">No orders yet.</text>
       </column>
     </if>
+    <else>
+      <if test="{open_order_count == 0}">
+        <column background="surface" radius="md" padding="16">
+          <text foreground="text_muted">No open orders. The paid tickets are below.</text>
+        </column>
+      </if>
+    </else>
 
     <scroll grow="1">
       <column gap="4">
@@ -33,8 +41,16 @@
               <badge>{order.status_label}</badge>
               <text foreground="text_muted">{order.type_label}</text>
               <text>{currency_symbol}{fixed(order.total_minor / currency_divisor, currency_decimal_count)}</text>
-              <button size="sm" variant="secondary" disabled="{advancing}" on-press="advance_order:{order.id}">Advance</button>
-              <button size="sm" variant="primary" on-press="pay_order:{order.id}">Pay</button>
+              <!-- A closed ticket has taken its money. Offering the
+                   same two buttons again is a no-op on Advance and a
+                   second charge on Pay. -->
+              <if test="{order.paid}">
+                <badge>Paid</badge>
+              </if>
+              <else>
+                <button size="sm" variant="secondary" disabled="{advancing}" on-press="advance_order:{order.id}">Advance</button>
+                <button size="sm" variant="primary" on-press="pay_order:{order.id}">Pay</button>
+              </else>
             </row>
           </card>
         </for>
@@ -78,7 +94,12 @@
         </row>
         <row gap="8">
           <spacer grow="1"/>
-          <button variant="primary" on-press="pay_selected_order">Take the payment</button>
+          <if test="{selected_order_can_pay}">
+            <button variant="primary" on-press="pay_selected_order">Take the payment</button>
+          </if>
+          <else>
+            <text foreground="text_muted">No payment is due.</text>
+          </else>
         </row>
       </column>
     </card>

@@ -171,6 +171,10 @@ pub const customers_sql =
 /// anyone is offered the chance to close an order, whether the money
 /// has been taken. An order that can be closed without being paid for
 /// is a sale the restaurant never sees.
+///
+/// The window is the newest 200 non-voided orders. Both the board and
+/// the line query below use it: a line for an order the board does not
+/// show would only take room from a line it does.
 pub const orders_sql =
     \\SELECT id, order_no, order_type, status, dining_table_id, customer_id,
     \\       employee_id, subtotal_minor, tax_minor, discount_minor,
@@ -182,11 +186,20 @@ pub const orders_sql =
     \\LIMIT 200;
 ;
 
+/// The lines of the orders on the board, and only those. The subquery
+/// repeats `orders_sql`'s window on purpose: loading every line the
+/// restaurant ever wrote fills the model's line buffer with rows nobody
+/// can open, and the orders that ARE on the board lose theirs.
 pub const order_lines_sql =
     \\SELECT id, order_id, product_id, product_name, qty, unit_price_minor,
     \\       tax_bps, notes, station_id
     \\FROM order_line
-    \\WHERE order_id IN (SELECT id FROM orders WHERE status <> 5)
+    \\WHERE order_id IN (
+    \\    SELECT id FROM orders
+    \\    WHERE status <> 5
+    \\    ORDER BY placed_at DESC
+    \\    LIMIT 200
+    \\)
     \\ORDER BY id;
 ;
 

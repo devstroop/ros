@@ -78,6 +78,15 @@ fn findByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) 
     return null;
 }
 
+/// How many widgets of `kind` carry exactly `text`. A view that must
+/// not offer a control uses this to tell "hidden" from "one row still
+/// shows it".
+fn countByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) usize {
+    var count: usize = if (widget.kind == kind and std.mem.eql(u8, widget.text, text)) 1 else 0;
+    for (widget.children) |child| count += countByText(child, kind, text);
+    return count;
+}
+
 fn expectByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) !canvas.Widget {
     return findByText(widget, kind, text) orelse {
         std.debug.print("no {t} with text \"{s}\" in the view - if you changed app.native, update this test to match\n", .{ kind, text });
@@ -845,6 +854,59 @@ test "the model reports its own numbers instead of storing them" {
     try testing.expectEqual(@as(usize, 2), model.order_count());
     try testing.expectEqual(@as(usize, 1), model.open_order_count());
     try testing.expectEqual(@as(usize, 1), model.ticket_count());
+
+    // The waiter's board is the open set, not the whole history.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const open = model.open_orders(arena_state.allocator());
+    try testing.expectEqual(@as(usize, 1), open.len);
+    try testing.expectEqual(@as(i64, 1), open[0].id);
+}
+
+test "the orders board counts open tickets and stops offering a paid one" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = main.initialModel();
+    model.role_chosen = true;
+    model.signed_in = true;
+    model.screen_index = nav.Screen.orders.index();
+    model.orders = &.{
+        .{ .id = 1, .order_no = "A-1", .order_type = .dine_in, .status = .pending, .status_label = "Pending", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 1000, .tax_minor = 0, .discount_minor = 0, .total_minor = 1000, .placed_at = 0, .notes = "" },
+        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_label = "Completed", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
+    };
+
+    const tree = try buildTree(arena, &model);
+
+    // The badge is the open set, and the closed ticket says so.
+    _ = try expectByText(tree.root, .badge, "1 open");
+    _ = try expectByText(tree.root, .badge, "Paid");
+
+    // One open order, so exactly one row may offer each action. The
+    // paid row must not offer either one.
+    try testing.expectEqual(@as(usize, 1), countByText(tree.root, .button, "Advance"));
+    try testing.expectEqual(@as(usize, 1), countByText(tree.root, .button, "Pay"));
+}
+
+test "a paid ticket's detail screen offers no payment" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = main.initialModel();
+    model.role_chosen = true;
+    model.signed_in = true;
+    model.screen_index = nav.Screen.order_detail.index();
+    model.selected_order_id = 2;
+    model.orders = &.{
+        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_label = "Completed", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
+    };
+
+    const tree = try buildTree(arena, &model);
+
+    try testing.expect(findByText(tree.root, .button, "Take the payment") == null);
+    _ = try expectByText(tree.root, .text, "No payment is due.");
 }
 
 test "the POS screen renders with a menu and a cart" {

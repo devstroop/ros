@@ -1033,18 +1033,12 @@ pub const Model = struct {
     pub fn display_cards(model: *const Model, arena: std.mem.Allocator) []const DisplayCard {
         var count: usize = 0;
         for (model.orders) |order| {
-            switch (order.status) {
-                .pending, .preparing, .ready, .served => count += 1,
-                .completed, .voided => {},
-            }
+            if (orderIsOpen(order.status)) count += 1;
         }
         const out = arena.alloc(DisplayCard, count) catch return &.{};
         var index: usize = 0;
         for (model.orders) |order| {
-            switch (order.status) {
-                .pending, .preparing, .ready, .served => {},
-                .completed, .voided => continue,
-            }
+            if (!orderIsOpen(order.status)) continue;
             out[index] = .{
                 .label = displayLabel(model, order.dining_table_id, order.order_no),
                 .status_label = order.status_label,
@@ -1462,6 +1456,15 @@ pub const Model = struct {
     pub fn selected_order_total(model: *const Model) i64 {
         const order = model.selected_order() orelse return 0;
         return order.total_minor;
+    }
+
+    /// Whether the order being shown can still be paid. A closed
+    /// ticket has already taken its money; offering the button again
+    /// is an invitation to charge the guest twice.
+    pub fn selected_order_can_pay(model: *const Model) bool {
+        const order = model.selected_order() orelse return false;
+        if (order.paid) return false;
+        return order.status != .completed and order.status != .voided;
     }
 
     /// Whether the order being shown can still be voided. A paid order
@@ -2041,12 +2044,27 @@ pub const Model = struct {
     pub fn open_order_count(model: *const Model) usize {
         var count: usize = 0;
         for (model.orders) |order| {
-            switch (order.status) {
-                .pending, .preparing, .ready, .served => count += 1,
-                .completed, .voided => {},
-            }
+            if (orderIsOpen(order.status)) count += 1;
         }
         return count;
+    }
+
+    /// The orders that are still open, newest first. The waiter's
+    /// "Open orders" screen lists these; the admin board keeps the
+    /// closed tickets below them for the receipt.
+    pub fn open_orders(model: *const Model, arena: std.mem.Allocator) []const domain.Order {
+        var count: usize = 0;
+        for (model.orders) |order| {
+            if (orderIsOpen(order.status)) count += 1;
+        }
+        const out = arena.alloc(domain.Order, count) catch return &.{};
+        var index: usize = 0;
+        for (model.orders) |order| {
+            if (!orderIsOpen(order.status)) continue;
+            out[index] = order;
+            index += 1;
+        }
+        return out[0..index];
     }
 
     /// How many tables are occupied right now.
@@ -2371,6 +2389,15 @@ pub const DisplayCard = struct {
     type_label: []const u8,
     order_no: []const u8,
 };
+
+/// Whether an order is still the restaurant's to finish. A served
+/// order is open until it is paid for: the guest is still at the table.
+fn orderIsOpen(status: domain.OrderStatus) bool {
+    return switch (status) {
+        .pending, .preparing, .ready, .served => true,
+        .completed, .voided => false,
+    };
+}
 
 /// The name of the table an order is on. A take-away order has no
 /// table, so it falls back to the order number.

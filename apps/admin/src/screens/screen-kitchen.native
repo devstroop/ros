@@ -62,10 +62,10 @@
   <column grow="1" gap="16" padding="24" background="background">
     <row gap="12" cross="center">
       <text size="heading" grow="1">{company_label}</text>
-      <badge>{order_count} in progress</badge>
+      <badge>{open_order_count} in progress</badge>
     </row>
 
-    <if test="{order_count == 0}">
+    <if test="{open_order_count == 0}">
       <column grow="1" gap="8" main="center" cross="center">
         <text size="display">No orders</text>
         <text foreground="text_muted">Your order will appear here.</text>
