@@ -3535,6 +3535,78 @@ test "cash short of the bill is refused, and the exact amount is taken" {
     );
 }
 
+test "a plate does not land on a paid table" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    const order_id = harness.model.last_order_id;
+
+    harness.send(.{ .set_payment_mode = @intFromEnum(domain.PaymentMode.card) });
+    harness.send(Msg{ .take_payment = {} });
+    try testing.expectEqualStrings("", harness.model.payment_error_text());
+
+    const before_lines = try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM order_line WHERE order_id = ?1;",
+        &.{.{ .integer = order_id }},
+    );
+    const before_total = try countRows(
+        &harness,
+        "SELECT total_minor AS n FROM orders WHERE id = ?1;",
+        &.{.{ .integer = order_id }},
+    );
+    const before_ops = try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'order';",
+        &.{},
+    );
+
+    // The waiter is still holding the menu when the table is paid.
+    harness.model.active_order_id = order_id;
+    harness.send(.{ .add_to_order = 1 });
+    try testing.expectEqualStrings("That table has been paid - start a new order", harness.model.error_text);
+    try testing.expectEqual(before_lines, try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM order_line WHERE order_id = ?1;",
+        &.{.{ .integer = order_id }},
+    ));
+
+    // Even a model that has not heard about the payment cannot plate
+    // the bill: the database refuses the line too.
+    repos.addOrderLine(
+        &harness.model,
+        harness.fx,
+        repos.key_add_line,
+        order_id,
+        1,
+        "Paneer Tikka",
+        24500,
+        1_700_000_000_123,
+    );
+    harness.drain();
+    try testing.expectEqual(before_lines, try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM order_line WHERE order_id = ?1;",
+        &.{.{ .integer = order_id }},
+    ));
+    try testing.expectEqual(before_total, try countRows(
+        &harness,
+        "SELECT total_minor AS n FROM orders WHERE id = ?1;",
+        &.{.{ .integer = order_id }},
+    ));
+    try testing.expectEqual(before_ops, try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'order';",
+        &.{},
+    ));
+}
+
 test "an unreadable cash tender is refused" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();

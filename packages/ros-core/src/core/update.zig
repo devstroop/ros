@@ -167,6 +167,17 @@ fn addToOrder(model: *Model, fx: *Effects, product_id: i64) void {
         model.error_text = "Pick a table first";
         return;
     }
+    // The table can be paid for while the waiter is still holding the
+    // menu. The board carries the closed status; a plate must not land
+    // on a bill the customer has already settled.
+    const order = findOrder(model, model.active_order_id) orelse {
+        model.error_text = "That table's order is no longer open";
+        return;
+    };
+    if (order.status == .completed or order.status == .voided) {
+        model.error_text = "That table has been paid - start a new order";
+        return;
+    }
     // One plate at a time. The op carries the whole ticket, so the
     // second plate has to see the first one in the list.
     if (model.add_line_pending) {

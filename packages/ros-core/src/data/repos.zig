@@ -1870,11 +1870,12 @@ pub fn addOrderLine(
     // moves; the customer pays the price on the menu.
     const total_tax: i64 = if (model.tax_inclusive) 0 else line_tax;
 
-    var order_params: [4]native_sdk.EffectDbValue = .{
+    var order_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
         .{ .integer = line_tax },
         .{ .integer = total_tax },
         .{ .integer = at },
+        .{ .integer = 0 },
     };
 
     // The kitchen board reads an order and its lines, so the new plate
@@ -1913,6 +1914,7 @@ pub fn addOrderLine(
     // plate overwrite the first, so a plate added here is named after
     // the device, the order, the moment and its position.
     const new_line_id = newOrderLineId(model, order_id, snapshot_count, at);
+    order_params[4] = .{ .integer = new_line_id };
     for (model.orders) |order| {
         if (order.id != order_id) continue;
         order_type = @intFromEnum(order.order_type);
@@ -1939,7 +1941,7 @@ pub fn addOrderLine(
     // An inclusive menu already has the tax inside the price.
     const snapshot_total = subtotal + (if (model.tax_inclusive) 0 else order_tax);
 
-    var line_params: [7]native_sdk.EffectDbValue = .{
+    var line_params: [8]native_sdk.EffectDbValue = .{
         .{ .integer = new_line_id },
         .{ .integer = order_id },
         .{ .integer = product_id },
@@ -1947,6 +1949,7 @@ pub fn addOrderLine(
         .{ .integer = unit_price_minor },
         .{ .integer = tax_bps },
         .{ .integer = at },
+        .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
     };
 
     var json_buffer: [16 * 1024]u8 = undefined;
@@ -1976,12 +1979,15 @@ pub fn addOrderLine(
         // The id is the plate's name across devices, not a row number:
         // a second waiter's plate must not take the same name. The
         // marker says the plate is in this device's stock figure, so a
-        // later void knows to put it back.
+        // later void knows to put it back. The insert is conditional on
+        // the ticket still being open: a plate that arrives after the
+        // payment is not food the customer ordered.
         .sql =
         \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
         \\  unit_price_minor, tax_bps, notes, stock_taken, created_at)
-        \\VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, '',
-        \\  COALESCE((SELECT track_stock FROM product WHERE id = ?3), 0), ?7);
+        \\SELECT ?1, ?2, ?3, ?4, 1, ?5, ?6, '',
+        \\  COALESCE((SELECT track_stock FROM product WHERE id = ?3), 0), ?7
+        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?2 AND status < ?8);
         ,
         .params = &line_params,
     };
@@ -2009,13 +2015,17 @@ pub fn addOrderLine(
         \\  tax_minor = tax_minor + ?2,
         \\  total_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1) + ?3,
         \\  updated_at = ?4
-        \\WHERE id = ?1;
+        \\WHERE id = ?1 AND EXISTS (SELECT 1 FROM order_line WHERE id = ?5);
         ,
         .params = &order_params,
     };
     var count: usize = 3;
     if (order_op.ready) {
-        statements[count] = .{ .sql = insert_op_log_sql, .params = &order_op.params };
+        // The op should not outlive a line insert that did not land.
+        var line_op_params: [9]native_sdk.EffectDbValue = undefined;
+        for (order_op.params, 0..) |param, index| line_op_params[index] = param;
+        line_op_params[8] = .{ .integer = new_line_id };
+        statements[count] = .{ .sql = insert_line_op_sql, .params = &line_op_params };
         count += 1;
         statements[count] = .{ .sql = save_clock_sql, .params = &order_op.clock_params };
         count += 1;
@@ -2541,6 +2551,17 @@ const insert_op_log_sql =
     \\INSERT INTO op_log (id, entity_table, entity_id, operation, data_json,
     \\  previous_json, logical_clock, device_id, host_id, parent_id, created_at)
     \\VALUES (?1, ?2, ?3, ?4, ?5, '{}', ?6, ?7, '', '', ?8)
+    \\ON CONFLICT(id) DO NOTHING;
+;
+
+/// The op for a plate added later joins the line insert's transaction,
+/// but only when that insert landed. A paid bill takes no plate, and a
+/// peer must not be told that one did.
+const insert_line_op_sql =
+    \\INSERT INTO op_log (id, entity_table, entity_id, operation, data_json,
+    \\  previous_json, logical_clock, device_id, host_id, parent_id, created_at)
+    \\SELECT ?1, ?2, ?3, ?4, ?5, '{}', ?6, ?7, '', '', ?8
+    \\WHERE EXISTS (SELECT 1 FROM order_line WHERE id = ?9)
     \\ON CONFLICT(id) DO NOTHING;
 ;
 
