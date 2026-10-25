@@ -267,6 +267,8 @@ pub const Model = struct {
         "salt_state",
         "last_issued_order_id",
         "advance_order_id",
+        "voiding_order_id",
+        "void_reason_buf",
         "login_hash",
         "login_hash_len",
         "login_legacy_hash",
@@ -513,6 +515,9 @@ pub const Model = struct {
 
     /// The order the order-detail screen is showing.
     selected_order_id: i64 = 0,
+    /// Why the operator is voiding the order being shown. A void with
+    /// no reason is not an audit trail; the update refuses it.
+    void_reason_buf: canvas.TextBuffer(96) = .{},
 
     // ------------------------------------------------- the settings data
 
@@ -636,6 +641,9 @@ pub const Model = struct {
     /// there is none. The board's button is disabled while it holds, so
     /// a second tap cannot move the order twice.
     advance_order_id: i64 = 0,
+    /// The order being voided, so the result handler can tell a void
+    /// from an ordinary status move and leave the detail screen.
+    voiding_order_id: i64 = 0,
     /// The order that was just placed: the confirmation screen shows
     /// it and the payment is taken against it.
     active_table_name_field: []const u8 = "",
@@ -1449,6 +1457,19 @@ pub const Model = struct {
     pub fn selected_order_total(model: *const Model) i64 {
         const order = model.selected_order() orelse return 0;
         return order.total_minor;
+    }
+
+    /// Whether the order being shown can still be voided. A paid order
+    /// is money that has changed hands; undoing that is a refund, not a
+    /// void, and a refund has to put the money back on the same tender.
+    pub fn selected_order_can_void(model: *const Model) bool {
+        const order = model.selected_order() orelse return false;
+        return order.status != .completed and order.status != .voided;
+    }
+
+    /// The reason the operator is typing for the void.
+    pub fn void_reason(model: *const Model) []const u8 {
+        return model.void_reason_buf.text();
     }
 
     /// The reservations.

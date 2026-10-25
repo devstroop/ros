@@ -162,6 +162,10 @@ pub const Msg = union(enum) {
     pay_order: i64,
     /// Take the payment for the order being shown.
     pay_selected_order,
+    /// Void the order with this id, before it is paid.
+    void_order: i64,
+    /// The reason the operator gave for the void.
+    void_reason_edit: canvas.TextInputEvent,
 
     // ------------------------------------------------------ shortcuts
 

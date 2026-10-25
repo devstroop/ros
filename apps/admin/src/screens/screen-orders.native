@@ -82,6 +82,28 @@
         </row>
       </column>
     </card>
+
+    <!-- A wrong ticket has to be cancellable before the money is
+         taken. The reason is part of the record, not an optional note:
+         a void that cannot say why is not an audit trail. -->
+
+    <if test="{selected_order_can_void}">
+      <card padding="16" width="520">
+        <column gap="8">
+          <text size="sm" foreground="text_muted">VOID THIS ORDER</text>
+          <text-field
+            text="{void_reason}"
+            placeholder="Wrong table, customer left, ..."
+            label="Reason"
+            on-input="void_reason_edit"
+          />
+          <row gap="8">
+            <spacer grow="1"/>
+            <button variant="secondary" on-press="void_order:{selected_order_id}">Void order</button>
+          </row>
+        </column>
+      </card>
+    </if>
   </column>
 </template>
 

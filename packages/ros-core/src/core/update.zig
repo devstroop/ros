@@ -1403,6 +1403,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         // ---------------------------------------------------------- the POS
         .open_order => |id| {
             model.selected_order_id = id;
+            model.void_reason_buf.set("");
             go(model, .order_detail);
             repos.loadOrderLines(model, fx);
         },
@@ -1909,6 +1910,37 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.setOrderStatus(model, fx, order_id, order.status, next, fx.wallMs());
         },
 
+        .void_order => |order_id| {
+            // A void is a move like any other: one at a time, and only
+            // for an order that is still open. A paid order is money
+            // that has changed hands - putting it back is a refund,
+            // not a void, and it has to name the tender it came from.
+            if (model.advance_order_id != 0) {
+                model.error_text = "The order is still being updated";
+                return;
+            }
+            const order = findOrder(model, order_id) orelse {
+                model.error_text = "That order is no longer on the board";
+                return;
+            };
+            if (order.status == .completed or order.status == .voided) {
+                model.error_text = "A paid or voided order cannot be voided";
+                return;
+            }
+            const reason = std.mem.trim(u8, model.void_reason_buf.text(), " ");
+            if (reason.len == 0) {
+                model.error_text = "Say why the order is being voided";
+                return;
+            }
+            model.advance_order_id = order_id;
+            model.voiding_order_id = order_id;
+            model.busy = true;
+            model.error_text = "";
+            repos.voidOrder(model, fx, order_id, reason, fx.wallMs());
+        },
+
+        .void_reason_edit => |event| model.void_reason_buf.apply(event),
+
         .pin_rehashed => |result| {
             // The rewrite is a courtesy: the sign-in has already
             // happened, and a row that could not be rewritten is worth
@@ -1926,6 +1958,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.busy = false;
             if (result.outcome != .ok) {
                 model.advance_order_id = 0;
+                model.voiding_order_id = 0;
                 model.error_text = "Could not update the order";
                 return;
             }
@@ -2016,10 +2049,26 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // was deleted, or the database was reset under us, and the
             // operator is told so instead of watching a ticket vanish.
             if (model.advance_order_id != 0) {
-                if (findOrder(model, model.advance_order_id) == null) {
-                    model.error_text = "That order is no longer on the board";
+                const moved = findOrder(model, model.advance_order_id);
+                const was_void = model.voiding_order_id != 0 and model.voiding_order_id == model.advance_order_id;
+                if (moved == null) {
+                    if (was_void) {
+                        // The void landed: the order is off the open
+                        // board, so leave the detail screen with it.
+                        model.error_text = "";
+                        model.void_reason_buf.set("");
+                        go(model, .orders);
+                    } else {
+                        model.error_text = "That order is no longer on the board";
+                    }
+                } else if (was_void) {
+                    // The write was accepted but the database did not
+                    // move the order - it was paid or voided elsewhere.
+                    // Say so instead of pretending the void happened.
+                    model.error_text = "The order could not be voided - it may have been paid";
                 }
                 model.advance_order_id = 0;
+                model.voiding_order_id = 0;
             }
         },
 
@@ -2246,6 +2295,8 @@ fn resetSession(model: *Model, gate: Screen) void {
     model.cart_attempt_id = 0;
     model.sale_pending = false;
     model.payment_pending = false;
+    model.void_reason_buf.set("");
+    model.voiding_order_id = 0;
     model.search.set("");
     model.selected_category = 0;
 

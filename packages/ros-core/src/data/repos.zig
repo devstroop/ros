@@ -2223,6 +2223,17 @@ const save_clock_if_op_written_sql =
     \\ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 ;
 
+/// An op row that is written only when the statement before it really
+/// changed a row. The conditional write is what keeps a second tap from
+/// telling peers about a move that did not happen.
+const insert_op_if_written_sql =
+    \\INSERT INTO op_log (id, entity_table, entity_id, operation, data_json,
+    \\  previous_json, logical_clock, device_id, host_id, parent_id, created_at)
+    \\SELECT ?1, ?2, ?3, ?4, ?5, '{}', ?6, ?7, '', '', ?8
+    \\WHERE changes() = 1
+    \\ON CONFLICT(id) DO NOTHING;
+;
+
 /// The cursor is durable too. It is a cache of the op log, so a lost
 /// write costs a re-read, not a lost op - but a device that forgets it
 /// re-applies its own history on every restart.
@@ -3198,6 +3209,164 @@ pub fn setOrderStatus(
         statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
         count += 1;
         statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
+        count += 1;
+    }
+
+    fx.dbExec(.{
+        .key = key_write_order,
+        .statements = statements[0..count],
+        .on_result = Effects.dbMsg(.order_status_saved),
+    });
+    saveCursor(model, fx);
+}
+
+/// Void an order that has not been paid, and put its stock back.
+///
+/// The database decides whether the void still applies: every
+/// statement is conditional on the order being open (below
+/// `completed`). A second tap, or a void that raced a payment, writes
+/// no second audit row, restores no stock twice, and writes no second
+/// op. The reason is required by the caller; an unexplained void is
+/// not an audit trail.
+pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8, at: i64) void {
+    const origin = orderOrigin(model, order_id);
+    const completed = @intFromEnum(domain.OrderStatus.completed);
+
+    var statements: [6]native_sdk.EffectDbStatement = undefined;
+
+    var log_params: [5]native_sdk.EffectDbValue = .{
+        .{ .integer = order_id },
+        idParam(model.employee_id),
+        .{ .text = reason },
+        .{ .integer = at },
+        .{ .integer = completed },
+    };
+    statements[0] = .{
+        .sql =
+        \\INSERT INTO void_log_entry (order_id, employee_id, reason, amount_minor, voided_at)
+        \\SELECT ?1, ?2, ?3, (SELECT total_minor FROM orders WHERE id = ?1), ?4
+        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status < ?5);
+        ,
+        .params = &log_params,
+    };
+
+    var history_params: [5]native_sdk.EffectDbValue = .{
+        .{ .integer = order_id },
+        .{ .integer = @intFromEnum(domain.OrderStatus.voided) },
+        .{ .integer = at },
+        idParam(model.employee_id),
+        .{ .integer = completed },
+    };
+    statements[1] = .{
+        .sql =
+        \\INSERT INTO order_status_history (order_id, status, changed_at, changed_by)
+        \\SELECT ?1, ?2, ?3, ?4
+        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status < ?5);
+        ,
+        .params = &history_params,
+    };
+
+    // The stock the sale took comes back with the void. The sum is per
+    // product, so a ticket with two lines of the same dish restores
+    // both in one write. The guard is the same open-order rule: a void
+    // that did not happen must not move the shelf.
+    var stock_params: [3]native_sdk.EffectDbValue = .{
+        .{ .integer = order_id },
+        .{ .integer = at },
+        .{ .integer = completed },
+    };
+    statements[2] = .{
+        .sql =
+        \\UPDATE product
+        \\SET stock_qty = COALESCE(stock_qty, 0) + (
+        \\      SELECT COALESCE(SUM(qty), 0) FROM order_line
+        \\      WHERE order_id = ?1 AND product_id = product.id
+        \\    ),
+        \\    updated_at = ?2
+        \\WHERE track_stock = 1
+        \\  AND EXISTS (
+        \\    SELECT 1 FROM order_line
+        \\    WHERE order_id = ?1 AND product_id = product.id
+        \\  )
+        \\  AND EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status < ?3);
+        ,
+        .params = &stock_params,
+    };
+
+    var order_params: [4]native_sdk.EffectDbValue = .{
+        .{ .integer = order_id },
+        .{ .integer = @intFromEnum(domain.OrderStatus.voided) },
+        .{ .integer = at },
+        .{ .integer = completed },
+    };
+    statements[3] = .{
+        .sql = "UPDATE orders SET status = ?2, updated_at = ?3 WHERE id = ?1 AND status < ?4;",
+        .params = &order_params,
+    };
+    var count: usize = 4;
+
+    var json_buffer: [256]u8 = undefined;
+    var op_id_buffer: [96]u8 = undefined;
+    var entity_buffer: [32]u8 = undefined;
+    var clock_buffer: [32]u8 = undefined;
+    var op_params: [8]native_sdk.EffectDbValue = undefined;
+    var clock_params: [1]native_sdk.EffectDbValue = undefined;
+
+    const snapshot = record.OrderStatusSnapshot{
+        .id = origin.id,
+        .origin_device = origin.device,
+        .status = @intFromEnum(domain.OrderStatus.voided),
+        .changed_at = at,
+    };
+    const op_ready = build_op: {
+        var json_writer = std.Io.Writer.fixed(&json_buffer);
+        std.json.Stringify.value(snapshot, .{}, &json_writer) catch break :build_op false;
+        const data_json = json_writer.buffered();
+
+        const device_id = syncDeviceId(model);
+        const clock = nextSyncClock(model);
+        const op_id = record.formatId(&op_id_buffer, device_id, clock, 0) catch break :build_op false;
+        const entity_id = std.fmt.bufPrint(&entity_buffer, "{d}", .{origin.id}) catch break :build_op false;
+        const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{clock}) catch break :build_op false;
+
+        op_params = .{
+            .{ .text = op_id },
+            .{ .text = "order_status" },
+            .{ .text = entity_id },
+            .{ .text = "update" },
+            .{ .text = data_json },
+            .{ .integer = @intCast(clock) },
+            .{ .text = device_id },
+            .{ .integer = at },
+        };
+        clock_params = .{.{ .text = clock_text }};
+        model.sync_cursor.observe(device_id, clock) catch {};
+
+        const wire_op: record.Op = .{
+            .id = op_id,
+            .entity_table = "order_status",
+            .entity_id = entity_id,
+            .operation = .update,
+            .logical_clock = clock,
+            .device_id = device_id,
+            .created_at = at,
+            .data_json = data_json,
+        };
+        var wire_buffer: [8 * 1024]u8 = undefined;
+        var wire_writer = std.Io.Writer.fixed(&wire_buffer);
+        if (record.encode(&wire_writer, wire_op)) {
+            cacheOp(model, wire_op, wire_writer.buffered());
+        } else |_| {}
+        break :build_op true;
+    };
+
+    if (op_ready) {
+        // The op belongs to the order update. `changes()` is 1 only
+        // when the void really moved the order out of an open status,
+        // so a repeat writes neither an op nor a clock.
+        statements[count] = .{ .sql = insert_op_if_written_sql, .params = &op_params };
+        count += 1;
+        statements[count] = .{ .sql = save_clock_if_op_written_sql, .params = &clock_params };
         count += 1;
     }
 

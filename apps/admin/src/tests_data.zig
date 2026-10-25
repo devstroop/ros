@@ -2634,6 +2634,90 @@ test "the stock comes down with the sale" {
     try testing.expectEqual(@as(i64, 99), untouched);
 }
 
+test "voiding an order restores its stock and writes one audit row" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // Two counted dishes go out, so eight are left.
+    harness.fx.dbExec(.{
+        .key = 942,
+        .statements = &.{.{
+            .sql = "UPDATE product SET track_stock = 1, stock_qty = 10 WHERE id = 1;",
+            .params = &.{},
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 10, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+
+    try testing.expectEqual(@as(usize, 1), harness.model.orders.len);
+    const order_id = harness.model.orders[0].id;
+    try testing.expectEqual(
+        @as(i64, 8),
+        try countRows(&harness, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+
+    // The cashier voids it, with a reason.
+    harness.model.void_reason_buf.set("customer left");
+    harness.send(Msg{ .void_order = order_id });
+
+    // A voided order leaves the open board, and the database says so.
+    try testing.expectEqual(nav.Screen.orders, harness.model.screen());
+    try testing.expectEqual(@as(usize, 0), harness.model.orders.len);
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.voided)),
+        try countRows(
+            &harness,
+            "SELECT status AS n FROM orders WHERE id = ?1;",
+            &.{.{ .integer = order_id }},
+        ),
+    );
+    try testing.expectEqual(
+        @as(i64, 10),
+        try countRows(&harness, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(
+            &harness,
+            "SELECT COUNT(*) AS n FROM void_log_entry WHERE order_id = ?1 AND reason = ?2;",
+            &.{ .{ .integer = order_id }, .{ .text = "customer left" } },
+        ),
+    );
+
+    // A second void is a repeat, not a second write: no second audit
+    // row, no second stock restore, no second op.
+    repos.voidOrder(&harness.model, harness.fx, order_id, "customer left", 1_700_000_001_000);
+    harness.drain();
+    try testing.expectEqual(
+        @as(i64, 10),
+        try countRows(&harness, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(
+            &harness,
+            "SELECT COUNT(*) AS n FROM void_log_entry WHERE order_id = ?1;",
+            &.{.{ .integer = order_id }},
+        ),
+    );
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(
+            &harness,
+            "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'order_status' AND operation = 'update';",
+            &.{},
+        ),
+    );
+}
+
 test "a discount is saved, and it takes what the owner said off" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();
