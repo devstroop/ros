@@ -3149,6 +3149,84 @@ test "a waiter's plate comes off the shelf, and a void puts it back" {
     );
 }
 
+test "paying a table order closes it, frees the table and keeps the stock sold" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // A counted dish at five percent.
+    harness.fx.dbExec(.{
+        .key = 955,
+        .statements = &.{
+            .{
+                .sql = "INSERT INTO tax_slab (id, name, rate_bps, inclusive, active) VALUES (2, 'GST 5%', 500, 0, 1);",
+                .params = &.{},
+            },
+            .{
+                .sql = "UPDATE product SET tax_slab_id = 2, track_stock = 1, stock_qty = 10 WHERE id = 1;",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+    repos.loadTaxSlabs(&harness.model, harness.fx);
+    harness.drain();
+
+    harness.model.employee_id = 7;
+    harness.model.tables = &.{
+        .{ .id = 1, .category_id = 1, .name = "T1", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 0, .pos_y = 0 },
+    };
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 2, .stock_qty = 10, .active = true },
+    };
+
+    harness.send(.{ .select_table = 1 });
+    harness.send(.{ .add_to_order = 1 });
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+
+    const order = harness.model.orders[0];
+    // The bill is the menu price plus the tax.
+    try testing.expectEqual(@as(i64, 25725), order.total_minor);
+
+    // The table pays at the till on the same device.
+    harness.send(.{ .pay_order = order.id });
+    harness.send(.{ .set_payment_mode = @intFromEnum(domain.PaymentMode.cash) });
+    harness.send(Msg{ .take_payment = {} });
+    try testing.expectEqualStrings("", harness.model.payment_error_text());
+
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqual(@as(usize, 1), harness.model.orders.len);
+    try testing.expectEqual(domain.OrderStatus.completed, harness.model.orders[0].status);
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.completed)),
+        try countRows(
+            &harness,
+            "SELECT status AS n FROM orders WHERE id = ?1;",
+            &.{.{ .integer = order.id }},
+        ),
+    );
+    // The money recorded is the bill the guest paid.
+    try testing.expectEqual(
+        @as(i64, 25725),
+        try countRows(
+            &harness,
+            "SELECT amount_minor AS n FROM payment WHERE order_id = ?1;",
+            &.{.{ .integer = order.id }},
+        ),
+    );
+    // The table is free, and the dish that was cooked stays sold.
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&harness, "SELECT status AS n FROM dining_table WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 9),
+        try countRows(&harness, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+}
+
 test "a waiter's table order and its plates reach the kitchen" {
     var a = try seeded(testing.allocator);
     defer a.deinit();
