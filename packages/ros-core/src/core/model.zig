@@ -1906,7 +1906,18 @@ pub const Model = struct {
     }
 
     /// The total of the order just placed, in minor units.
+    ///
+    /// The board's copy of the order is the truth while it is loaded: a
+    /// plate added on another device updates the order there, and the
+    /// confirmation's total and the change worked out from it have to
+    /// follow. The stored total is the fallback for a sale whose board
+    /// has already moved on.
     pub fn last_order_total(model: *const Model) i64 {
+        if (model.last_order_id != 0) {
+            for (model.orders) |order| {
+                if (order.id == model.last_order_id) return order.total_minor;
+            }
+        }
         return model.last_order_total_minor;
     }
 
@@ -1943,7 +1954,7 @@ pub const Model = struct {
     /// prints a figure it can stand behind. The payment itself refuses
     /// a tender below the total rather than inventing one.
     pub fn cash_change(model: *const Model) i64 {
-        const total = model.last_order_total_minor;
+        const total = model.last_order_total();
         if (total <= 0) return 0;
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return 0;
@@ -1954,7 +1965,7 @@ pub const Model = struct {
 
     /// True when the customer handed over less than the bill.
     pub fn cash_short(model: *const Model) bool {
-        const total = model.last_order_total_minor;
+        const total = model.last_order_total();
         if (total <= 0) return false;
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return false;

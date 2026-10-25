@@ -732,6 +732,56 @@ test "cash change is read in the company's decimals" {
     try testing.expect(model.cash_tender_invalid());
 }
 
+test "the confirmation total follows a plate added after the sale" {
+    var model = main.initialModel();
+    model.last_order_id = 10;
+    model.last_order_total_minor = 24500;
+    model.last_order_items_count = 2;
+
+    // The cashier opened the confirmation for 245.00. A waiter added a
+    // plate on another device, and the board reloaded the order at
+    // 269.50. The screen and the change are about the bill as it stands
+    // now, not the figure the sale remembered.
+    var orders = [_]domain.Order{
+        .{
+            .id = 10,
+            .order_no = "000010",
+            .order_type = .dine_in,
+            .status = .pending,
+            .status_label = "Pending",
+            .type_label = "Dine in",
+            .dining_table_id = 1,
+            .customer_id = 0,
+            .employee_id = 7,
+            .subtotal_minor = 24500,
+            .tax_minor = 2450,
+            .discount_minor = 0,
+            .total_minor = 26950,
+            .placed_at = 1700000000000,
+            .notes = "",
+        },
+    };
+    model.orders = &orders;
+
+    try testing.expectEqual(@as(i64, 26950), model.last_order_total());
+
+    // The old tender is short of the new bill.
+    model.cash_tendered_buf.set("250.00");
+    try testing.expect(model.cash_short());
+    try testing.expectEqual(@as(i64, 0), model.cash_change());
+
+    // The new tender covers it, and the change is worked out from the
+    // bill the customer is actually paying.
+    model.cash_tendered_buf.set("300.00");
+    try testing.expect(!model.cash_short());
+    try testing.expectEqual(@as(i64, 3050), model.cash_change());
+
+    // A board that no longer carries the order falls back to the total
+    // stored when the confirmation opened.
+    model.orders = &.{};
+    try testing.expectEqual(@as(i64, 24500), model.last_order_total());
+}
+
 test "a failed salt write does not make the salt look confirmed" {
     var fx = try fakeFx();
     defer fx.deinit();
