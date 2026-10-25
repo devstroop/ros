@@ -1130,6 +1130,78 @@ test "a retried write is the same sale" {
     try testing.expectEqualStrings("000002", harness.model.orders[0].order_no);
 }
 
+test "a retried sale takes the stock once and writes one op" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // A counted dish with ten on the shelf. The retry test above uses
+    // an untracked product, which is why it never saw the stock taken
+    // twice.
+    harness.fx.dbExec(.{
+        .key = 941,
+        .statements = &.{.{
+            .sql = "UPDATE product SET track_stock = 1, stock_qty = 10 WHERE id = 1;",
+            .params = &.{},
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    const order = domain.Order{
+        .id = 1_700_000_000_000,
+        .order_no = "",
+        .order_type = .dine_in,
+        .status = .pending,
+        .status_label = "Pending",
+        .type_label = "Dine in",
+        .dining_table_id = 0,
+        .customer_id = 0,
+        .employee_id = 7,
+        .subtotal_minor = 49_000,
+        .tax_minor = 0,
+        .discount_minor = 0,
+        .total_minor = 49_000,
+        .placed_at = 1_700_000_000_000,
+        .notes = "",
+    };
+    // The line id the POS really writes: the order's id namespaced by
+    // the line index.
+    const lines = [_]domain.OrderLine{.{
+        .id = order.id * 128,
+        .order_id = order.id,
+        .product_id = 1,
+        .station_id = 0,
+        .product_name = "Paneer Tikka",
+        .qty = 2,
+        .unit_price_minor = 24_500,
+        .tax_bps = 0,
+        .notes = "",
+    }};
+    const key = "test01-1700000000000";
+
+    repos.saveOrder(&harness.model, harness.fx, order, &lines, key);
+    harness.drain();
+    // The same sale again: the write landed but the answer was lost.
+    repos.saveOrder(&harness.model, harness.fx, order, &lines, key);
+    harness.drain();
+
+    // Two sold, eight left - not six.
+    try testing.expectEqual(
+        @as(i64, 8),
+        try countRows(&harness, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+
+    // One sale is one create op, not two.
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(
+            &harness,
+            "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'order' AND operation = 'create';",
+            &.{},
+        ),
+    );
+}
+
 test "two sales in the same millisecond are two sales" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();

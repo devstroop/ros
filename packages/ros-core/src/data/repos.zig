@@ -2191,10 +2191,35 @@ const insert_op_log_sql =
     \\ON CONFLICT(id) DO NOTHING;
 ;
 
+/// The create op for a sale is written once. The request key makes the
+/// order insert idempotent; the op log needs the same rule, or a retry
+/// tells every peer that the same sale happened twice. The first
+/// attempt leaves a create op for this origin behind, so its presence
+/// is the durable answer to "did this sale land?".
+const insert_order_op_sql =
+    \\INSERT INTO op_log (id, entity_table, entity_id, operation, data_json,
+    \\  previous_json, logical_clock, device_id, host_id, parent_id, created_at)
+    \\SELECT ?1, ?2, ?3, ?4, ?5, '{}', ?6, ?7, '', '', ?8
+    \\WHERE NOT EXISTS (
+    \\  SELECT 1 FROM op_log
+    \\  WHERE entity_table = 'order' AND entity_id = ?3
+    \\    AND operation = 'create' AND device_id = ?7
+    \\)
+    \\ON CONFLICT(id) DO NOTHING;
+;
+
 /// The local Lamport clock is durable: a device that restarts must not
 /// reuse a clock and make an old op look new.
 const save_clock_sql =
     \\INSERT INTO sync_state (key, value) VALUES ('clock', ?1)
+    \\ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+;
+
+/// Save the clock only when the op row it belongs to really inserted.
+/// A retry skips the op; advancing the clock for a write that did not
+/// happen would leave a hole in the device's own history.
+const save_clock_if_op_written_sql =
+    \\INSERT INTO sync_state (key, value) SELECT 'clock', ?1 WHERE changes() = 1
     \\ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 ;
 
@@ -2950,7 +2975,7 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
         statements[count] = .{
             .sql =
             \\UPDATE product SET stock_qty = COALESCE(stock_qty, 0) - ?1, updated_at = ?3
-            \\WHERE id = ?2 AND track_stock = 1;
+            \\WHERE id = ?2 AND track_stock = 1 AND changes() = 1;
             ,
             .params = &stock_params[slot],
         };
@@ -3048,9 +3073,9 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
     };
 
     if (op_ready) {
-        statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
+        statements[count] = .{ .sql = insert_order_op_sql, .params = &op_params };
         count += 1;
-        statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
+        statements[count] = .{ .sql = save_clock_if_op_written_sql, .params = &clock_params };
         count += 1;
     }
 
