@@ -1386,6 +1386,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.busy = true;
             model.error_text = "";
             repos.saveStockCount(
+                model,
                 fx,
                 repos.key_save_stock,
                 model.form_stock_product_id,

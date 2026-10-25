@@ -564,6 +564,7 @@ pub fn loadStock(model: *Model, fx: *Effects) void {
 /// `stock_adjustment` row is the ledger - the count is what the shelf
 /// says now, and the adjustment says how it got there.
 pub fn saveStockCount(
+    model: *Model,
     fx: *Effects,
     key: u64,
     product_id: i64,
@@ -572,32 +573,115 @@ pub fn saveStockCount(
     reason: []const u8,
     at: i64,
 ) void {
+    // A count is a measurement of the shelf, so it travels as an
+    // absolute number: a peer a few sales behind must land on the
+    // counted figure, not on its own guess plus a delta. The movement
+    // is written as an op for the same reason a sale is - a shelf that
+    // only the admin can see is not a shared shelf.
+    var json_buffer: [1024]u8 = undefined;
+    var op_id_buffer: [96]u8 = undefined;
+    var entity_buffer: [32]u8 = undefined;
+    var clock_buffer: [32]u8 = undefined;
+    var op_params: [8]native_sdk.EffectDbValue = undefined;
+    var clock_params: [1]native_sdk.EffectDbValue = undefined;
+    var op_reference: []const u8 = "";
+
+    const op_ready = build_op: {
+        const movements = [1]record.StockMovement{.{
+            .product_id = product_id,
+            .delta = delta,
+            .qty = qty,
+            .reason = reason,
+        }};
+        const snapshot = record.StockSnapshot{ .movements = &movements };
+
+        var json_writer = std.Io.Writer.fixed(&json_buffer);
+        std.json.Stringify.value(snapshot, .{}, &json_writer) catch break :build_op false;
+        const data_json = json_writer.buffered();
+
+        const device_id = syncDeviceId(model);
+        const clock = nextSyncClock(model);
+        const op_id = record.formatId(&op_id_buffer, device_id, clock, 0) catch break :build_op false;
+        const entity_id = std.fmt.bufPrint(&entity_buffer, "{d}", .{product_id}) catch break :build_op false;
+        const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{clock}) catch break :build_op false;
+
+        op_params = .{
+            .{ .text = op_id },
+            .{ .text = "stock" },
+            .{ .text = entity_id },
+            .{ .text = "create" },
+            .{ .text = data_json },
+            .{ .integer = @intCast(clock) },
+            .{ .text = device_id },
+            .{ .integer = at },
+        };
+        clock_params = .{.{ .text = clock_text }};
+        op_reference = op_id;
+        model.sync_cursor.observe(device_id, clock) catch {};
+
+        const wire_op: record.Op = .{
+            .id = op_id,
+            .entity_table = "stock",
+            .entity_id = entity_id,
+            .operation = .create,
+            .logical_clock = clock,
+            .device_id = device_id,
+            .created_at = at,
+            .data_json = data_json,
+        };
+        var wire_buffer: [2048]u8 = undefined;
+        var wire_writer = std.Io.Writer.fixed(&wire_buffer);
+        if (record.encode(&wire_writer, wire_op)) {
+            cacheOp(model, wire_op, wire_writer.buffered());
+        } else |_| {}
+        break :build_op true;
+    };
+
     // The count, the move, the reason, the product and the moment. The
     // count is what the shelf says now; the move is how far it came.
-    var params: [5]native_sdk.EffectDbValue = .{
+    // The op id is the reference, so a peer that applies the same count
+    // twice writes one ledger row, not two.
+    var ledger_params: [6]native_sdk.EffectDbValue = .{
+        .{ .integer = qty },
+        .{ .integer = delta },
+        .{ .text = reason },
+        .{ .integer = product_id },
+        .{ .integer = at },
+        .{ .text = op_reference },
+    };
+    var product_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = qty },
         .{ .integer = delta },
         .{ .text = reason },
         .{ .integer = product_id },
         .{ .integer = at },
     };
+    var statements: [4]native_sdk.EffectDbStatement = undefined;
+    statements[0] = .{
+        .sql =
+        \\INSERT INTO stock_adjustment (id, product_id, delta, reason, reference, created_at)
+        \\VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM stock_adjustment), ?4, ?2, ?3, ?6, ?5);
+        ,
+        .params = &ledger_params,
+    };
+    statements[1] = .{
+        .sql = "UPDATE product SET stock_qty = ?1, updated_at = ?5 WHERE id = ?4;",
+        .params = &product_params,
+    };
+    var count: usize = 2;
+    if (op_ready) {
+        statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
+        count += 1;
+        statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
+        count += 1;
+    }
+
     fx.dbExec(.{
         .key = key,
-        .statements = &.{
-            .{
-                .sql =
-                \\INSERT INTO stock_adjustment (id, product_id, delta, reason, reference, created_at)
-                \\VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM stock_adjustment), ?4, ?2, ?3, '', ?5);
-                ,
-                .params = &params,
-            },
-            .{
-                .sql = "UPDATE product SET stock_qty = ?1, updated_at = ?5 WHERE id = ?4;",
-                .params = &params,
-            },
-        },
+        .statements = statements[0..count],
         .on_result = Effects.dbMsg(.stock_saved),
     });
+    saveCursor(model, fx);
 }
 
 /// Load the day's takings, and the way they were paid.
@@ -1890,11 +1974,14 @@ pub fn addOrderLine(
     var statements: [5]native_sdk.EffectDbStatement = undefined;
     statements[0] = .{
         // The id is the plate's name across devices, not a row number:
-        // a second waiter's plate must not take the same name.
+        // a second waiter's plate must not take the same name. The
+        // marker says the plate is in this device's stock figure, so a
+        // later void knows to put it back.
         .sql =
         \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
-        \\  unit_price_minor, tax_bps, notes, created_at)
-        \\VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, '', ?7);
+        \\  unit_price_minor, tax_bps, notes, stock_taken, created_at)
+        \\VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, '',
+        \\  COALESCE((SELECT track_stock FROM product WHERE id = ?3), 0), ?7);
         ,
         .params = &line_params,
     };
@@ -2918,7 +3005,9 @@ const insert_snapshot_orders_sql =
     \\        'qty', order_line.qty,
     \\        'unit_price_minor', order_line.unit_price_minor,
     \\        'tax_bps', order_line.tax_bps,
-    \\        'notes', order_line.notes
+    \\        'notes', order_line.notes,
+    \\        'stock_taken', json(CASE
+    \\          WHEN order_line.stock_taken = 1 THEN 'true' ELSE 'false' END)
     \\      ))
     \\      FROM order_line WHERE order_line.order_id = snapshot_orders.id
     \\    )
@@ -2981,6 +3070,40 @@ const insert_snapshot_payments_sql =
     \\)
     \\FROM snapshot_orders
     \\JOIN payment ON payment.order_id = snapshot_orders.id;
+;
+
+/// The shelf goes with the snapshot. A late joiner cannot replay the
+/// sales that moved it - their orders are already folded into the
+/// current figure - so each counted product travels as one absolute
+/// movement. The rows sort after the orders, statuses and payments;
+/// the movement is a state, not a history.
+const insert_snapshot_stock_sql =
+    \\WITH tracked AS (
+    \\  SELECT id, COALESCE(stock_qty, 0) AS qty, updated_at,
+    \\    row_number() OVER (ORDER BY id) AS seq
+    \\  FROM product
+    \\  WHERE track_stock = 1
+    \\)
+    \\INSERT INTO sync_snapshot_op (version, seq, line)
+    \\SELECT ?1, 3000000000 + seq, json_object(
+    \\  'id', printf('%s:1:%d', ?2, 3000000000 + seq),
+    \\  'entity_table', 'stock',
+    \\  'entity_id', CAST(id AS TEXT),
+    \\  'operation', 'create',
+    \\  'logical_clock', 1,
+    \\  'device_id', ?2,
+    \\  'created_at', updated_at,
+    \\  'data', json_object(
+    \\    'movements', json_array(json_object(
+    \\      'product_id', id,
+    \\      'delta', 0,
+    \\      'qty', qty,
+    \\      'reason', 'snapshot',
+    \\      'reference', ''
+    \\    ))
+    \\  )
+    \\)
+    \\FROM tracked;
 ;
 
 const delete_compacted_ops_sql =
@@ -3067,6 +3190,8 @@ pub fn compactSyncLog(model: *Model, fx: *Effects) void {
     count += 1;
     statements[count] = .{ .sql = insert_snapshot_payments_sql, .params = &snapshot_params };
     count += 1;
+    statements[count] = .{ .sql = insert_snapshot_stock_sql, .params = &snapshot_params };
+    count += 1;
 
     for (0..cutoff_count) |index| {
         statements[count] = .{
@@ -3140,6 +3265,9 @@ pub fn applySnapshotOp(model: *Model, fx: *Effects, op: record.Op) bool {
     } else if (std.mem.eql(u8, op.entity_table, "payment")) {
         const snapshot = record.parsePayment(arena, op.data_json) catch return false;
         applyPayment(fx, op, snapshot, false);
+    } else if (std.mem.eql(u8, op.entity_table, "stock")) {
+        const snapshot = record.parseStock(arena, op.data_json) catch return false;
+        applyStock(fx, op, snapshot, false);
     } else {
         return false;
     }
@@ -3284,8 +3412,9 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
         statements[count] = .{
             .sql =
             \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
-            \\  unit_price_minor, tax_bps, notes, created_at)
-            \\VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            \\  unit_price_minor, tax_bps, notes, stock_taken, created_at)
+            \\VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+            \\  COALESCE((SELECT track_stock FROM product WHERE id = ?3), 0), ?9)
             \\ON CONFLICT(id) DO NOTHING;
             ,
             .params = &line_params[slot],
@@ -3551,7 +3680,7 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
     const origin = orderOrigin(model, order_id);
     const completed = @intFromEnum(domain.OrderStatus.completed);
 
-    var statements: [7]native_sdk.EffectDbStatement = undefined;
+    var statements: [10]native_sdk.EffectDbStatement = undefined;
 
     var log_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
@@ -3585,10 +3714,13 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
         .params = &history_params,
     };
 
-    // The stock the sale took comes back with the void. The sum is per
-    // product, so a ticket with two lines of the same dish restores
-    // both in one write. The guard is the same open-order rule: a void
-    // that did not happen must not move the shelf.
+    // The stock the sale took comes back with the void. Only a line
+    // whose plate is in this device's stock figure moves: a snapshot
+    // line brought its own figure with it, and a product that is not
+    // counted never left the shelf. The sum is per product, so a
+    // ticket with two lines of the same dish restores both in one
+    // write. The guard is the same open-order rule: a void that did
+    // not happen must not move the shelf.
     var stock_params: [3]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
         .{ .integer = at },
@@ -3600,12 +3732,14 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
         \\SET stock_qty = COALESCE(stock_qty, 0) + (
         \\      SELECT COALESCE(SUM(qty), 0) FROM order_line
         \\      WHERE order_id = ?1 AND product_id = product.id
+        \\        AND stock_taken = 1
         \\    ),
         \\    updated_at = ?2
         \\WHERE track_stock = 1
         \\  AND EXISTS (
         \\    SELECT 1 FROM order_line
         \\    WHERE order_id = ?1 AND product_id = product.id
+        \\      AND stock_taken = 1
         \\  )
         \\  AND EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status < ?3);
         ,
@@ -3714,6 +3848,23 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
     };
     count += 1;
 
+    // The plates have gone back on the shelf; the markers follow. This
+    // is idempotent and guarded by the order really being voided, so a
+    // second tap clears nothing twice.
+    var clear_params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = order_id },
+        .{ .integer = @intFromEnum(domain.OrderStatus.voided) },
+    };
+    statements[count] = .{
+        .sql =
+        \\UPDATE order_line SET stock_taken = 0
+        \\WHERE order_id = ?1 AND stock_taken = 1
+        \\  AND EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status = ?2);
+        ,
+        .params = &clear_params,
+    };
+    count += 1;
+
     fx.dbExec(.{
         .key = key_write_order,
         .statements = statements[0..count],
@@ -3760,6 +3911,12 @@ pub fn applyOp(model: *Model, fx: *Effects, op: record.Op) void {
             return;
         };
         applyPayment(fx, op, snapshot, true);
+    } else if (std.mem.eql(u8, op.entity_table, "stock")) {
+        const snapshot = record.parseStock(arena, op.data_json) catch {
+            model.sync_rejected += 1;
+            return;
+        };
+        applyStock(fx, op, snapshot, true);
     } else {
         // The other tables arrive with their own slices. Refusing an
         // op we do not understand is safer than writing half of it.
@@ -3787,7 +3944,7 @@ pub fn applyOp(model: *Model, fx: *Effects, op: record.Op) void {
 }
 
 fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persist: bool) void {
-    var statements: [7 + max_order_lines]native_sdk.EffectDbStatement = undefined;
+    var statements: [10 + 2 * max_order_lines]native_sdk.EffectDbStatement = undefined;
     var count: usize = 0;
 
     // The origin pair is the stable name. A create op written before
@@ -3906,12 +4063,21 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
     count += 1;
 
     const first_line_statement = count;
-    var line_params: [max_order_lines][12]native_sdk.EffectDbValue = undefined;
+    var line_params: [max_order_lines][13]native_sdk.EffectDbValue = undefined;
+    var stock_params: [max_order_lines][5]native_sdk.EffectDbValue = undefined;
     for (snapshot.lines, 0..) |line, index| {
-        // Three slots are reserved for the recomputed money, the op row
-        // and the clock.
-        if (count + 4 > statements.len) break;
+        // The recount, the op row, the clock and this line's stock
+        // movement are reserved, so a full statement array never cuts
+        // a line's shelf movement off from its insert.
+        if (count + 5 > statements.len) break;
         const slot = count - first_line_statement;
+        // A live op moved the shelf on the sender, so the receiver
+        // moves its own when it inserts the line. A snapshot did not:
+        // its marker comes from the sender, and says whether the
+        // plate is already inside the snapshot's absolute count. An
+        // old snapshot without the field is treated as a sale, the
+        // way the migration backfills it.
+        const carries_stock = if (persist) true else (line.stock_taken orelse true);
         line_params[slot] = .{
             nullableIdParam(line.product_id),
             .{ .text = line.product_name },
@@ -3935,11 +4101,14 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
             // this database's order id. A negative name is a plate
             // added from any device and is already global.
             .{ .integer = line.id },
+            // Whether the sender's stock figure already includes this
+            // plate.
+            .{ .integer = if (carries_stock) 1 else 0 },
         };
         statements[count] = .{
             .sql =
             \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
-            \\  unit_price_minor, tax_bps, notes, created_at)
+            \\  unit_price_minor, tax_bps, notes, stock_taken, created_at)
             \\SELECT
             \\  CASE
             \\    WHEN ?12 < 0 THEN ?12
@@ -3948,7 +4117,15 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
             \\  END,
             \\  (SELECT id FROM orders WHERE origin_device = ?8 AND origin_id = ?9),
             \\  (SELECT id FROM product WHERE id = ?1),
-            \\  ?2, ?3, ?4, ?5, ?6, ?10
+            \\  ?2, ?3, ?4, ?5, ?6,
+            \\  CASE WHEN ?13 = 1
+            \\    AND EXISTS (
+            \\      SELECT 1 FROM orders
+            \\      WHERE origin_device = ?8 AND origin_id = ?9 AND status < 4
+            \\    )
+            \\    AND COALESCE((SELECT track_stock FROM product WHERE id = ?1), 0) = 1
+            \\  THEN 1 ELSE 0 END,
+            \\  ?10
             \\WHERE EXISTS (
             \\  SELECT 1 FROM orders
             \\  WHERE origin_device = ?8 AND origin_id = ?9
@@ -3959,6 +4136,34 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
             .params = &line_params[slot],
         };
         count += 1;
+
+        // The plate leaves the shelf on every device that learns of it,
+        // not only on the one that rang it up. The line insert is the
+        // guard: a repeat, a snapshot replay or a late plate on a
+        // closed bill moves nothing. Its marker already encodes the
+        // same rule, so the update cannot disagree with a future void.
+        if (persist) {
+            stock_params[slot] = .{
+                .{ .integer = line.qty },
+                .{ .integer = line.product_id orelse 0 },
+                .{ .text = origin_device },
+                .{ .integer = origin_id },
+                .{ .integer = op.created_at },
+            };
+            statements[count] = .{
+                .sql =
+                \\UPDATE product
+                \\SET stock_qty = COALESCE(stock_qty, 0) - ?1, updated_at = ?5
+                \\WHERE id = ?2 AND track_stock = 1 AND changes() = 1
+                \\  AND EXISTS (
+                \\    SELECT 1 FROM orders
+                \\    WHERE origin_device = ?3 AND origin_id = ?4 AND status < 4
+                \\  );
+                ,
+                .params = &stock_params[slot],
+            };
+            count += 1;
+        }
     }
 
     // An update carries a whole ticket, but two waiters can add a
@@ -4029,7 +4234,7 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
 }
 
 fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSnapshot, persist: bool) void {
-    var statements: [6]native_sdk.EffectDbStatement = undefined;
+    var statements: [8]native_sdk.EffectDbStatement = undefined;
     var params: [4]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.id },
         .{ .integer = snapshot.status },
@@ -4073,6 +4278,74 @@ fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSna
         .params = &params,
     };
     var count: usize = 2;
+
+    // A synced void puts the plates back on every device, not only on
+    // the one that pressed the button. The history row is the guard:
+    // `changes()` is 1 only when the status really moved to voided, so
+    // a repeat or a late op restores nothing twice. The marker keeps a
+    // snapshot line's stock from being restored on a device that never
+    // took it off the shelf.
+    if (persist and snapshot.status == @intFromEnum(domain.OrderStatus.voided)) {
+        var restore_params: [3]native_sdk.EffectDbValue = .{
+            .{ .integer = snapshot.id },
+            .{ .integer = snapshot.changed_at },
+            .{ .text = snapshot.origin_device },
+        };
+        statements[count] = .{
+            .sql =
+            \\UPDATE product
+            \\SET stock_qty = COALESCE(stock_qty, 0) + (
+            \\      SELECT COALESCE(SUM(qty), 0) FROM order_line
+            \\      WHERE order_id = (
+            \\        CASE WHEN ?3 = ''
+            \\          THEN (SELECT id FROM orders WHERE id = ?1)
+            \\          ELSE (SELECT id FROM orders WHERE origin_device = ?3 AND origin_id = ?1)
+            \\        END
+            \\      )
+            \\      AND product_id = product.id AND stock_taken = 1
+            \\    ),
+            \\    updated_at = ?2
+            \\WHERE track_stock = 1
+            \\  AND changes() = 1
+            \\  AND EXISTS (
+            \\    SELECT 1 FROM order_line
+            \\    WHERE order_id = (
+            \\      CASE WHEN ?3 = ''
+            \\        THEN (SELECT id FROM orders WHERE id = ?1)
+            \\        ELSE (SELECT id FROM orders WHERE origin_device = ?3 AND origin_id = ?1)
+            \\      END
+            \\    )
+            \\    AND product_id = product.id AND stock_taken = 1
+            \\  );
+            ,
+            .params = &restore_params,
+        };
+        count += 1;
+
+        var clear_params: [3]native_sdk.EffectDbValue = .{
+            .{ .integer = snapshot.id },
+            .{ .text = snapshot.origin_device },
+            .{ .integer = @intFromEnum(domain.OrderStatus.voided) },
+        };
+        statements[count] = .{
+            .sql =
+            \\UPDATE order_line SET stock_taken = 0
+            \\WHERE order_id = (
+            \\  CASE WHEN ?2 = ''
+            \\    THEN (SELECT id FROM orders WHERE id = ?1)
+            \\    ELSE (SELECT id FROM orders WHERE origin_device = ?2 AND origin_id = ?1)
+            \\  END
+            \\)
+            \\  AND stock_taken = 1
+            \\  AND EXISTS (
+            \\    SELECT 1 FROM orders
+            \\    WHERE id = order_line.order_id AND status = ?3
+            \\  );
+            ,
+            .params = &clear_params,
+        };
+        count += 1;
+    }
 
     // A void frees its table on every device, not only on the one that
     // pressed the button. The order is named by its origin pair, and
@@ -4242,6 +4515,105 @@ fn applyPayment(fx: *Effects, op: record.Op, snapshot: record.PaymentSnapshot, p
         .{ .integer = op.created_at },
     };
     if (persist) {
+        statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
+        count += 1;
+
+        var clock_buffer: [32]u8 = undefined;
+        const clock_text = std.fmt.bufPrint(&clock_buffer, "{d}", .{op.logical_clock}) catch return;
+        var clock_params: [1]native_sdk.EffectDbValue = .{.{ .text = clock_text }};
+        statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
+        count += 1;
+    }
+
+    fx.dbExec(.{
+        .key = key_sync_apply,
+        .statements = statements[0..count],
+        .on_result = Effects.dbMsg(.sync_applied),
+    });
+}
+
+/// Apply a shelf movement from a peer.
+///
+/// A count is absolute (`qty`), so a device that missed a few sales
+/// still lands on the counted number. A delta is relative, for a
+/// movement that only knows how far the shelf moved. The product must
+/// be counted here too: a dish this device does not track is not on
+/// its shelf, and writing a number into it would invent stock.
+///
+/// The ledger row is written only for a live op. A snapshot is a
+/// measurement of the shelf, not a movement somebody made, and
+/// replaying one must not fill the ledger with rows nobody entered.
+/// The op id is the reference and a second delivery of the same op
+/// finds the row already there.
+fn applyStock(fx: *Effects, op: record.Op, snapshot: record.StockSnapshot, persist: bool) void {
+    // The movements are in the op's own JSON, so the whole batch is
+    // one statement even when a snapshot carries the whole shelf.
+    _ = snapshot;
+    var statements: [4]native_sdk.EffectDbStatement = undefined;
+    var movement_params: [2]native_sdk.EffectDbValue = .{
+        .{ .text = op.data_json },
+        .{ .integer = op.created_at },
+    };
+    var ledger_params: [3]native_sdk.EffectDbValue = .{
+        .{ .text = op.data_json },
+        .{ .integer = op.created_at },
+        .{ .text = op.id },
+    };
+    statements[0] = .{
+        .sql =
+        \\UPDATE product
+        \\SET stock_qty = CASE
+        \\      WHEN json_extract(json_each.value, '$.qty') IS NOT NULL
+        \\        THEN json_extract(json_each.value, '$.qty')
+        \\      ELSE COALESCE(stock_qty, 0)
+        \\           + COALESCE(json_extract(json_each.value, '$.delta'), 0)
+        \\    END,
+        \\    updated_at = ?2
+        \\FROM json_each(?1, '$.movements')
+        \\WHERE product.id = json_extract(json_each.value, '$.product_id')
+        \\  AND product.track_stock = 1;
+        ,
+        .params = &movement_params,
+    };
+    var count: usize = 1;
+
+    if (persist) {
+        // `changes()` still reports the update above, so a movement for
+        // a product this database does not count writes no ledger row.
+        statements[count] = .{
+            .sql =
+            \\INSERT INTO stock_adjustment (id, product_id, delta, reason, reference, created_at)
+            \\SELECT (SELECT COALESCE(MAX(id), 0) FROM stock_adjustment)
+            \\         + row_number() OVER (),
+            \\  json_extract(json_each.value, '$.product_id'),
+            \\  COALESCE(json_extract(json_each.value, '$.delta'), 0),
+            \\  COALESCE(json_extract(json_each.value, '$.reason'), ''),
+            \\  ?3, ?2
+            \\FROM json_each(?1, '$.movements')
+            \\WHERE changes() > 0
+            \\  AND NOT EXISTS (
+            \\    SELECT 1 FROM stock_adjustment WHERE reference = ?3
+            \\  )
+            \\  AND EXISTS (
+            \\    SELECT 1 FROM product
+            \\    WHERE product.id = json_extract(json_each.value, '$.product_id')
+            \\      AND product.track_stock = 1
+            \\  );
+            ,
+            .params = &ledger_params,
+        };
+        count += 1;
+
+        var op_params: [8]native_sdk.EffectDbValue = .{
+            .{ .text = op.id },
+            .{ .text = op.entity_table },
+            .{ .text = op.entity_id },
+            .{ .text = op.operation.label() },
+            .{ .text = op.data_json },
+            .{ .integer = @intCast(op.logical_clock) },
+            .{ .text = op.device_id },
+            .{ .integer = op.created_at },
+        };
         statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
         count += 1;
 
@@ -4566,7 +4938,11 @@ const reference_product_sql =
     \\VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
     \\ON CONFLICT(id) DO UPDATE SET category_id = ?2, name = ?3,
     \\  price_minor = ?4, product_type = ?5, food_type = ?6, tax_slab_id = ?7,
-    \\  stock_qty = ?8, track_stock = ?9, description = ?10, image_path = ?11,
+    \\  stock_qty = CASE
+    \\    WHEN product.track_stock = 0 AND ?9 = 1 THEN ?8
+    \\    ELSE product.stock_qty
+    \\  END,
+    \\  track_stock = ?9, description = ?10, image_path = ?11,
     \\  active = ?12, sort_order = ?13, updated_at = ?15;
 ;
 

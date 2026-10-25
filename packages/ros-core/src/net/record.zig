@@ -68,6 +68,11 @@ pub const OrderLineSnapshot = struct {
     unit_price_minor: i64,
     tax_bps: i64,
     notes: []const u8 = "",
+    /// Whether the plate is in the seller's stock figure. A snapshot
+    /// carries the marker so a receiver that tracks the product now
+    /// does not restore stock the seller never took off. Absent on
+    /// live ops, where the receiver derives it from its own shelf.
+    stock_taken: ?bool = null,
 };
 
 /// The order aggregate one op carries.
@@ -130,6 +135,30 @@ pub const PaymentSnapshot = struct {
     paid_at: i64,
 };
 
+/// One movement of the shelf, and the reason it moved.
+///
+/// A sale and a void are deltas: `qty` is null and `delta` is applied to
+/// whatever the receiving device holds. A count and a snapshot are
+/// absolute: `qty` is the number the shelf should say now. Absolute
+/// movements win, because a count is a measurement rather than a guess.
+pub const StockMovement = struct {
+    product_id: i64,
+    delta: i64 = 0,
+    qty: ?i64 = null,
+    reason: []const u8 = "",
+    /// Human-readable provenance. The receiving device keeps it in its
+    /// own `stock_adjustment` row, so the ledger survives the trip.
+    reference: []const u8 = "",
+};
+
+/// The stock side of an op. A count carries one movement; a snapshot
+/// carries one per counted product. Sales and voids do not need this
+/// record: every device derives them from the order op it already
+/// applies, line by line.
+pub const StockSnapshot = struct {
+    movements: []const StockMovement = &.{},
+};
+
 pub fn parseOrder(arena: std.mem.Allocator, data_json: []const u8) !OrderSnapshot {
     return std.json.parseFromSliceLeaky(OrderSnapshot, arena, data_json, .{
         .ignore_unknown_fields = true,
@@ -144,6 +173,12 @@ pub fn parseOrderStatus(arena: std.mem.Allocator, data_json: []const u8) !OrderS
 
 pub fn parsePayment(arena: std.mem.Allocator, data_json: []const u8) !PaymentSnapshot {
     return std.json.parseFromSliceLeaky(PaymentSnapshot, arena, data_json, .{
+        .ignore_unknown_fields = true,
+    });
+}
+
+pub fn parseStock(arena: std.mem.Allocator, data_json: []const u8) !StockSnapshot {
+    return std.json.parseFromSliceLeaky(StockSnapshot, arena, data_json, .{
         .ignore_unknown_fields = true,
     });
 }

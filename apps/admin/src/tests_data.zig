@@ -67,13 +67,14 @@ const migration_sql = [_][]const u8{
     @embedFile("schema/0015_currency_decimals.sql"),
     @embedFile("schema/0016_order_origin.sql"),
     @embedFile("schema/0017_sync_snapshot.sql"),
+    @embedFile("schema/0018_order_line_stock.sql"),
 };
 
 const migration_names = [_][]const u8{
     "core",             "catalog",        "floor",             "customers",    "orders",
     "inventory",        "ops",            "compliance",        "printing",     "sync",
     "default_tax_slab", "order_sequence", "order_request_key", "payment_once", "currency_decimals",
-    "order_origin",     "sync_snapshot",
+    "order_origin",     "sync_snapshot",  "order_line_stock",
 };
 
 /// A model, a real database and a real effects channel, together.
@@ -440,6 +441,24 @@ fn rowsOf(harness: *Harness, sql: []const u8) !Rows {
         }
     }
     return .{ .allocator = harness.allocator, .rows = try out.toOwnedSlice(harness.allocator) };
+}
+
+/// Put a counted product on a device's shelf. The stock tests need the
+/// same starting count on both databases before they exchange an op.
+fn setTrackedStock(harness: *Harness, product_id: i64, qty: i64) !void {
+    var params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = qty },
+        .{ .integer = product_id },
+    };
+    harness.fx.dbExec(.{
+        .key = 909,
+        .statements = &.{.{
+            .sql = "UPDATE product SET track_stock = 1, stock_qty = ?1 WHERE id = ?2;",
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
 }
 
 fn countRows(harness: *Harness, sql: []const u8, params: []const native_sdk.EffectDbValue) !i64 {
@@ -2766,6 +2785,389 @@ test "voiding an order restores its stock and writes one audit row" {
             "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'order_status' AND operation = 'update';",
             &.{},
         ),
+    );
+}
+
+test "a sale takes the stock on the peer, and a replay takes it once" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+
+    // Both tills count the same shelf.
+    try setTrackedStock(&a, 1, 10);
+    try setTrackedStock(&b, 1, 10);
+
+    a.model.employee_id = 7;
+    a.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 10, .active = true },
+    };
+    a.send(.{ .add_to_cart = 1 });
+    a.send(Msg{ .place_order = {} });
+    a.drain();
+    try testing.expectEqual(
+        @as(i64, 9),
+        try countRows(&a, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const op = try latestOp(&a, arena_state.allocator());
+    try testing.expectEqualStrings("order", op.entity_table);
+
+    // The peer that learns of the sale takes the plate off its own
+    // shelf, and marks the line so a later void can put it back.
+    repos.applyOp(&b.model, b.fx, op);
+    b.drain();
+    try testing.expectEqual(
+        @as(i64, 9),
+        try countRows(&b, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&b, "SELECT stock_taken AS n FROM order_line LIMIT 1;", &.{}),
+    );
+    try testing.expectEqual(@as(u32, 1), b.model.sync_applied);
+
+    // A second delivery is the same sale, not a second plate.
+    repos.applyOp(&b.model, b.fx, op);
+    b.drain();
+    try testing.expectEqual(
+        @as(i64, 9),
+        try countRows(&b, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(@as(u32, 1), b.model.sync_skipped);
+}
+
+test "a synced void puts the plate back on the peer, once" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+
+    try setTrackedStock(&a, 1, 10);
+    try setTrackedStock(&b, 1, 10);
+
+    a.model.employee_id = 7;
+    a.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 10, .active = true },
+    };
+    a.send(.{ .add_to_cart = 1 });
+    a.send(Msg{ .place_order = {} });
+    a.drain();
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const order_op = try latestOp(&a, arena_state.allocator());
+    repos.applyOp(&b.model, b.fx, order_op);
+    b.drain();
+    try testing.expectEqual(
+        @as(i64, 9),
+        try countRows(&b, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+    const order_id = a.model.orders[0].id;
+    repos.voidOrder(&a.model, a.fx, order_id, "customer left", 1_700_000_001_000);
+    a.drain();
+    try testing.expectEqual(
+        @as(i64, 10),
+        try countRows(&a, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+
+    const status_op = try latestOp(&a, arena_state.allocator());
+    try testing.expectEqualStrings("order_status", status_op.entity_table);
+    repos.applyOp(&b.model, b.fx, status_op);
+    b.drain();
+    try testing.expectEqual(
+        @as(i64, 10),
+        try countRows(&b, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&b, "SELECT stock_taken AS n FROM order_line LIMIT 1;", &.{}),
+    );
+
+    // A repeat of the void restores nothing twice.
+    repos.applyOp(&b.model, b.fx, status_op);
+    b.drain();
+    try testing.expectEqual(
+        @as(i64, 10),
+        try countRows(&b, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+}
+
+test "a count lands on the peer's absolute figure, not its own delta" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+
+    try setTrackedStock(&a, 1, 20);
+    // B is a few wings behind: its own count says fifteen.
+    try setTrackedStock(&b, 1, 15);
+
+    a.send(.{ .open_inventory = {} });
+    a.drain();
+    a.send(Msg{ .count_stock = 1 });
+    a.model.form_stock_count_buf.set("18");
+    a.model.form_stock_reason_buf.set("two broke");
+    a.send(Msg{ .save_stock_count = {} });
+    a.drain();
+    try testing.expectEqual(
+        @as(i64, 18),
+        try countRows(&a, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const op = try latestOp(&a, arena_state.allocator());
+    try testing.expectEqualStrings("stock", op.entity_table);
+
+    // Eighteen is the measurement, so B lands on eighteen even though
+    // its own shelf said fifteen. Its ledger keeps the reason.
+    repos.applyOp(&b.model, b.fx, op);
+    b.drain();
+    try testing.expectEqual(
+        @as(i64, 18),
+        try countRows(&b, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(
+            &b,
+            "SELECT COUNT(*) AS n FROM stock_adjustment WHERE product_id = 1 AND delta = -2 AND reason = 'two broke' AND reference = ?1;",
+            &.{.{ .text = op.id }},
+        ),
+    );
+
+    // The same count delivered twice is one ledger row.
+    repos.applyOp(&b.model, b.fx, op);
+    b.drain();
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&b, "SELECT COUNT(*) AS n FROM stock_adjustment WHERE product_id = 1;", &.{}),
+    );
+}
+
+test "a snapshot carries the shelf, and voiding its open order puts the plate back" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+
+    try setTrackedStock(&a, 1, 10);
+    try setTrackedStock(&b, 1, 10);
+
+    a.model.employee_id = 7;
+    a.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 10, .active = true },
+    };
+    a.send(.{ .add_to_cart = 1 });
+    a.send(Msg{ .place_order = {} });
+    a.drain();
+    try testing.expectEqual(
+        @as(i64, 9),
+        try countRows(&a, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+
+    repos.compactSyncLog(&a.model, a.fx);
+    a.drain();
+    try testing.expectEqual(@as(u32, 1), a.model.sync_compactions);
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(
+            &a,
+            "SELECT COUNT(*) AS n FROM sync_snapshot_op WHERE line LIKE '%\"entity_table\":\"stock\"%';",
+            &.{},
+        ),
+    );
+
+    const lines = try rowsOf(&a, "SELECT line FROM sync_snapshot_op ORDER BY seq;");
+    defer lines.deinit();
+    for (lines.rows) |row| {
+        var op_arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer op_arena.deinit();
+        const op = try record.decode(op_arena.allocator(), row[0].asText());
+        try testing.expect(repos.applySnapshotOp(&b.model, b.fx, op));
+        b.drain();
+    }
+
+    // The order is replayed as state, not as a sale: the shelf is the
+    // snapshot's nine, not ten minus one. The line remembers the plate
+    // is in that figure, so the void below can restore it.
+    try testing.expectEqual(
+        @as(i64, 9),
+        try countRows(&b, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&b, "SELECT stock_taken AS n FROM order_line LIMIT 1;", &.{}),
+    );
+
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+    repos.voidOrder(&a.model, a.fx, a.model.orders[0].id, "customer left", 1_700_000_001_000);
+    a.drain();
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const status_op = try latestOp(&a, arena_state.allocator());
+    repos.applyOp(&b.model, b.fx, status_op);
+    b.drain();
+    try testing.expectEqual(
+        @as(i64, 10),
+        try countRows(&b, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&b, "SELECT stock_taken AS n FROM order_line LIMIT 1;", &.{}),
+    );
+}
+
+test "a snapshot keeps the seller's marker when the menu changed later" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+
+    // The plate is sold before the restaurant starts counting it, so
+    // the sale does not move the shelf and the line says so.
+    a.model.employee_id = 7;
+    a.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    a.send(.{ .add_to_cart = 1 });
+    a.send(Msg{ .place_order = {} });
+    a.drain();
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&a, "SELECT stock_taken AS n FROM order_line LIMIT 1;", &.{}),
+    );
+
+    // Counting starts afterwards, with a fresh count of ten. The open
+    // ticket is still on the board, but its plate is not in the ten.
+    try setTrackedStock(&a, 1, 10);
+
+    repos.compactSyncLog(&a.model, a.fx);
+    a.drain();
+
+    // The receiving device tracks the product now. It must not treat
+    // the open snapshot line as stock it took: the seller's marker
+    // says the ten already excludes it.
+    try setTrackedStock(&b, 1, 10);
+    const lines = try rowsOf(&a, "SELECT line FROM sync_snapshot_op ORDER BY seq;");
+    defer lines.deinit();
+    for (lines.rows) |row| {
+        var op_arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer op_arena.deinit();
+        const op = try record.decode(op_arena.allocator(), row[0].asText());
+        try testing.expect(repos.applySnapshotOp(&b.model, b.fx, op));
+        b.drain();
+    }
+    try testing.expectEqual(
+        @as(i64, 10),
+        try countRows(&b, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&b, "SELECT stock_taken AS n FROM order_line LIMIT 1;", &.{}),
+    );
+
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+    repos.voidOrder(&a.model, a.fx, a.model.orders[0].id, "customer left", 1_700_000_001_000);
+    a.drain();
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const status_op = try latestOp(&a, arena_state.allocator());
+    repos.applyOp(&b.model, b.fx, status_op);
+    b.drain();
+    try testing.expectEqual(
+        @as(i64, 10),
+        try countRows(&b, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+}
+
+test "reference data does not overwrite the stock the till is counting" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    try setTrackedStock(&harness, 1, 10);
+
+    // The admin's document was measured at ninety-nine; the till has
+    // sold one since. Product 2 is being turned on for the first time,
+    // so its first count comes from the document.
+    const products = [_]reference.ProductRow{
+        .{
+            .id = 1,
+            .category_id = 1,
+            .name = "Paneer Tikka",
+            .price_minor = 24500,
+            .product_type = 0,
+            .food_type = 1,
+            .tax_slab_id = 0,
+            .stock_qty = 99,
+            .track_stock = 1,
+            .description = "",
+            .image_path = "",
+            .active = 1,
+            .sort_order = 0,
+            .created_at = 1,
+            .updated_at = 2,
+        },
+        .{
+            .id = 2,
+            .category_id = 2,
+            .name = "Masala Chai",
+            .price_minor = 4000,
+            .product_type = 1,
+            .food_type = 1,
+            .tax_slab_id = 0,
+            .stock_qty = 42,
+            .track_stock = 1,
+            .description = "",
+            .image_path = "",
+            .active = 1,
+            .sort_order = 0,
+            .created_at = 1,
+            .updated_at = 2,
+        },
+    };
+    const document = reference.Snapshot{ .version = 2, .products = &products };
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    try testing.expect(repos.applyReference(
+        &harness.model,
+        harness.fx,
+        document,
+        arena_state.allocator(),
+        100,
+    ));
+    harness.drain();
+
+    // The counted product keeps the number the till's shelf says.
+    try testing.expectEqual(
+        @as(i64, 10),
+        try countRows(&harness, "SELECT stock_qty AS n FROM product WHERE id = 1;", &.{}),
+    );
+    // A product that starts being counted takes the document's count.
+    try testing.expectEqual(
+        @as(i64, 42),
+        try countRows(&harness, "SELECT stock_qty AS n FROM product WHERE id = 2;", &.{}),
     );
 }
 
