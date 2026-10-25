@@ -3475,6 +3475,123 @@ test "paying one of two open orders on a table leaves it occupied" {
     );
 }
 
+test "two waiters can add a plate to one table without losing a line" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+
+    // The dish carries five percent tax, so the money is not just the
+    // price of the plates.
+    a.fx.dbExec(.{
+        .key = 954,
+        .statements = &.{
+            .{
+                .sql = "INSERT INTO tax_slab (id, name, rate_bps, inclusive, active) VALUES (2, 'GST 5%', 500, 0, 1);",
+                .params = &.{},
+            },
+            .{
+                .sql = "UPDATE product SET tax_slab_id = 2 WHERE id = 1;",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    a.drain();
+    repos.loadProducts(&a.model, a.fx);
+    repos.loadTaxSlabs(&a.model, a.fx);
+    a.drain();
+
+    a.model.employee_id = 7;
+    a.model.tables = &.{
+        .{ .id = 1, .category_id = 1, .name = "T1", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 0, .pos_y = 0 },
+    };
+
+    // The first waiter opens the table and orders one plate.
+    a.send(.{ .select_table = 1 });
+    a.send(.{ .add_to_order = 1 });
+    a.drain();
+
+    // The second waiter's device has the same open ticket.
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    b.fx.dbExec(.{
+        .key = 954,
+        .statements = &.{
+            .{
+                .sql = "INSERT INTO tax_slab (id, name, rate_bps, inclusive, active) VALUES (2, 'GST 5%', 500, 0, 1);",
+                .params = &.{},
+            },
+            .{
+                .sql = "UPDATE product SET tax_slab_id = 2 WHERE id = 1;",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    b.drain();
+    repos.loadProducts(&b.model, b.fx);
+    repos.loadTaxSlabs(&b.model, b.fx);
+    b.drain();
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const open_op = try latestOp(&a, arena_state.allocator());
+    repos.applyOp(&b.model, b.fx, open_op);
+    b.drain();
+    repos.loadOrders(&b.model, b.fx);
+    repos.loadOrderLines(&b.model, b.fx);
+    b.drain();
+
+    const remote = b.model.orders[0];
+    try testing.expect(remote.id < 0);
+    try testing.expectEqual(@as(usize, 1), b.model.order_lines.len);
+
+    // Both waiters add a plate before either hears of the other. Each
+    // snapshot knows one plate, and both use the same position.
+    b.model.employee_id = 7;
+    b.model.active_order_id = remote.id;
+    b.model.active_table_id = 1;
+    a.send(.{ .add_to_order = 1 });
+    b.send(.{ .add_to_order = 1 });
+    const a_update = try latestOp(&a, arena_state.allocator());
+    const b_update = try latestOp(&b, arena_state.allocator());
+    try testing.expectEqualStrings("order", a_update.entity_table);
+    try testing.expectEqualStrings("order", b_update.entity_table);
+
+    // The two updates meet. Neither may overwrite the other's plate,
+    // and the bill must carry all three plates.
+    repos.applyOp(&a.model, a.fx, b_update);
+    a.drain();
+    repos.applyOp(&b.model, b.fx, a_update);
+    b.drain();
+
+    repos.loadOrders(&a.model, a.fx);
+    repos.loadOrderLines(&a.model, a.fx);
+    a.drain();
+    repos.loadOrders(&b.model, b.fx);
+    repos.loadOrderLines(&b.model, b.fx);
+    b.drain();
+
+    for ([_]*Harness{ &a, &b }) |harness| {
+        try testing.expectEqual(@as(usize, 3), harness.model.order_lines.len);
+        try testing.expectEqual(@as(i64, 3 * 25725), harness.model.orders[0].total_minor);
+        var ids: [3]i64 = undefined;
+        for (harness.model.order_lines, 0..) |line, index| ids[index] = line.id;
+        try testing.expect(ids[0] != ids[1]);
+        try testing.expect(ids[0] != ids[2]);
+        try testing.expect(ids[1] != ids[2]);
+        try testing.expectEqual(
+            @as(i64, 3),
+            try countRows(
+                harness,
+                "SELECT COUNT(*) AS n FROM order_line WHERE order_id = (SELECT id FROM orders WHERE origin_device = 'test01' LIMIT 1);",
+                &.{},
+            ),
+        );
+    }
+}
+
 test "a waiter's table order and its plates reach the kitchen" {
     var a = try seeded(testing.allocator);
     defer a.deinit();

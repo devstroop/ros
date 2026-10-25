@@ -200,7 +200,7 @@ pub const order_lines_sql =
     \\    ORDER BY placed_at DESC
     \\    LIMIT 200
     \\)
-    \\ORDER BY id;
+    \\ORDER BY order_id, created_at, id;
 ;
 
 /// One setting out of `app_config`. The PIN salt lives there.
@@ -1786,14 +1786,6 @@ pub fn addOrderLine(
     // moves; the customer pays the price on the menu.
     const total_tax: i64 = if (model.tax_inclusive) 0 else line_tax;
 
-    var line_params: [6]native_sdk.EffectDbValue = .{
-        .{ .integer = order_id },
-        .{ .integer = product_id },
-        .{ .text = product_name },
-        .{ .integer = unit_price_minor },
-        .{ .integer = tax_bps },
-        .{ .integer = at },
-    };
     var order_params: [4]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
         .{ .integer = line_tax },
@@ -1821,7 +1813,7 @@ pub fn addOrderLine(
         // One slot is kept for the plate being added now.
         if (snapshot_count + 1 >= max_order_lines) break;
         snapshot_lines[snapshot_count] = .{
-            .id = line.id,
+            .id = logicalLineId(line.id, origin.id, snapshot_count),
             .product_id = if (line.product_id == 0) null else line.product_id,
             .product_name = line.product_name,
             .qty = line.qty,
@@ -1832,6 +1824,11 @@ pub fn addOrderLine(
         subtotal += line.unit_price_minor * line.qty;
         snapshot_count += 1;
     }
+    // Two waiters can add a plate to the same position before either
+    // has heard of the other. A positional id would make the second
+    // plate overwrite the first, so a plate added here is named after
+    // the device, the order, the moment and its position.
+    const new_line_id = newOrderLineId(model, order_id, snapshot_count, at);
     for (model.orders) |order| {
         if (order.id != order_id) continue;
         order_type = @intFromEnum(order.order_type);
@@ -1846,7 +1843,7 @@ pub fn addOrderLine(
         break;
     }
     snapshot_lines[snapshot_count] = .{
-        .id = order_id * 128 + @as(i64, @intCast(snapshot_count)),
+        .id = new_line_id,
         .product_id = if (product_id == 0) null else product_id,
         .product_name = product_name,
         .qty = 1,
@@ -1857,6 +1854,16 @@ pub fn addOrderLine(
     snapshot_count += 1;
     // An inclusive menu already has the tax inside the price.
     const snapshot_total = subtotal + (if (model.tax_inclusive) 0 else order_tax);
+
+    var line_params: [7]native_sdk.EffectDbValue = .{
+        .{ .integer = new_line_id },
+        .{ .integer = order_id },
+        .{ .integer = product_id },
+        .{ .text = product_name },
+        .{ .integer = unit_price_minor },
+        .{ .integer = tax_bps },
+        .{ .integer = at },
+    };
 
     var json_buffer: [16 * 1024]u8 = undefined;
     var op_id_buffer: [96]u8 = undefined;
@@ -1882,12 +1889,12 @@ pub fn addOrderLine(
 
     var statements: [5]native_sdk.EffectDbStatement = undefined;
     statements[0] = .{
-        // The line id is left to SQLite: two lines added in the same
-        // millisecond are still two lines.
+        // The id is the plate's name across devices, not a row number:
+        // a second waiter's plate must not take the same name.
         .sql =
         \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
         \\  unit_price_minor, tax_bps, notes, created_at)
-        \\VALUES (NULL, ?1, ?2, ?3, 1, ?4, ?5, '', ?6);
+        \\VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, '', ?7);
         ,
         .params = &line_params,
     };
@@ -2514,6 +2521,51 @@ const OrderOrigin = struct {
     id: i64,
 };
 
+/// The logical name of an order line, independent of the database that
+/// happens to store it.
+///
+/// A positional line is named by its order's origin and its position,
+/// so every device agrees on the name even though the local row id is
+/// namespaced differently. A plate added to a table from any device
+/// gets a hash name in the top range instead, because two waiters can
+/// add at the same position before either sees the other.
+fn logicalLineId(local_id: i64, origin_id: i64, position: usize) i64 {
+    if (local_id <= hash_line_floor) return local_id;
+    const pos: i64 = if (local_id < 0 or local_id >= positional_line_floor)
+        @mod(local_id, 128)
+    else
+        // A row written before line names travelled has a small row
+        // id. Its position in the ticket is the best name it has.
+        @intCast(position);
+    return origin_id * 128 + pos;
+}
+
+/// Positional ids are `order * 128 + plate`; order ids are wall-clock
+/// milliseconds, so a real positional id is far above this floor. A
+/// smaller positive id is a row id from before lines carried a name.
+const positional_line_floor: i64 = @as(i64, 1) << 40;
+
+/// The bottom of the range reserved for cross-device line names. A
+/// positional id is around `order * 128` - well under 2^48 - and a
+/// hashed name is at least 2^61, so the two cannot be confused.
+const hash_line_floor: i64 = -(@as(i64, 1) << 61);
+
+/// A line id for a plate added from this device.
+///
+/// The name hashes the device, the order, the moment and the plate's
+/// position, and lives in the negative range no positional id uses.
+/// Two devices adding a plate at the same position therefore write two
+/// different lines instead of the second overwriting the first.
+fn newOrderLineId(model: *Model, order_id: i64, position: usize, at: i64) i64 {
+    var buffer: [160]u8 = undefined;
+    const text = std.fmt.bufPrint(&buffer, "{s}:{d}:{d}:{d}", .{
+        syncDeviceId(model), order_id, at, position,
+    }) catch return -(at | 1);
+    const hash = std.hash.Wyhash.hash(0, text);
+    const magnitude = (hash & ((@as(u64, 1) << 61) - 1)) | (@as(u64, 1) << 61);
+    return -@as(i64, @intCast(magnitude));
+}
+
 /// The stable cross-device name of the order behind a local row id.
 ///
 /// A status or payment op written on a device that only holds a remapped
@@ -2818,6 +2870,10 @@ const insert_snapshot_sql =
     \\VALUES (?1, ?2, ?3);
 ;
 
+/// A snapshot is a create op, so its line names have to be the names
+/// every device uses, not this database's row ids: the line id in the
+/// JSON is rebuilt from the order's origin and the plate's position,
+/// or kept as-is when it is a cross-device hash name.
 const insert_snapshot_orders_sql =
     \\WITH snapshot_orders AS (
     \\  SELECT
@@ -2852,7 +2908,11 @@ const insert_snapshot_orders_sql =
     \\    'notes', notes,
     \\    'lines', (
     \\      SELECT json_group_array(json_object(
-    \\        'id', order_line.id,
+    \\        'id', CASE
+    \\          WHEN order_line.id <= -2305843009213693952 THEN order_line.id
+    \\          ELSE COALESCE(NULLIF(snapshot_orders.origin_id, 0), snapshot_orders.id) * 128
+    \\               + (order_line.id % 128)
+    \\        END,
     \\        'product_id', order_line.product_id,
     \\        'product_name', order_line.product_name,
     \\        'qty', order_line.qty,
@@ -3264,7 +3324,7 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
     for (lines) |line| {
         if (snapshot_count == max_order_lines) break;
         snapshot_lines[snapshot_count] = .{
-            .id = line.id,
+            .id = logicalLineId(line.id, origin_id, snapshot_count),
             .product_id = if (line.product_id == 0) null else line.product_id,
             .product_name = line.product_name,
             .qty = line.qty,
@@ -3727,7 +3787,7 @@ pub fn applyOp(model: *Model, fx: *Effects, op: record.Op) void {
 }
 
 fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persist: bool) void {
-    var statements: [6 + max_order_lines]native_sdk.EffectDbStatement = undefined;
+    var statements: [7 + max_order_lines]native_sdk.EffectDbStatement = undefined;
     var count: usize = 0;
 
     // The origin pair is the stable name. A create op written before
@@ -3846,10 +3906,11 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
     count += 1;
 
     const first_line_statement = count;
-    var line_params: [max_order_lines][11]native_sdk.EffectDbValue = undefined;
+    var line_params: [max_order_lines][12]native_sdk.EffectDbValue = undefined;
     for (snapshot.lines, 0..) |line, index| {
-        // Two slots are reserved for the op row and the clock.
-        if (count + 3 > statements.len) break;
+        // Three slots are reserved for the recomputed money, the op row
+        // and the clock.
+        if (count + 4 > statements.len) break;
         const slot = count - first_line_statement;
         line_params[slot] = .{
             nullableIdParam(line.product_id),
@@ -3861,19 +3922,30 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
             .{ .integer = @intCast(index) },
             .{ .text = origin_device },
             .{ .integer = origin_id },
-            .{ .integer = snapshot.placed_at },
+            // The line was written when the op was made, not when the
+            // order was opened: the kitchen reads the plates in order.
+            .{ .integer = op.created_at },
             // A create op is the ticket being born (or restored from a
             // snapshot), so its lines go in even when the ticket is
             // already closed. An update is a late plate: it must not
             // add a dish to a bill that has been paid for.
             .{ .integer = if (op.operation == .create) 1 else 0 },
+            // The plate's name on the device that wrote it. A positive
+            // name is positional: the local row is namespaced under
+            // this database's order id. A negative name is a plate
+            // added from any device and is already global.
+            .{ .integer = line.id },
         };
         statements[count] = .{
             .sql =
             \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
             \\  unit_price_minor, tax_bps, notes, created_at)
             \\SELECT
-            \\  ((SELECT id FROM orders WHERE origin_device = ?8 AND origin_id = ?9) * 128 + ?7),
+            \\  CASE
+            \\    WHEN ?12 < 0 THEN ?12
+            \\    ELSE (SELECT id FROM orders WHERE origin_device = ?8 AND origin_id = ?9) * 128
+            \\         + (?12 % 128)
+            \\  END,
             \\  (SELECT id FROM orders WHERE origin_device = ?8 AND origin_id = ?9),
             \\  (SELECT id FROM product WHERE id = ?1),
             \\  ?2, ?3, ?4, ?5, ?6, ?10
@@ -3885,6 +3957,45 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
             \\ON CONFLICT DO NOTHING;
             ,
             .params = &line_params[slot],
+        };
+        count += 1;
+    }
+
+    // An update carries a whole ticket, but two waiters can add a
+    // plate before either has seen the other's. Their snapshots each
+    // leave one plate out. The lines are all in the database now, so
+    // the money is recomputed from them rather than from either
+    // snapshot: no plate is on the bill without being paid for.
+    if (op.operation == .update) {
+        var recount_params: [3]native_sdk.EffectDbValue = .{
+            .{ .integer = snapshot.placed_at },
+            .{ .text = origin_device },
+            .{ .integer = origin_id },
+        };
+        statements[count] = .{
+            .sql =
+            \\UPDATE orders SET
+            \\  subtotal_minor = (
+            \\    SELECT COALESCE(SUM(unit_price_minor * qty), 0)
+            \\    FROM order_line WHERE order_line.order_id = orders.id
+            \\  ),
+            \\  tax_minor = (
+            \\    SELECT COALESCE(SUM((unit_price_minor * qty * tax_bps + 5000) / 10000), 0)
+            \\    FROM order_line WHERE order_line.order_id = orders.id
+            \\  ),
+            \\  total_minor =
+            \\    (SELECT COALESCE(SUM(unit_price_minor * qty), 0)
+            \\     FROM order_line WHERE order_line.order_id = orders.id)
+            \\    + CASE WHEN COALESCE((SELECT tax_inclusive FROM company LIMIT 1), 0)
+            \\        THEN 0
+            \\        ELSE (SELECT COALESCE(SUM((unit_price_minor * qty * tax_bps + 5000) / 10000), 0)
+            \\              FROM order_line WHERE order_line.order_id = orders.id)
+            \\      END
+            \\    - discount_minor,
+            \\  updated_at = ?1
+            \\WHERE origin_device = ?2 AND origin_id = ?3 AND status < 4;
+            ,
+            .params = &recount_params,
         };
         count += 1;
     }
