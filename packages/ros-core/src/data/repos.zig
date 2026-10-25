@@ -1639,7 +1639,13 @@ pub fn openOrderForTable(
 
 /// Add one line to an open order and bring the order's total up with
 /// it. One transaction, so a line never exists without its total.
+///
+/// The tax is the same tax a counter sale pays: the floor is not a
+/// separate tax regime, and a total that quietly leaves the tax out is
+/// money the restaurant owes. The line keeps the rate it was sold at,
+/// so a slab that changes tomorrow does not rewrite yesterday's bill.
 pub fn addOrderLine(
+    model: *Model,
     fx: *Effects,
     key: u64,
     order_id: i64,
@@ -1648,15 +1654,24 @@ pub fn addOrderLine(
     unit_price_minor: i64,
     at: i64,
 ) void {
-    var line_params: [5]native_sdk.EffectDbValue = .{
+    const tax_bps = model.product_tax_bps(product_id);
+    const line_tax = model.tax_on(unit_price_minor, tax_bps);
+    // An inclusive price already carries its tax, so only the memo
+    // moves; the customer pays the price on the menu.
+    const total_tax: i64 = if (model.tax_inclusive) 0 else line_tax;
+
+    var line_params: [6]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
         .{ .integer = product_id },
         .{ .text = product_name },
         .{ .integer = unit_price_minor },
+        .{ .integer = tax_bps },
         .{ .integer = at },
     };
-    var order_params: [2]native_sdk.EffectDbValue = .{
+    var order_params: [4]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
+        .{ .integer = line_tax },
+        .{ .integer = total_tax },
         .{ .integer = at },
     };
     fx.dbExec(.{
@@ -1668,16 +1683,21 @@ pub fn addOrderLine(
                 .sql =
                 \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
                 \\  unit_price_minor, tax_bps, notes, created_at)
-                \\VALUES (NULL, ?1, ?2, ?3, 1, ?4, 0, '', ?5);
+                \\VALUES (NULL, ?1, ?2, ?3, 1, ?4, ?5, '', ?6);
                 ,
                 .params = &line_params,
             },
             .{
+                // The tax is added one plate at a time, with the exact
+                // amount worked out here. Summing the rounded tax of
+                // every line in SQL would charge a different total than
+                // the counter does.
                 .sql =
                 \\UPDATE orders SET
                 \\  subtotal_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1),
-                \\  total_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1),
-                \\  updated_at = ?2
+                \\  tax_minor = tax_minor + ?2,
+                \\  total_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1) + ?3,
+                \\  updated_at = ?4
                 \\WHERE id = ?1;
                 ,
                 .params = &order_params,

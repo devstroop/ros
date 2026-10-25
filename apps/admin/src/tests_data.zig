@@ -3057,6 +3057,54 @@ test "the waiter opens an order for a free table and adds to it" {
     try testing.expect(occupied);
 }
 
+test "a waiter's line carries the tax the counter would charge" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // A five percent slab on the dish, the same one the counter test
+    // uses.
+    harness.fx.dbExec(.{
+        .key = 953,
+        .statements = &.{
+            .{
+                .sql = "INSERT INTO tax_slab (id, name, rate_bps, inclusive, active) VALUES (2, 'GST 5%', 500, 0, 1);",
+                .params = &.{},
+            },
+            .{
+                .sql = "UPDATE product SET tax_slab_id = 2 WHERE id = 1;",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+    repos.loadProducts(&harness.model, harness.fx);
+    repos.loadTaxSlabs(&harness.model, harness.fx);
+    harness.drain();
+
+    harness.model.employee_id = 7;
+    harness.model.tables = &.{
+        .{ .id = 1, .category_id = 1, .name = "T1", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 0, .pos_y = 0 },
+    };
+
+    harness.send(.{ .select_table = 1 });
+    harness.send(.{ .add_to_order = 1 });
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+
+    // The floor order pays the same tax as a counter sale: 245.00 at
+    // five percent is 12.25.
+    const order = harness.model.orders[0];
+    try testing.expectEqual(@as(i64, 24500), order.subtotal_minor);
+    try testing.expectEqual(@as(i64, 1225), order.tax_minor);
+    try testing.expectEqual(@as(i64, 25725), order.total_minor);
+
+    // The line remembers the rate it was sold at.
+    repos.loadOrderLines(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqual(@as(i64, 500), harness.model.order_lines[0].tax_bps);
+}
+
 test "a table that already has an order is joined, not duplicated" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();

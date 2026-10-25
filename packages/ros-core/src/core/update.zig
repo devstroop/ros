@@ -166,6 +166,7 @@ fn addToOrder(model: *Model, fx: *Effects, product_id: i64) void {
     }
     const product = findProduct(model, product_id) orelse return;
     repos.addOrderLine(
+        model,
         fx,
         repos.key_add_line,
         model.active_order_id,
