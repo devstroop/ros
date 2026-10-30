@@ -46,7 +46,7 @@ The SQL file is authoritative for columns. This table is the map.
 | `company` | The one company: name, currency, tax-inclusive flag, address/contact/tax number | Read |
 | `currency` | Supported currencies with symbol and minor-unit count | No |
 | `employee` | Staff; `role` 0–3; `pin_hash` salted SHA-256 | Login read |
-| `app_config` | Key/value settings: PIN salt, schema version, device role, shift | Read/write (salt) |
+| `app_config` | Key/value settings: PIN salt, this device's palette and contrast, schema version, device role, shift | Read/write (salt, look) |
 
 ### 0002 — Catalog (7 tables)
 

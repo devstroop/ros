@@ -129,22 +129,24 @@ widget_id() {
 # interaction is repeated until the screen says it landed.
 press_window_ms="${ROS_SMOKE_PRESS_MS:-3000}"
 
-# Press a control, and press it again if the expected screen did not
-# follow. The app's own guards - a sale still being saved, an order
-# already moving - make a repeated press safe rather than a second sale.
+# Press a control, and press it again if what was asked of the screen
+# did not follow. The app's own guards - a sale still being saved, an
+# order already moving - make a repeated press safe rather than a second
+# sale, and a toggle is pressed only until its state really moves, so an
+# extra press is undone by the next one rather than doubled.
 tap() {
   local role="$1" name="$2"
   shift 2
   local attempt id
   for attempt in 1 2 3 4 5; do
     id="$(widget_id "$role" "$name")"
-    [ -n "$id" ] || fail "\"$name\" left the screen and \"$*\" never appeared"
+    [ -n "$id" ] || fail "\"$name\" left the screen and \"$*\" never held"
     automate widget-click main-canvas "$id" >/dev/null 2>&1 || true
     if automate assert --timeout-ms "$press_window_ms" "$@" >/dev/null 2>&1; then
       return 0
     fi
   done
-  fail "pressing \"$name\" never showed: $*"
+  fail "pressing \"$name\" never held: $*"
 }
 
 type_into() {
@@ -275,6 +277,13 @@ done
 printf '==> high contrast sits beside the registers, on any of them\n'
 tap button "High contrast" 'name="High contrast".*selected'
 screenshot settings-night-contrast
+
+# Back to the plain look before the database goes to the kiosk: the
+# stored look travels with the file the smoke copies, and the board
+# below is easier to read as the register it is meant to show.
+printf '==> the choice switches back, and the device is left plain\n'
+tap button "High contrast" --absent 'name="High contrast".*selected'
+tap button "Light" 'name="Light".*selected'
 
 # ---------------------------------------------------------------- kiosk
 

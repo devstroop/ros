@@ -104,6 +104,8 @@ pub const key_reference_apply = 63;
 pub const key_sync_ops = 64;
 pub const key_sync_snapshot = 65;
 pub const key_sync_compact = 66;
+pub const key_theme = 67;
+pub const key_save_theme = 68;
 
 // ------------------------------------------------------------ queries
 
@@ -206,6 +208,15 @@ pub const order_lines_sql =
 /// One setting out of `app_config`. The PIN salt lives there.
 pub const config_sql =
     \\SELECT key, value FROM app_config WHERE key = 'pin_salt' LIMIT 1;
+;
+
+/// How this device should look. The palette and the contrast are
+/// settings rather than records, so they live beside the salt in
+/// `app_config` and need no table and no migration of their own.
+pub const theme_sql =
+    \\SELECT key, value FROM app_config
+    \\WHERE key IN ('theme_palette', 'theme_contrast')
+    \\ORDER BY key;
 ;
 
 /// The day's takings, in one row.
@@ -735,8 +746,63 @@ pub fn saveSalt(fx: *Effects, key: u64, salt: []const u8, at: i64) void {
     });
 }
 
+/// The palette this device draws in, and the contrast it wants.
+///
+/// Both live in `app_config` as text, the way the reference version
+/// does: the value column is TEXT and a STRICT table will not take an
+/// integer in it.
+pub fn loadTheme(model: *Model, fx: *Effects) void {
+    query(model, fx, key_theme, theme_sql, &.{}, Effects.dbMsg(.theme_loaded));
+}
+
+/// Store the choice the moment it is made. A till that repaints and
+/// forgets on the next boot has not changed anything.
+pub fn saveTheme(fx: *Effects, palette: i64, contrast: bool, at: i64) void {
+    var palette_buffer: [32]u8 = undefined;
+    const palette_text = std.fmt.bufPrint(&palette_buffer, "{d}", .{palette}) catch return;
+    var contrast_buffer: [8]u8 = undefined;
+    const contrast_text = std.fmt.bufPrint(&contrast_buffer, "{d}", .{@intFromBool(contrast)}) catch return;
+
+    var params: [5]native_sdk.EffectDbValue = .{
+        .{ .text = "theme_palette" },
+        .{ .text = palette_text },
+        .{ .integer = at },
+        .{ .text = "theme_contrast" },
+        .{ .text = contrast_text },
+    };
+    fx.dbExec(.{
+        .key = key_save_theme,
+        .statements = &.{.{
+            .sql =
+            \\INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3), (?4, ?5, ?3)
+            \\ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+            ,
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.theme_saved),
+    });
+}
+
 pub fn loadProductStations(model: *Model, fx: *Effects) void {
     query(model, fx, key_product_stations, product_stations_sql, &.{}, Effects.dbMsg(.product_stations_loaded));
+}
+
+/// The two rows the device's look is kept in. A row that is missing, or
+/// that does not read as a number, leaves the default in place: a
+/// preference the app cannot understand is not worth arguing with, and
+/// the operator can set it again in Settings.
+pub fn decodeTheme(model: *Model, bytes: []const u8) void {
+    var reader = page.Reader.init(bytes);
+    var values: [page.max_columns]page.Value = undefined;
+    if (!reader.readHeader()) return;
+    while (reader.nextRow(&values)) {
+        const value = std.fmt.parseInt(i64, reader.textOf(&values, "value"), 10) catch 0;
+        if (std.mem.eql(u8, reader.textOf(&values, "key"), "theme_palette")) {
+            model.theme_palette = model_mod.Palette.fromCode(value);
+        } else if (std.mem.eql(u8, reader.textOf(&values, "key"), "theme_contrast")) {
+            model.theme_contrast_high = value != 0;
+        }
+    }
 }
 
 pub fn loadReservations(model: *Model, fx: *Effects) void {

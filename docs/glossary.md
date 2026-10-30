@@ -84,8 +84,11 @@ been rung up: it is one whose money has been taken.
   further from the page. It belongs to the eyes, not to the palette, so
   **Switch theme** carries it across.
 - **Appearance** — the Settings card that offers all four registers and
-  the contrast. It is a per-device choice; nothing about it is saved to
-  the restaurant.
+  the contrast. It is a per-device choice: it is kept on the device, in
+  `app_config`, and nothing about it is kept for the restaurant. The
+  look belongs to the file rather than to the machine, so a database
+  that is copied - a kiosk hand-over, the smoke's walkthrough - carries
+  the look of the device it came from.
 
 ## Retired words
 

@@ -115,9 +115,17 @@ The history and the current status can never disagree.
 
 ### Settings
 
-`repos.saveConfigValue` upserts `app_config(key, value, updated_at)`.
-This is used for the PIN salt today; the target also uses it for the
-device role and the current shift.
+`app_config(key, value, updated_at)` is written by two named statements,
+one per setting, because the two settings behave differently:
+
+- `repos.saveSalt` inserts the installation salt `ON CONFLICT DO NOTHING`
+  - the first salt wins, because every PIN hash in the database was
+  computed against the one already there.
+- `repos.saveTheme` upserts the device's palette and contrast
+  `ON CONFLICT DO UPDATE` - the last choice the operator made is the one
+  the next boot reads back.
+
+The device role and the current shift are targets for the same table.
 
 ### Not implemented
 
@@ -154,7 +162,7 @@ prevent.
 | Entity | Read | Decode | Write | UI |
 |---|---|---|---|---|
 | company | Yes | Yes | No | Dashboard header / labels |
-| app_config | Yes (salt) | Yes | Yes (upsert) | Login |
+| app_config | Yes (salt, look) | Yes | Yes (write-once salt, upsert look) | Login / Appearance |
 | product | Yes | Yes | No | POS menu |
 | product_category | Yes | Yes | No | POS filters |
 | dining_table | Yes | Yes | No | Floor board |

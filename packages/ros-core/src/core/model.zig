@@ -342,6 +342,7 @@ pub const Model = struct {
         "company_id",
         "theme_palette",
         "theme_contrast_high",
+        "theme_chosen",
         "salt_state",
         "last_issued_order_id",
         "advance_order_id",
@@ -861,6 +862,10 @@ pub const Model = struct {
     /// the model reads them.
     theme_palette: Palette = .light,
     theme_contrast_high: bool = false,
+    /// True once the operator has set either of them this session. The
+    /// stored choice is read at boot, and a read that lands late would
+    /// undo a tap that came first.
+    theme_chosen: bool = false,
 
     // ---------------------------------------------------- derived values
     //

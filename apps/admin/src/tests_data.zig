@@ -1629,6 +1629,58 @@ test "a second instance adopts the salt that is already stored" {
     try testing.expectEqual(core.SaltState.confirmed, harness.model.salt_state);
 }
 
+// The look of the device is a setting rather than a record, so it is
+// stored the moment it is chosen and read back at boot. A till that
+// repaints and forgets on the next boot has not changed anything.
+test "the palette and the contrast come back on the next boot" {
+    var harness = try Harness.start(testing.allocator);
+    defer harness.deinit();
+
+    // A database that has never been told what to wear: the read finds
+    // no rows and the model keeps the default register.
+    repos.loadTheme(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqual(core.Palette.light, harness.model.theme_palette);
+    try testing.expect(!harness.model.theme_contrast_high);
+
+    harness.send(.{ .set_palette = @as(i64, @intFromEnum(core.Palette.warm)) });
+    harness.send(.{ .toggle_contrast = {} });
+    try testing.expectEqual(core.Palette.warm, harness.model.theme_palette);
+    try testing.expect(harness.model.theme_contrast_high);
+
+    // The next boot. The model starts on the default and the database
+    // fills it, the way the salt does.
+    harness.model.theme_palette = .light;
+    harness.model.theme_contrast_high = false;
+    harness.model.theme_chosen = false;
+    repos.loadTheme(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqual(core.Palette.warm, harness.model.theme_palette);
+    try testing.expect(harness.model.theme_contrast_high);
+}
+
+test "a boot read that lands after a choice does not undo it" {
+    var harness = try Harness.start(testing.allocator);
+    defer harness.deinit();
+
+    // The stored look is light, written here rather than by the app so
+    // that the model under test has no idea what the database holds.
+    harness.fx.dbExec(.{
+        .key = 931,
+        .statements = &.{.{
+            .sql = "INSERT INTO app_config (key, value, updated_at) VALUES ('theme_palette', '0', 0);",
+        }},
+        .on_result = Effects.dbMsg(.theme_saved),
+    });
+    harness.drain();
+
+    // Boot asks for the look. The answer is still on its way when the
+    // operator taps, and it lands in the drain that tap starts.
+    repos.loadTheme(&harness.model, harness.fx);
+    harness.send(.{ .set_palette = @as(i64, @intFromEnum(core.Palette.night)) });
+    try testing.expectEqual(core.Palette.night, harness.model.theme_palette);
+}
+
 test "a legacy PIN waits for the database to confirm the salt" {
     var harness = try Harness.start(testing.allocator);
     defer harness.deinit();

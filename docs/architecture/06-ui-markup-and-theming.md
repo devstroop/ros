@@ -182,7 +182,9 @@ pub fn tokens(model: *const Model) DesignTokens {
 `toggle_theme` hops between the halves of the day - Light for a dark
 register, Dark for a light one - and Settings' Appearance card sets
 `theme_palette` directly and `theme_contrast_high` beside it. Both are
-model state, so a theme change is a message, a field and a rebuild.
+model state, so a theme change is a message, a field and a rebuild - and
+a write: `repos.saveTheme` keeps the pair in `app_config`, `loadTheme`
+reads it back at boot, and a device wakes in the look it was left in.
 
 ### Brand palette
 
@@ -276,7 +278,7 @@ There is no responsive variant yet. The shell assumes a desktop window
   autofocused; login's PIN field is.
 - Colour is never the only status signal: a chip or a badge carries the
   word as well, and both are real text.
-- Both palettes' text pairs are asserted against WCAG AA in
+- Every register's text pairs are asserted against WCAG AA in
   `src/tests.zig`, including the six state chips; a keyboard-only pass
   and focus-visible checks remain.
 
@@ -325,6 +327,6 @@ patterns are repeated inline.
    visible (empty states, headers, rows).
 4. **No responsive mode.** Window resize changes the split fraction only.
 5. **No motion.** There are no transitions or tweened values.
-6. **Contrast is tested only for the token pairs.** Both palettes' text
+6. **Contrast is tested only for the token pairs.** Every register's text
    pairs are asserted, but non-text contrast and real screen composition
    are not audited.

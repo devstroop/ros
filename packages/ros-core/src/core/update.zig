@@ -48,6 +48,10 @@ pub fn boot(model: *Model, fx: *Effects) void {
     // anybody in, and the company - an empty database means a fresh
     // installation, and the app opens on the setup screen.
     repos.loadConfig(model, fx);
+    // What this device looks like, read with the rest of the settings.
+    // It is a preference rather than a record, so a database that does
+    // not have it is not an error: the device draws its default.
+    repos.loadTheme(model, fx);
     repos.loadCompany(model, fx);
     // The people who work here, because the picker asks who is using
     // the device. A person signs in; a device signs in by being the
@@ -579,6 +583,20 @@ fn submitSetup(model: *Model, fx: *Effects) void {
 /// the database actually holds.
 fn createSalt(model: *Model, fx: *Effects) void {
     repos.saveSalt(fx, repos.key_save_salt, model.pin_salt(), fx.wallMs());
+}
+
+/// Wear a palette, and keep the choice.
+///
+/// The look belongs to the device, not to the restaurant, so it is
+/// stored in `app_config` beside the salt and read back at boot. Marking
+/// the choice is what makes a read that lands late harmless: the tap the
+/// operator made is the truth, and the stored value only fills in a
+/// device nobody has set yet.
+fn chooseTheme(model: *Model, fx: *Effects, palette: model_mod.Palette, contrast: bool) void {
+    model.theme_palette = palette;
+    model.theme_contrast_high = contrast;
+    model.theme_chosen = true;
+    repos.saveTheme(fx, @intFromEnum(palette), contrast, fx.wallMs());
 }
 
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
@@ -2204,6 +2222,25 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             };
         },
 
+        .theme_loaded => |result| {
+            // The look of the device is a preference, so a read that
+            // failed is not something to tell the operator: the screen
+            // is already drawing in the default.
+            if (result.outcome != .ok) return;
+            if (result.kind != .page) return;
+            // Asked for at boot, and it can land after the tap it would
+            // otherwise undo. The choice the operator made is the truth.
+            if (model.theme_chosen) return;
+            repos.decodeTheme(model, result.bytes);
+        },
+
+        .theme_saved => |result| {
+            // The screen already wears the palette. A write that did not
+            // land means only that the next boot puts the device back.
+            if (result.outcome == .ok) return;
+            model.error_text = "The look of this device could not be saved";
+        },
+
         .company_loaded => |result| {
             if (result.outcome != .ok) return;
             if (result.kind == .page) repos.decodeCompany(model, result.bytes);
@@ -2267,9 +2304,9 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         // The glyph promises the other half of the day, so this lands on
         // one of the two palettes it names. All four are Settings' to
         // offer, and the contrast is a setting of its own.
-        .toggle_theme => model.theme_palette = model.theme_palette.otherHalf(),
-        .set_palette => |code| model.theme_palette = model_mod.Palette.fromCode(code),
-        .toggle_contrast => model.theme_contrast_high = !model.theme_contrast_high,
+        .toggle_theme => chooseTheme(model, fx, model.theme_palette.otherHalf(), model.theme_contrast_high),
+        .set_palette => |code| chooseTheme(model, fx, model_mod.Palette.fromCode(code), model.theme_contrast_high),
+        .toggle_contrast => chooseTheme(model, fx, model.theme_palette, !model.theme_contrast_high),
 
         .tick => |timer| {
             if (timer.outcome != .fired) return;

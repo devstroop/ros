@@ -78,7 +78,7 @@ does) or bind an in-memory store.
 | Node budget | No assertion on `widget_nodes` |
 | Error arms (`db_failed`, failed loads) | Copy and state are untested |
 | Timer tick | Untested |
-| Theme switch | The walkthrough presses the control and keeps a dark screenshot; every text pair in all eight palettes - four registers, each standard and high contrast - clears its threshold in `src/tests.zig`, and Settings is pinned to offer every register the enum has. No test compares the registers field by field |
+| Theme switch | The walkthrough presses the control, asserts the chosen state each register button reports and the canvas's own centre pixel, and keeps a screenshot of every register; every text pair in all eight palettes - four registers, each standard and high contrast - clears its threshold in `src/tests.zig`, and Settings is pinned to offer every register the enum has. The choice is kept: the DB test writes it, boots a second model and reads it back, and shows that a read landing after a tap does not undo it. No test compares the registers field by field |
 | Accessibility names | Left to SDK validation |
 | Window resize below minimum | Untested |
 | Sidecars | No code, no tests |

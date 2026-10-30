@@ -451,6 +451,10 @@ pub const Msg = union(enum) {
     company_loaded: native_sdk.EffectDbResult,
     config_loaded: native_sdk.EffectDbResult,
     config_saved: native_sdk.EffectDbResult,
+    /// The palette and the contrast this device stored. A read that
+    /// fails is not worth a banner: the device draws its default.
+    theme_loaded: native_sdk.EffectDbResult,
+    theme_saved: native_sdk.EffectDbResult,
     /// A query or write failed.
     db_failed: native_sdk.EffectDbResult,
 
@@ -540,6 +544,8 @@ pub const Msg = union(enum) {
         "company_loaded",
         "config_loaded",
         "config_saved",
+        "theme_loaded",
+        "theme_saved",
         "setup_created",
         "payment_taken",
         "payments_loaded",
