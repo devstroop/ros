@@ -89,6 +89,16 @@ been rung up: it is one whose money has been taken.
   look belongs to the file rather than to the machine, so a database
   that is copied - a kiosk hand-over, the smoke's walkthrough - carries
   the look of the device it came from.
+- **Brand colour** — the restaurant's own colour, typed into Settings →
+  Company as `#rrggbb`. It is the one colour in the app that belongs to
+  the restaurant rather than to the device, so it is saved with the
+  company and travels to every till and board on the network. It paints
+  the accent, the label on it and the ring round a focused control; it
+  never touches the red of a void or the green of a ready ticket, which
+  mean the same thing in every restaurant. Left empty, it means the
+  restaurant has not chosen, and the register's own accent stands. The
+  fixed hues the app falls back on are therefore the **house palette**,
+  and never "the brand": in this product the brand is the restaurant's.
 
 ## Retired words
 

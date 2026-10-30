@@ -43,12 +43,12 @@
 
 | Subsystem | Status | Notes |
 |---|---|---|
-| Build and manifest | Partial | Three `app.json` manifests, scripts, CI and the macOS package job exist; Developer ID/notarisation and the clean-machine proof remain; the smoke is shallow |
+| Build and manifest | Partial | Three `app.json` manifests, scripts, CI and the macOS package job exist; Developer ID/notarisation and the clean-machine proof remain |
 | App model | Implemented | Model, Msg, update, boot, effects keys |
 | Role picker and login | Partial | bcrypt PIN hashes, kiosk sign-in and the admin's first-run setup exist; the sign-in checks the employee's stored role (B-002) and waits for the database to confirm the salt (B-003). A service or kiosk waits for the admin's reference data instead of setting up. The PIN field is still typed in the clear (B-027, #96) |
 | RBAC and navigation | Implemented core | 53 screens, 4 roles, one guard, a session-scoped stack ([ADR-0015](../decisions/0015-session-scoped-navigation.md)). The waiter opens the counter POS (`pos`, `pos_cart`, `payments`); the admin app remains the wildcard superset ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)) |
 | Screen coverage | Implemented | 53 screens in the admin app; every one is mounted, renders, and has a landmark of its own. The seven session screens are mounted on their own condition, the other forty-six on their ordinal gate. The service and kiosk mount their role's subset |
-| Theming | Implemented | Light/dark semantic tokens; every text pair is asserted against WCAG AA |
+| Theming | Implemented | Four registers - light, dark, warm, night - and a high-contrast derivation of whichever one is chosen, kept on the device in `app_config`; the restaurant's own `#rrggbb` drives the accent, the label on it and the focus ring. Every text pair is asserted against WCAG AA, in all eight palettes |
 | Shell layout | Partial | Fixed rail + content; no responsive mode. The shell says "Loading..." while a read is on its way, and a failed read replaces the screen with the reason and a way to try again |
 | Dashboard | Implemented | Counts, recent orders, shortcuts; amounts use the company's currency decimals |
 | POS | Partial | Menu, filter, cart, order types and discounts work; the order write succeeds; a sale happens once, the number is a sequence and a retry is the same sale; the tax is worked out line by line from each product's slab. The service app mounts the counter POS as well as the admin app ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)). No modifiers; the price parser is still two-decimal (#66) |
@@ -66,7 +66,7 @@
 | Push / events | Implemented | `/v1/events` held open, chunked NDJSON, one thread per stream, 20ms wake, 15s heartbeat; one stream per peer, line-triggered pull, pending-pull follow-up, terminal reopen; 5s poll fallback |
 | Display board | Partial | The board renders and shows the order cards |
 | Waiter shell | Partial | The floor, the menu, the cart, the order list, the counter POS and payments render; the tables screen has "Counter sale" and "Payments" entry points |
-| Testing | Partial | The split suites are green via `scripts/verify-all.sh` (admin 154/154, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43); each app walks its shell against the permission matrix; no sale smoke through the UI (#42) |
+| Testing | Partial | The split suites are green via `scripts/verify-all.sh` (admin 202/202, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43); each app walks its shell against the permission matrix; `scripts/smoke-sale.sh` walks the sale, the four registers, the restaurant colour and the kitchen board headlessly (#42) |
 | Packaging | Partial | `scripts/package.sh` builds three macOS DMGs, injects each app's `NSLocalNetworkUsageDescription`, signs ad-hoc by default (Developer ID + notarisation through `ROS_SIGNING_IDENTITY` / `ROS_NOTARY_PROFILE`), and verifies the checksums and the app inside each DMG. CI's **Package (macOS)** job uploads the three DMGs; the clean-machine sign-off and the hosted update feed remain. See [`operations/release.md`](../operations/release.md) |
 
 ## Flows that work
@@ -83,7 +83,10 @@
    light one, so the glyph names the half of the day the tap brings -
    hops between Light and Dark. Settings' Appearance card is the one that
    offers all four registers (Light, Dark, Warm, Night) and the
-   high-contrast derivation, per device.
+   high-contrast derivation, per device. Settings → Company holds the
+   restaurant's own colour, which is not per device: it is a column on
+   the company, it reaches every till in the reference document, and the
+   theme derives the accent, its label and the focus ring from it.
 7. The admin's setup creates a starter menu, six tables, the operator
    and the installation salt; the operator signs in with the PIN they
    chose. The service and kiosk copy the menu and the people from the
@@ -187,6 +190,7 @@ a docs change.
 | D41 | There were two palettes, the dark one was unfinished, and an operator had no way to ask for anything else | `src/core/theme.zig`, `src/core/{model,msg,update}.zig`, `src/screens/screen-settings.native`, `src/tests.zig` | FIXED: four registers - Light, Dark, Warm and Night - with the two dark ones completed (`disabled`, `shadow` and `scrim` were inheriting light values, so a dark modal had no scrim), a high-contrast derivation that pushes ink, washes and chips past their thresholds, and Settings' Appearance card to choose them. `theme_dark` became `theme_palette` and `theme_contrast_high`; the title bar's glyph still hops between the halves of the day and now carries the contrast with it. The contrast test walks all eight palettes |
 | D42 | Appearance could be read and could not be used: its buttons were at the bottom of a scroll nobody scrolled | `src/screens/screen-settings.native`, `scripts/smoke-sale.sh` | FIXED: the card sits above the scroll. Every palette screenshot the walkthrough took came back in the same dark register, because the widgets were in the tree and off the pane - the presses were delivered to a control the operator could not see. The walkthrough now asserts the chosen state each register button reports and the canvas's own centre pixel, so a palette that stops painting fails there |
 | D43 | The look the device was given was gone at the next boot | `src/data/repos.zig`, `src/core/{model,msg,update}.zig`, `src/tests_data.zig`, `scripts/smoke-sale.sh` | FIXED: `theme_palette` and `theme_contrast` are kept in `app_config` beside the salt - no migration, they are settings rather than records - written the moment the choice is made and read back with the rest of the boot. A read that lands after a tap does not undo it; the operator's choice is the truth. The stored look belongs to the file, so a copied database carries it, which is noted in `docs/glossary.md` |
+| D44 | The restaurant had no colour of its own anywhere: the brand lived in the app's stylesheet and died there | `src/schema/0019_company_brand.sql`, `src/data/repos.zig`, `src/net/reference.zig`, `src/core/{model,theme,msg,update}.zig`, `src/screens/screen-settings.native`, `src/tests{,_data}.zig`, `scripts/smoke-sale.sh` | FIXED: `company.brand_color` is `#rrggbb` or nothing, typed in Settings → Company and saved with the rest of the restaurant's record. The theme reads it through the parser the form validates with, so the two cannot disagree, and it drives the accent, the label on that accent and the focus ring - nothing else, because a void is red in every restaurant. A brand the register cannot carry is walked toward the extreme it has room for, which keeps the hue and moves only its strength; a brand that can is used exactly as typed. It travels in the reference document, so a till that has never met the admin's stylesheet draws the awning's colour. The contrast test wears six brands over all eight palettes, and the walkthrough refuses a half-typed hash and reads a whole one back |
 
 B-002 and B-003 are fixed in the working tree of 2026-10-21, with the
 effect-key collision (D21) and the four unrenderable screens (D20) found
@@ -249,6 +253,8 @@ the suites themselves, and `scripts/verify-all.sh` runs all of them.
 | A second instance adopts the salt that is already stored | Auth |
 | The page decoder | Data |
 | A decoded company does not point at the page bytes | Data |
+| A brand colour that is not a colour is refused | Data |
+| The brand colour travels to the till with the company | Data |
 | Derived counts | Model |
 | Layout survives resize | Markup |
 | The shell gates the screens the enum says it does | Navigation |
@@ -265,6 +271,10 @@ the suites themselves, and `scripts/verify-all.sh` runs all of them.
 | The theme control's glyph is the theme the tap brings | Theme |
 | The palette and the contrast come back on the next boot | Theme |
 | A boot read that lands after a choice does not undo it | Theme |
+| A brand colour is a hash and six digits | Theme |
+| A brand colour keeps every pair it lands on, in every register | Theme |
+| A brand the register can already carry is used exactly as it was typed | Theme |
+| A brand the register cannot carry is pushed, not replaced | Theme |
 | The walk-through takes a restaurant from nothing to a POS | Setup |
 | The setup Symbol field writes the symbol, not the code | Setup |
 | A fresh database asks to be set up | Setup |
@@ -303,8 +313,6 @@ nothing in automation takes the money or prints the receipt.
 
 ## What "done" would add
 
-- An automation smoke for the sale flow.
-- A CI workflow that exercises a sale (one exists, but only a non-blank smoke).
 - A test per screen that asserts what the operator sees, not only that
   it builds.
 - A Developer ID signed, notarised release installed and signed off on

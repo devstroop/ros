@@ -374,6 +374,7 @@ pub const Msg = union(enum) {
     form_company_address_edit: canvas.TextInputEvent,
     form_company_phone_edit: canvas.TextInputEvent,
     form_company_tax_edit: canvas.TextInputEvent,
+    form_company_brand_edit: canvas.TextInputEvent,
     /// Save the company.
     save_company,
     /// Back to the settings menu.

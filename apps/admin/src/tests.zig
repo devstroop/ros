@@ -744,6 +744,86 @@ test "every text pair in every register clears WCAG, both contrasts" {
     }
 }
 
+test "a brand colour is a hash and six digits" {
+    // The shape the form promises, in one place: the typing is refused
+    // here and the theme reads the same function, so neither can be
+    // sure about a colour the other one cannot draw.
+    try testing.expectEqual(@as(?u24, 0x1F7A8C), core.parseBrand("#1F7A8C"));
+    try testing.expectEqual(@as(?u24, 0x1F7A8C), core.parseBrand("#1f7a8c"));
+    try testing.expect(core.parseBrand("") == null); // no colour chosen
+    try testing.expect(core.parseBrand("#1F7A") == null); // mid-typing
+    try testing.expect(core.parseBrand("1F7A8C") == null); // the hash is part of it
+    try testing.expect(core.parseBrand("#1F7A8CG") == null); // too long
+    try testing.expect(core.parseBrand("#1F7A8G") == null); // not hex
+}
+
+/// The colours an owner can type into the company form. A brand is data
+/// rather than a palette, so it arrives from the database and can be
+/// anything: the derivation has to answer for a readable teal and for
+/// pure white with the same code.
+const brand_cases = [_]struct { name: []const u8, text: []const u8 }{
+    .{ .name = "nothing typed", .text = "" },
+    .{ .name = "a deep teal", .text = "#0B5C75" },
+    .{ .name = "a bright yellow", .text = "#FFD54F" },
+    .{ .name = "a mid purple", .text = "#7A1F8C" },
+    .{ .name = "pure white", .text = "#FFFFFF" },
+    .{ .name = "pure black", .text = "#000000" },
+};
+
+/// The tokens for one register wearing one brand: the same call the
+/// renderer makes, with the company row's text in it.
+fn brandColors(palette: core.Palette, high: bool, brand_text: []const u8) canvas.ColorTokens {
+    var model = main.initialModel();
+    model.theme_palette = palette;
+    model.theme_contrast_high = high;
+    model.company_brand_field = brand_text;
+    return theme.tokens(&model).colors;
+}
+
+test "a brand colour keeps every pair it lands on, in every register" {
+    for (palette_cases) |palette_case| {
+        for (brand_cases) |brand_case| {
+            const colors = brandColors(palette_case.palette, palette_case.high, brand_case.text);
+            var which_buf: [80]u8 = undefined;
+            const which = std.fmt.bufPrint(&which_buf, "{s} wearing {s}", .{ palette_case.name, brand_case.name }) catch "a brand";
+            // The accent's two jobs, both asserted: the label it carries,
+            // and the ink the markup paints prices and links with. High
+            // contrast keeps its AAA promise for the label because the
+            // brand is applied before the derivation, not after it.
+            const ink: f32 = if (palette_case.high) 7.0 else 4.5;
+            try expectContrast(which, "accent label on accent", colors.accent_text, colors.accent, ink);
+            try expectContrast(which, "accent as text on background", colors.accent, colors.background, 4.5);
+            try expectContrast(which, "accent as text on surface", colors.accent, colors.surface, 4.5);
+            try expectContrast(which, "focus ring on background", colors.focus_ring, colors.background, 3.0);
+            try expectContrast(which, "focus ring on surface", colors.focus_ring, colors.surface, 3.0);
+        }
+    }
+}
+
+test "a brand the register can already carry is used exactly as it was typed" {
+    const colors = brandColors(.light, false, "#0B5C75");
+    try testing.expect(std.meta.eql(colors.accent, canvas.Color.rgb8(0x0B, 0x5C, 0x75)));
+    try testing.expect(std.meta.eql(colors.focus_ring, colors.accent));
+    // The label is the extreme the colour reads better against: white on
+    // a dark teal, never a grey nobody chose.
+    try testing.expect(std.meta.eql(colors.accent_text, canvas.Color.rgb8(255, 255, 255)));
+}
+
+test "a brand the register cannot carry is pushed, not replaced" {
+    const typed = canvas.Color.rgb8(0xFF, 0xD5, 0x4F);
+    const colors = brandColors(.light, false, "#FFD54F");
+
+    // Logo yellow is unreadable as ink on a light screen, so it is not
+    // used as typed.
+    try testing.expect(!std.meta.eql(colors.accent, typed));
+    // It is darkened rather than changed: the order of the channels is
+    // the hue, and mixing toward black leaves the order alone. A darker
+    // yellow is still the colour on the awning.
+    try testing.expect(colors.accent.r >= colors.accent.g);
+    try testing.expect(colors.accent.g >= colors.accent.b);
+    try testing.expect(colors.accent.r < typed.r);
+}
+
 /// One state's chip, as `parts.native` must paint it and as
 /// `domain.OrderStatus` must name it.
 ///
@@ -1307,11 +1387,11 @@ test "a decoded company does not point at the page bytes" {
     var bytes: std.ArrayList(u8) = .empty;
     defer bytes.deinit(testing.allocator);
 
-    try appendInt(&bytes, 9); // column count
+    try appendInt(&bytes, 10); // column count
     try appendInt(&bytes, 1); // row count
     for ([_][]const u8{
         "id",      "name",  "currency_code", "currency_symbol",   "tax_inclusive",
-        "address", "phone", "tax_number",    "currency_decimals",
+        "address", "phone", "tax_number",    "currency_decimals", "brand_color",
     }) |name| {
         try appendBytes(&bytes, name);
     }
@@ -1327,6 +1407,7 @@ test "a decoded company does not point at the page bytes" {
     try appendText(&bytes, "29ABCDE1234F1Z5");
     try appendTag(&bytes, 1);
     try appendI64(&bytes, 2);
+    try appendText(&bytes, "#1F7A8C");
 
     var model = main.initialModel();
     repos.decodeCompany(&model, bytes.items);
@@ -1342,6 +1423,9 @@ test "a decoded company does not point at the page bytes" {
     try testing.expectEqualStrings("29ABCDE1234F1Z5", model.company_tax_field);
     try testing.expectEqualStrings("USD", model.currency_code);
     try testing.expectEqualStrings("$", model.currency_symbol);
+    // The brand is the theme's, so a brand that dangles is a till that
+    // draws with garbage.
+    try testing.expectEqualStrings("#1F7A8C", model.company_brand_field);
 }
 
 test "the model reports its own numbers instead of storing them" {

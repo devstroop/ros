@@ -42,6 +42,10 @@ pub const CompanyRow = struct {
     phone: []const u8,
     email: []const u8,
     tax_number: []const u8,
+    /// The colour the till draws with. A document written before the
+    /// column existed simply has none, so the default is what an old
+    /// admin still sends.
+    brand_color: []const u8 = "",
     created_at: i64,
 };
 
@@ -158,6 +162,9 @@ test "a snapshot reads the rows the tables carry" {
     try std.testing.expectEqual(@as(u64, 7), snapshot.version);
     try std.testing.expectEqualStrings("Cafe", snapshot.company.?.name);
     try std.testing.expectEqualStrings("INR", snapshot.company.?.currency_code);
+    // The document above predates the brand colour: the field is absent,
+    // and an absent one has to read as "no brand", not as a parse error.
+    try std.testing.expectEqualStrings("", snapshot.company.?.brand_color);
     try std.testing.expectEqual(@as(usize, 1), snapshot.categories.len);
     try std.testing.expectEqualStrings("Starters", snapshot.categories[0].name);
     try std.testing.expectEqual(@as(usize, 1), snapshot.employees.len);

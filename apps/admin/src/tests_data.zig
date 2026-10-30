@@ -69,13 +69,14 @@ const migration_sql = [_][]const u8{
     @embedFile("schema/0016_order_origin.sql"),
     @embedFile("schema/0017_sync_snapshot.sql"),
     @embedFile("schema/0018_order_line_stock.sql"),
+    @embedFile("schema/0019_company_brand.sql"),
 };
 
 const migration_names = [_][]const u8{
-    "core",             "catalog",        "floor",             "customers",    "orders",
-    "inventory",        "ops",            "compliance",        "printing",     "sync",
-    "default_tax_slab", "order_sequence", "order_request_key", "payment_once", "currency_decimals",
-    "order_origin",     "sync_snapshot",  "order_line_stock",
+    "core",             "catalog",        "floor",             "customers",     "orders",
+    "inventory",        "ops",            "compliance",        "printing",      "sync",
+    "default_tax_slab", "order_sequence", "order_request_key", "payment_once",  "currency_decimals",
+    "order_origin",     "sync_snapshot",  "order_line_stock",  "company_brand",
 };
 
 /// A model, a real database and a real effects channel, together.
@@ -4314,12 +4315,16 @@ test "the company details are saved and read back" {
     harness.drain();
     harness.send(.{ .open_screen = @intCast(nav.Screen.settings_company.index()) });
     try testing.expectEqualStrings("Test Diner", harness.model.form_company_name());
+    // A restaurant that never chose a colour has no text in the field:
+    // empty is the honest answer, and the palette's own accent stands.
+    try testing.expectEqualStrings("", harness.model.form_company_brand());
 
     // The form is edited and saved.
     harness.model.form_name_buf.set("Sharma Restaurant and Bar");
     harness.model.form_address_buf.set("12 MG Road");
     harness.model.form_phone_buf.set("+91 98765 43210");
     harness.model.form_tax_buf.set("29ABCDE1234F1Z5");
+    harness.model.form_brand_buf.set("#1F7A8C");
     harness.send(Msg{ .save_company = {} });
     try testing.expectEqualStrings("", harness.model.error_text_text());
 
@@ -4330,6 +4335,34 @@ test "the company details are saved and read back" {
     try testing.expectEqualStrings("12 MG Road", harness.model.company_address_field);
     try testing.expectEqualStrings("+91 98765 43210", harness.model.company_phone_field);
     try testing.expectEqualStrings("29ABCDE1234F1Z5", harness.model.company_tax_field);
+    try testing.expectEqualStrings("#1F7A8C", harness.model.company_brand_field);
+}
+
+test "a brand colour that is not a colour is refused" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.form_name_buf.set("Test Diner");
+    // Mid-typing: the hash is there and the digits are not. Saving this
+    // would put a string the theme cannot read into the company row.
+    harness.model.form_brand_buf.set("#1F7A");
+    harness.send(Msg{ .save_company = {} });
+    try testing.expect(harness.model.error_text_text().len > 0);
+    try testing.expect(!harness.model.busy);
+
+    // Nothing was written, so the stored brand is still the empty one.
+    repos.loadCompany(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqualStrings("", harness.model.company_brand_field);
+
+    // The case of the digits is the typist's business, not the theme's:
+    // the same colour typed in lower case saves.
+    harness.model.form_brand_buf.set("#1f7a8c");
+    harness.send(Msg{ .save_company = {} });
+    harness.drain();
+    repos.loadCompany(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqualStrings("#1f7a8c", harness.model.company_brand_field);
 }
 
 test "a company cannot be saved without a name" {
@@ -4339,6 +4372,46 @@ test "a company cannot be saved without a name" {
     harness.model.form_name_buf.set("   ");
     harness.send(Msg{ .save_company = {} });
     try testing.expect(harness.model.error_text_text().len > 0);
+}
+
+test "the brand colour travels to the till with the company" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // The admin's side: the document the peers pull is built from the
+    // company row in SQLite, so the colour has to be in it or a till
+    // would keep drawing the palette's own accent.
+    harness.model.form_name_buf.set("Test Diner");
+    harness.model.form_brand_buf.set("#1F7A8C");
+    harness.send(Msg{ .save_company = {} });
+    harness.drain();
+    repos.loadReferenceSnapshot(&harness.model, harness.fx);
+    harness.drain();
+    const published = harness.model.reference_snapshot_buf.bytes[0..harness.model.reference_snapshot_len];
+    try testing.expect(std.mem.indexOf(u8, published, "\"brand_color\":\"#1F7A8C\"") != null);
+
+    // The peer's side: a document whose company carries a different
+    // colour. Every other field has to land in its own column too - the
+    // insert is twelve parameters long, and a swapped one writes the
+    // colour into the created date and the name into the address.
+    const received =
+        \\{"version":9,
+        \\ "company":{"id":1,"name":"Sharma","currency_code":"INR","currency_symbol":"Rs",
+        \\  "tax_inclusive":0,"currency_decimals":2,"address":"12 MG Road",
+        \\  "phone":"+91 98765 43210","email":"","tax_number":"29ABCDE1234F1Z5",
+        \\  "brand_color":"#B4141E","created_at":10}}
+    ;
+    harness.send(Msg{ .reference = .{ .key = 9301, .outcome = .ok, .status = 200, .body = received } });
+    harness.drain();
+
+    repos.loadCompany(&harness.model, harness.fx);
+    harness.drain();
+    try testing.expectEqualStrings("Sharma", harness.model.company_name_field);
+    try testing.expectEqualStrings("INR", harness.model.currency_code);
+    try testing.expectEqualStrings("12 MG Road", harness.model.company_address_field);
+    try testing.expectEqualStrings("29ABCDE1234F1Z5", harness.model.company_tax_field);
+    try testing.expectEqual(@as(i64, 1), harness.model.company_id);
+    try testing.expectEqualStrings("#B4141E", harness.model.company_brand_field);
 }
 
 test "a product is saved, read back, and the menu shows it" {

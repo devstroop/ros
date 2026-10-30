@@ -423,9 +423,12 @@ pub const discounts_sql =
 ;
 
 /// The company row. A Restaurant OS database holds exactly one company.
+///
+/// `email` is not read: no screen shows it. `brand_color` is, because
+/// the theme draws with it the moment the company loads.
 pub const company_sql =
     \\SELECT id, name, currency_code, currency_symbol, tax_inclusive,
-    \\       address, phone, tax_number, currency_decimals
+    \\       address, phone, tax_number, currency_decimals, brand_color
     \\FROM company
     \\LIMIT 1;
 ;
@@ -1746,6 +1749,7 @@ pub fn decodeCompany(model: *Model, bytes: []const u8) void {
     model.company_address_field = model.company_buf.dupe(reader.textOf(&values, "address")) orelse "";
     model.company_phone_field = model.company_buf.dupe(reader.textOf(&values, "phone")) orelse "";
     model.company_tax_field = model.company_buf.dupe(reader.textOf(&values, "tax_number")) orelse "";
+    model.company_brand_field = model.company_buf.dupe(reader.textOf(&values, "brand_color")) orelse "";
     model.currency_code = model.company_buf.dupe(reader.textOf(&values, "currency_code")) orelse "";
     model.currency_symbol = model.company_buf.dupe(reader.textOf(&values, "currency_symbol")) orelse "";
     model.tax_inclusive = reader.boolOf(&values, "tax_inclusive");
@@ -2107,21 +2111,24 @@ pub fn updateCompany(
     address: []const u8,
     phone: []const u8,
     tax_number: []const u8,
+    brand_color: []const u8,
 ) void {
     // The parameters match the placeholders EXACTLY: the engine refuses
     // a statement whose parameter count differs from the placeholders it
     // uses, and the refusal is a silent no-write.
-    var params: [4]native_sdk.EffectDbValue = .{
+    var params: [5]native_sdk.EffectDbValue = .{
         .{ .text = name },
         .{ .text = address },
         .{ .text = phone },
         .{ .text = tax_number },
+        .{ .text = brand_color },
     };
     fx.dbExec(.{
         .key = key,
         .statements = &.{.{
             .sql =
-            \\UPDATE company SET name = ?1, address = ?2, phone = ?3, tax_number = ?4
+            \\UPDATE company SET name = ?1, address = ?2, phone = ?3, tax_number = ?4,
+            \\                brand_color = ?5
             \\WHERE id = (SELECT id FROM company LIMIT 1);
             ,
             .params = &params,
@@ -4764,6 +4771,7 @@ const reference_snapshot_sql =
     \\      'currency_symbol', currency_symbol, 'tax_inclusive', tax_inclusive,
     \\      'currency_decimals', currency_decimals, 'address', address,
     \\      'phone', phone, 'email', email, 'tax_number', tax_number,
+    \\      'brand_color', brand_color,
     \\      'created_at', created_at) FROM company LIMIT 1),
     \\    'categories', (SELECT json_group_array(json_object(
     \\      'id', id, 'name', name, 'sort_order', sort_order, 'active', active))
@@ -4844,7 +4852,7 @@ pub fn applyReference(
     var count: usize = 0;
 
     if (snapshot.company) |row| {
-        const params = allocator.alloc(native_sdk.EffectDbValue, 11) catch return false;
+        const params = allocator.alloc(native_sdk.EffectDbValue, 12) catch return false;
         params[0] = .{ .integer = row.id };
         params[1] = .{ .text = row.name };
         params[2] = .{ .text = row.currency_code };
@@ -4855,7 +4863,8 @@ pub fn applyReference(
         params[7] = .{ .text = row.phone };
         params[8] = .{ .text = row.email };
         params[9] = .{ .text = row.tax_number };
-        params[10] = .{ .integer = row.created_at };
+        params[10] = .{ .text = row.brand_color };
+        params[11] = .{ .integer = row.created_at };
         if (!appendReferenceStatement(&statements, &count, reference_company_sql, params)) return false;
     }
 
@@ -4980,11 +4989,11 @@ fn appendReferenceStatement(
 
 const reference_company_sql =
     \\INSERT INTO company (id, name, currency_code, currency_symbol, tax_inclusive,
-    \\  currency_decimals, address, phone, email, tax_number, created_at)
-    \\VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+    \\  currency_decimals, address, phone, email, tax_number, brand_color, created_at)
+    \\VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
     \\ON CONFLICT(id) DO UPDATE SET name = ?2, currency_code = ?3,
     \\  currency_symbol = ?4, tax_inclusive = ?5, currency_decimals = ?6,
-    \\  address = ?7, phone = ?8, email = ?9, tax_number = ?10;
+    \\  address = ?7, phone = ?8, email = ?9, tax_number = ?10, brand_color = ?11;
 ;
 
 const reference_category_sql =

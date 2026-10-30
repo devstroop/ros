@@ -278,6 +278,24 @@ pub const Palette = enum(u8) {
     }
 };
 
+/// The restaurant's own colour, read from the text the form holds.
+///
+/// `#rrggbb` and nothing else: six hex digits after the hash, either
+/// case. Anything else is not a colour but a typo, and the answer is
+/// null so the caller can choose - the form refuses the typing, the
+/// theme falls back to the register's own accent. A brand is a choice
+/// the owner makes once and can take back by emptying the field, which
+/// is why "no colour set" and "colour unreadable" are the same answer.
+pub fn parseBrand(text: []const u8) ?u24 {
+    if (text.len != 7 or text[0] != '#') return null;
+    var value: u24 = 0;
+    for (text[1..]) |char| {
+        const digit = std.fmt.charToDigit(char, 16) catch return null;
+        value = value * 16 + digit;
+    }
+    return value;
+}
+
 /// The tax on a price, in minor units.
 ///
 /// `rate_bps` is in basis points, so 500 is five percent. An inclusive
@@ -513,6 +531,9 @@ pub const Model = struct {
     company_address_field: []const u8 = "",
     company_phone_field: []const u8 = "",
     company_tax_field: []const u8 = "",
+    /// The colour the restaurant trades under, as `#rrggbb`. Empty means
+    /// the register's own accent: a new company has no opinion yet.
+    company_brand_field: []const u8 = "",
     currency_code: []const u8 = "USD",
     currency_symbol: []const u8 = "$",
     /// True when the menu's prices already include tax.
@@ -642,6 +663,10 @@ pub const Model = struct {
     form_address_buf: canvas.TextBuffer(128) = .{},
     form_phone_buf: canvas.TextBuffer(32) = .{},
     form_tax_buf: canvas.TextBuffer(32) = .{},
+    /// `#rrggbb` and no more: the field cannot take a tenth character,
+    /// so a brand that is too long cannot be typed, only mistyped
+    /// inside the seven.
+    form_brand_buf: canvas.TextBuffer(7) = .{},
 
     // ------------------------------------------------------ the kitchen
 
@@ -1319,6 +1344,10 @@ pub const Model = struct {
 
     pub fn form_company_tax(model: *const Model) []const u8 {
         return model.form_tax_buf.text();
+    }
+
+    pub fn form_company_brand(model: *const Model) []const u8 {
+        return model.form_brand_buf.text();
     }
 
     /// The settings menu. This method lives INSIDE the struct on
@@ -2548,7 +2577,7 @@ pub const SettingsItem = struct {
 };
 
 const settings_menu = [_]SettingsItem{
-    .{ .id = @intFromEnum(Screen.settings_company), .title = "Company", .detail = "Name, address, tax number" },
+    .{ .id = @intFromEnum(Screen.settings_company), .title = "Company", .detail = "Name, address, tax number, colour" },
     .{ .id = @intFromEnum(Screen.settings_printers), .title = "Printers", .detail = "Receipt and kitchen printers" },
     .{ .id = @intFromEnum(Screen.settings_tax), .title = "Tax slabs", .detail = "The rates and the slabs" },
     .{ .id = @intFromEnum(Screen.settings_currency), .title = "Currency", .detail = "Currency and region" },

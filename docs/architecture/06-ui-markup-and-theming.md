@@ -199,11 +199,38 @@ reads it back at boot, and a device wakes in the look it was left in.
 The light semantic fills are the darkest step of the v1 hues that clears
 WCAG AA with white text, and as text on the light background and surface
 (`tests.zig` asserts every text pair in all eight palettes - four
-registers, each standard and high contrast).
+registers, each standard and high contrast - and again with each of six
+brands worn).
+
+### The restaurant's own colour
+
+A brand is data, not a stylesheet. `company.brand_color` holds `#rrggbb`
+or nothing, the owner types it into Settings → Company, and the theme
+reads it through the same parser the form validates with
+(`core.parseBrand`), so the two can never disagree about what counts as
+a colour.
+
+The brand replaces exactly three tokens - `accent`, `accent_text` and
+`focus_ring` - because those are the three that mean "this restaurant".
+The danger red and the success green mean "this void is permanent" and
+"this ticket is ready", and a logo colour does not get to redefine them.
+
+A colour that already clears four and a half against the register's
+surfaces, and against the label it can carry, is used exactly as it was
+typed. One that does not is walked toward the extreme its register has
+room for - lighter on a dark ground, darker on a light one - which keeps
+the hue and moves only its strength. The accent has two jobs, so it is
+held to both: it is the ground a button's label sits on, and it is the
+ink the markup paints prices with.
+
+An empty field is the honest "this restaurant has no colour yet", and
+the register's own accent stands. The brand is applied *before* the
+high-contrast derivation, so the setting that is about the eyes pushes
+the brand the same way it pushes the house accent.
 
 ### Semantic tokens in use
 
-Light and Dark, the two registers the brand hues drive:
+Light and Dark, the two registers the house hues drive:
 
 | Token | Light | Dark |
 |---|---|---|
@@ -327,6 +354,8 @@ patterns are repeated inline.
    visible (empty states, headers, rows).
 4. **No responsive mode.** Window resize changes the split fraction only.
 5. **No motion.** There are no transitions or tweened values.
-6. **Contrast is tested only for the token pairs.** Every register's text
-   pairs are asserted, but non-text contrast and real screen composition
-   are not audited.
+6. **Contrast is tested for the token pairs, not the composition.** Every
+   register's text pairs are asserted, and so are the accent's two jobs -
+   as a label's ground and as ink - with each of six brands. What is not
+   audited is a real screen: two tokens touching each other, a chip on a
+   wash, a screenshot nobody has looked at.

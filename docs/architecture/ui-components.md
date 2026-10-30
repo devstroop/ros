@@ -713,12 +713,18 @@ references resolve against the app's **live** tokens on every rebuild
 changes - dark mode flips `surface` automatically, with no rebuild
 trigger and no per-element work.
 
-### The brand palette
+### The house palette
+
+Restaurant OS's own colours. They are not a restaurant's brand: that word
+belongs to what the owner types into Settings → Company, so the fixed
+hues the app falls back on are named for the house.
 
 ```zig
 // src/core/theme.zig
-/// The Restaurant OS brand palette.
-const brand = struct {
+/// Restaurant OS's own colours - the house palette. A restaurant's brand
+/// is not here: that is data the owner types, and it arrives through
+/// `Model.company_brand_field`.
+const house = struct {
     // The light semantic fills are the darkest step of the v1 hues that
     // clears WCAG AA with white text, and as text on the light
     // background and surface. The test in tests.zig is the guard.
@@ -730,7 +736,7 @@ const brand = struct {
 };
 ```
 
-| Brand role | Light value | Dark value | Token it drives |
+| House role | Light value | Dark value | Token it drives |
 |---|---|---|---|
 | Primary (cyan blue) | `#176B84` | `#4CC2EA` | `accent`, `focus_ring` |
 | Success | `#1B6E47` | `#45B886` | `success` |
@@ -744,13 +750,16 @@ token, and as text on `background` and `surface`. The test
 `every text pair in every register clears WCAG, both contrasts` asserts
 those combinations for all eight palettes - four registers, each in its
 standard and its high-contrast form - so a theme edit that breaks one
-fails the suite.
+fails the suite. `a brand colour keeps every pair it lands on, in every
+register` runs the accent's four pairs again over the same eight, each
+wearing one of six brands, because a brand is data and arrives
+unlooked-for.
 
 ### The four registers
 
 `light()`, `dark()`, `warm()` and `night()` are four complete
-`canvas.DesignTokens` values, chosen by `register(which)`. The brand
-hues are the light register's; the other three name their own values
+`canvas.DesignTokens` values, chosen by `register(which)`. The house hues
+are the light register's; the other three name their own values
 because a hue that clears AA on white rarely clears it on a
 near-black ground.
 
@@ -823,6 +832,37 @@ Settings' Appearance card turns it on; the title bar's glyph does not
 touch it, because how much separation a person needs is not a property of
 the palette they happen to be looking at.
 
+### The restaurant's own colour
+
+`company.brand_color` is the only colour in the app that an owner
+supplies. `withBrandColor` takes a register and that colour and returns
+the register with three tokens replaced - `accent`, `accent_text` and
+`focus_ring` - and everything else left alone, because the red of a void
+and the green of a ready ticket mean the same thing in every restaurant.
+
+The accent does two jobs, so the brand is held to both: it is the ground
+a button's label sits on, and it is the ink the markup paints prices and
+links with. A colour that already clears 4.5:1 against the register's own
+surfaces, and against whichever of black or white it reads better with,
+is used exactly as it was typed - the point of a brand is that nobody
+has to explain it twice. A colour that does not is walked eight percent
+at a time toward the extreme the register has room for, lighter on a dark
+ground and darker on a light one, up to twelve steps. Only its strength
+moves: mixing toward an extreme scales every channel the same way, so the
+order of the channels - the hue a customer recognises - survives, and a
+yellow awning stays yellow on the Night register rather than becoming
+somebody else's cyan.
+
+`core.parseBrand` is the one shape test. The form refuses a string it
+cannot read, with a sentence naming what it wanted, and the theme calls
+the same function, so there is no colour that the owner could save and
+the renderer would have to guess about. An empty field is not a failure
+to parse; it is the answer "this restaurant has no colour yet", and the
+register's own accent stands.
+
+Because the brand is applied before the derivation, high contrast pushes
+a restaurant's colour exactly the way it pushes the house one.
+
 ### The type, spacing and radius scales
 
 All four registers forward the same three scales, from one
@@ -864,8 +904,12 @@ rebuild:
 /// nothing else.
 pub fn tokens(model: *const Model) DesignTokens {
     const chosen = model.theme_palette;
-    if (!model.theme_contrast_high) return register(chosen);
-    return withColors(highContrast(register(chosen).colors, chosen.is_dark()));
+    var colors = register(chosen).colors;
+    if (core.parseBrand(model.company_brand_field)) |typed| {
+        colors = withBrandColor(colors, chosen.is_dark(), rgb24(typed));
+    }
+    if (!model.theme_contrast_high) return withColors(colors);
+    return withColors(highContrast(colors, chosen.is_dark()));
 }
 ```
 
@@ -882,10 +926,12 @@ theme_contrast_high: bool = false,
 // src/core/update.zig
 // The glyph promises the other half of the day, so this lands on
 // one of the two palettes it names. All four are Settings' to
-// offer, and the contrast is a setting of its own.
-.toggle_theme => model.theme_palette = model.theme_palette.otherHalf(),
-.set_palette => |code| model.theme_palette = model_mod.Palette.fromCode(code),
-.toggle_contrast => model.theme_contrast_high = !model.theme_contrast_high,
+// offer, and the contrast is a setting of its own. All three
+// answers are the same move: change the model, remember that the
+// operator has chosen, and write the pair to this device.
+.toggle_theme => chooseTheme(model, fx, model.theme_palette.otherHalf(), model.theme_contrast_high),
+.set_palette => |code| chooseTheme(model, fx, model_mod.Palette.fromCode(code), model.theme_contrast_high),
+.toggle_contrast => chooseTheme(model, fx, model.theme_palette, !model.theme_contrast_high),
 ```
 
 ```zig

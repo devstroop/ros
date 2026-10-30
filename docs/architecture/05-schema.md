@@ -1,9 +1,9 @@
 # Schema
 
-> **Status:** Scaffolded — 46 tables across 17 migrations; only the core
+> **Status:** Scaffolded — 46 tables across 19 migrations; only the core
 > subset is used by repositories or UI.
-> **Last verified:** 2026-10-24, by source review and the migration lock.
-> **Source:** `src/schema/0001_core.sql` … `0017_sync_snapshot.sql`,
+> **Last verified:** 2026-10-30, by source review and the migration lock.
+> **Source:** `src/schema/0001_core.sql` … `0019_company_brand.sql`,
 > `src/schema/migrations.lock.json`.
 
 ## Conventions
@@ -26,7 +26,7 @@ partly by review.
 ## Migration policy
 
 - Files are numbered `NNNN_name.sql` in `src/schema/`.
-- `migrations.lock.json` is the authority: version 17 and seventeen hashes.
+- `migrations.lock.json` is the authority: version 19 and nineteen hashes.
 - `native db new-migration <name>` is the intended authoring path.
 - The engine opens the database **already migrated** at boot; the app
   never runs migration code.
@@ -43,7 +43,7 @@ The SQL file is authoritative for columns. This table is the map.
 
 | Table | Purpose | Used today |
 |---|---|---|
-| `company` | The one company: name, currency, tax-inclusive flag, address/contact/tax number | Read |
+| `company` | The one company: name, currency, tax-inclusive flag, address/contact/tax number, brand colour | Read/write |
 | `currency` | Supported currencies with symbol and minor-unit count | No |
 | `employee` | Staff; `role` 0–3; `pin_hash` salted SHA-256 | Login read |
 | `app_config` | Key/value settings: PIN salt, this device's palette and contrast, schema version, device role, shift | Read/write (salt, look) |
@@ -158,6 +158,33 @@ keeps `sync_state('ops_since_compact')` durable across restarts. The
 deleted range is recorded per device in `sync_state('op_floor')`; a
 peer below it is sent to `/v1/snapshot`. See
 [ADR-0020](../decisions/0020-late-join-and-compaction.md).
+
+### 0018 — Order line stock (1 column)
+
+| Column | Purpose | Used today |
+|---|---|---|
+| `order_line.stock_taken` | Whether this database's shelf figure has a plate in it: 1 means a later void must put it back | Yes |
+
+A line takes its product off the shelf where the sale is written, and a
+void puts it back. A device that bootstraps from a compacted snapshot
+never replays the sale — its stock already reflects it — so the line has
+to remember whether there is anything to restore. A line on an open order
+keeps 1 even when it arrives in a snapshot, because the snapshot's count
+was taken with that plate already sold.
+
+### 0019 — Company brand colour (1 column)
+
+| Column | Purpose | Used today |
+|---|---|---|
+| `company.brand_color` | `#rrggbb` the restaurant draws with; `''` means the register's own accent | Yes |
+
+The colour belongs to the company rather than to the device: the owner
+types it once and every till, board and kiosk on the network draws with
+it, including one that was set up before the column existed. It is
+therefore part of the reference document, not of `app_config`, and the
+default keeps an old database upgrading in place with no data migration.
+The app never stores a colour it cannot read — the form refuses a string
+that is not `#rrggbb`, and the theme parses the same shape.
 
 ## Indexes
 

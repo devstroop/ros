@@ -433,6 +433,14 @@ fn saveCompany(model: *Model, fx: *Effects) void {
         model.error_text = "The restaurant needs a name";
         return;
     }
+    // The colour is the one field that may be left empty, because empty
+    // is the answer "the restaurant has no colour of its own". Anything
+    // else has to be a colour, and a half-typed hash is not one.
+    const brand = std.mem.trim(u8, model.form_brand_buf.text(), " ");
+    if (brand.len != 0 and model_mod.parseBrand(brand) == null) {
+        model.error_text = "The brand colour is a hash and six digits, like #1F7A8C";
+        return;
+    }
     model.busy = true;
     model.error_text = "";
     repos.updateCompany(
@@ -442,6 +450,7 @@ fn saveCompany(model: *Model, fx: *Effects) void {
         std.mem.trim(u8, model.form_address_buf.text(), " "),
         std.mem.trim(u8, model.form_phone_buf.text(), " "),
         std.mem.trim(u8, model.form_tax_buf.text(), " "),
+        brand,
     );
 }
 
@@ -998,6 +1007,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.form_address_buf.set(model.company_address_field);
                 model.form_phone_buf.set(model.company_phone_field);
                 model.form_tax_buf.set(model.company_tax_field);
+                model.form_brand_buf.set(model.company_brand_field);
             }
             go(model, screen);
             // The screen loads what it shows: the effects channel has
@@ -1901,6 +1911,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .form_company_tax_edit => |event| model.form_tax_buf.apply(event),
 
+        .form_company_brand_edit => |event| model.form_brand_buf.apply(event),
+
         .save_company => saveCompany(model, fx),
 
         .open_settings => go(model, .settings),
@@ -2425,6 +2437,7 @@ fn resetSession(model: *Model, gate: Screen) void {
     model.form_address_buf.set("");
     model.form_phone_buf.set("");
     model.form_tax_buf.set("");
+    model.form_brand_buf.set("");
 
     model.error_text = "";
     model.setup_error = "";

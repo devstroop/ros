@@ -9,7 +9,7 @@
 #
 #   walk-through -> sign out -> role picker -> PIN login ->
 #   POS -> add a dish -> Place order -> Orders -> theme -> Appearance
-#   -> KDS
+#   -> brand colour -> KDS
 #
 # It then copies the database the admin wrote into the kiosk's data
 # directory and asserts the same ticket is on the kitchen board, so the
@@ -149,16 +149,33 @@ tap() {
   fail "pressing \"$name\" never held: $*"
 }
 
+# The text a field holds is published back as a `text="…"` attribute; a
+# field that holds nothing carries no such attribute, so an empty reading
+# means empty rather than unread.
+box_text() {
+  automate snapshot |
+    { grep -F "main-canvas#$1 " || true; } |
+    sed -n 's/.* text="\([^"]*\)".*/\1/p' |
+    head -1
+}
+
+# Type into a field, and type again until the field says it holds the
+# value. A press can be verified by what the screen does, but a keystroke
+# leaves no screen behind to read: the host answers a stale id with
+# "delivered", drops the command, and the walk-through continues with an
+# empty field that every later step assumes is filled.
 type_into() {
   local name="$1" value="$2" id attempt
   for attempt in 1 2 3 4 5; do
     id="$(widget_id textbox "$name")"
     [ -n "$id" ] || fail "no textbox named \"$name\" on screen"
-    if automate widget-action main-canvas "$id" set_text "$value" >/dev/null 2>&1; then
+    automate widget-action main-canvas "$id" set_text "$value" >/dev/null 2>&1 || true
+    if [ "$(box_text "$id")" = "$value" ]; then
       return 0
     fi
+    sleep 0.25
   done
-  fail "typing into \"$name\" never landed"
+  fail "typing \"$value\" into \"$name\" never landed - the field reads \"$(box_text "${id:-}")\""
 }
 
 assert_visible() {
@@ -285,6 +302,31 @@ printf '==> the choice switches back, and the device is left plain\n'
 tap button "High contrast" --absent 'name="High contrast".*selected'
 tap button "Light" 'name="Light".*selected'
 
+# The restaurant's own colour is not a device setting: the owner types it
+# into the company form once, and every screen on every device draws with
+# it. Two things are worth proving from the operator's side - a colour
+# the theme cannot read is refused on the screen it was typed on, and a
+# colour that can be read comes back out of the database when the form is
+# opened again.
+# The settings rows are cards: the press lives on the card, which the
+# snapshot publishes as an unnamed group, and the word that names it is
+# the title inside. Pressing the title is how the operator presses the
+# row, and the pointer lands inside the card either way.
+printf '==> the company form takes the restaurant colour, and keeps it\n'
+tap text "Company" 'Restaurant name' 'Brand colour'
+type_into "Brand colour" "#1F7A"
+tap button "Save" 'a hash and six digits'
+type_into "Brand colour" "#B4141E"
+tap button "Save" --absent 'a hash and six digits'
+
+# Opening the form again seeds it from the database, so the colour that
+# comes back is the colour that was saved rather than the text still in
+# the widget.
+tap listitem "Settings" 'Appearance'
+tap text "Company" 'Brand colour'
+assert_visible '#B4141E'
+screenshot settings-brand
+
 # ---------------------------------------------------------------- kiosk
 
 printf '==> handing the database to the kiosk\n'
@@ -309,4 +351,4 @@ screenshot kiosk-cooking
 tap button "Mark ready" 'Ready'
 screenshot kiosk-ready
 
-printf 'smoke-sale: PASS - setup, role picker, login, sale, orders and KDS\n'
+printf 'smoke-sale: PASS - setup, role picker, login, sale, orders, the look and KDS\n'

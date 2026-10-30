@@ -78,7 +78,7 @@ does) or bind an in-memory store.
 | Node budget | No assertion on `widget_nodes` |
 | Error arms (`db_failed`, failed loads) | Copy and state are untested |
 | Timer tick | Untested |
-| Theme switch | The walkthrough presses the control, asserts the chosen state each register button reports and the canvas's own centre pixel, and keeps a screenshot of every register; every text pair in all eight palettes - four registers, each standard and high contrast - clears its threshold in `src/tests.zig`, and Settings is pinned to offer every register the enum has. The choice is kept: the DB test writes it, boots a second model and reads it back, and shows that a read landing after a tap does not undo it. No test compares the registers field by field |
+| Theme switch | The walkthrough presses the control, asserts the chosen state each register button reports and the canvas's own centre pixel, and keeps a screenshot of every register; every text pair in all eight palettes - four registers, each standard and high contrast - clears its threshold in `src/tests.zig`, and Settings is pinned to offer every register the enum has. The choice is kept: the DB test writes it, boots a second model and reads it back, and shows that a read landing after a tap does not undo it. The restaurant's own colour is asserted the same way from both ends - the form refuses a hash it cannot read and the pair survives, the value comes back out of the database and into the reference document a peer applies, and the eight palettes each wear six brands through the accent's four pairs. A brand the register cannot carry is proved to be pushed rather than replaced: the order of its channels is the hue, and that order is what the test holds. No test compares the registers field by field, and no test screenshots a branded canvas, because the pixel the walkthrough can read is the canvas's centre, which is a card and not a button |
 | Accessibility names | Left to SDK validation |
 | Window resize below minimum | Untested |
 | Sidecars | No code, no tests |
@@ -129,21 +129,31 @@ native automate assert 'widget_nodes=<n>/1024'
 
 One pixel on a canvas is not a sale, so `sale-smoke` runs
 `scripts/smoke-sale.sh`, which walks setup → sign out → role picker → PIN
-→ POS → add a dish → Place order → Orders, then hands the database the
-admin wrote to the kiosk and asserts the same ticket on the kitchen board
-and advances it. Every step is an `automate assert` against the snapshot,
-so a shell gate pointing at the wrong ordinal fails the run rather than
-rendering something plausible.
+→ POS → add a dish → Place order → Orders → the four registers and the
+restaurant's own colour, then hands the database the admin wrote to the
+kiosk and asserts the same ticket on the kitchen board and advances it.
+Every step is an `automate assert` against the snapshot, so a shell gate
+pointing at the wrong ordinal fails the run rather than rendering
+something plausible.
 
-Two things the script has to survive:
+Three things the script has to survive:
 
 - **Stale widget ids.** A view that refreshes on a timer rebuilds its tree,
   and an id read from one snapshot can be retired before the click carrying
   it arrives. Every press is repeated until the screen it expects actually
   appears; the app's own guards — a sale still being saved, an order
   already moving — make a repeated press safe instead of a second sale.
+- **Keystrokes, which move no screen.** A dropped press shows up as the
+  next assertion failing; a dropped `set_text` shows up twenty steps later
+  as an order with no name on it. The host answers a stale id with
+  `delivered` and discards the command, so the only proof a field took its
+  value is the `text="…"` the snapshot publishes back — and typing is
+  repeated until that reading matches what was asked for.
 - **Names, not positions.** A widget is found by role and accessible name,
-  matched literally, so a price carrying `$` is never read as a regex.
+  matched literally, so a price carrying `$` is never read as a regex. The
+  settings rows press as cards, which the tree publishes unnamed: the word
+  that says which row it is sits on the title inside, so the script presses
+  the title and the card takes it.
 
 The same path exists as a headless test, "a sale at the till shows on the
 orders board and the kitchen board", driven against a real migrated

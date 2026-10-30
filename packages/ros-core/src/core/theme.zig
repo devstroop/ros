@@ -1,9 +1,9 @@
 //! The design tokens.
 //!
-//! Restaurant OS has a brand, and a brand that only exists in the app's own
-//! stylesheet is a brand that dies with the stylesheet. The Native SDK
-//! lets the app own its whole design system - colours, type scale,
-//! spacing, radii - so the palette lives in one file that a designer
+//! Restaurant OS has a look of its own, and a look that only exists in the
+//! app's own stylesheet is a look that dies with the stylesheet. The
+//! Native SDK lets the app own its whole design system - colours, type
+//! scale, spacing, radii - so the palette lives in one file that a designer
 //! can read and a developer can diff.
 //!
 //! The palette below is the product's own: the cyan-and-teal of Eatery v1,
@@ -12,6 +12,12 @@
 //! contrast, which pushes the tokens that carry meaning away from the
 //! ground they sit on until they clear the threshold. Colours are sRGB
 //! bytes; the runtime handles the rest.
+//!
+//! A restaurant's own colour is not one of those hues, and it is not this
+//! file's to invent: `company.brand_color` arrives from the database and is
+//! worn by whichever register the device chose, in the three places a brand
+//! is allowed to speak. What is fixed here is what a restaurant that has
+//! not chosen yet draws with.
 //!
 //! Every text pair in every register and in its high-contrast form is
 //! asserted against WCAG in `src/tests.zig`. That is the only reason a
@@ -29,8 +35,10 @@ const ColorTokens = canvas.ColorTokens;
 const DesignTokens = canvas.DesignTokens;
 const Model = core.Model;
 
-/// The Restaurant OS brand palette.
-const brand = struct {
+/// Restaurant OS's own colours - the house palette. A restaurant's brand
+/// is not here: that is data the owner types, and it arrives through
+/// `Model.company_brand_field`.
+const house = struct {
     // The light semantic fills are the darkest step of the v1 hues that
     // clears WCAG AA with white text, and as text on the light
     // background and surface. The test in tests.zig is the guard.
@@ -96,17 +104,17 @@ pub fn light() DesignTokens {
         .text = rgb(0x15, 0x1A, 0x21),
         .text_muted = rgb(0x64, 0x6E, 0x7A),
         .border = rgb(0xE1, 0xE5, 0xEA),
-        .accent = brand.primary,
+        .accent = house.primary,
         .accent_text = white,
-        .destructive = brand.danger,
+        .destructive = house.danger,
         .destructive_text = white,
-        .success = brand.success,
+        .success = house.success,
         .success_text = white,
-        .warning = brand.warning,
+        .warning = house.warning,
         .warning_text = white,
-        .info = brand.info,
+        .info = house.info,
         .info_text = white,
-        .focus_ring = brand.primary,
+        .focus_ring = house.primary,
         // The SDK's default is the light register's own near-white step;
         // naming it here keeps a disabled control reading as a dimmed
         // surface rather than as an untouched one.
@@ -114,7 +122,7 @@ pub fn light() DesignTokens {
     });
 }
 
-/// The dark palette. The same brand, one step down in luminance.
+/// The dark palette. The same hues, one step down in luminance.
 pub fn dark() DesignTokens {
     return withColors(.{
         .background = rgb(0x0F, 0x13, 0x18),
@@ -247,8 +255,9 @@ fn minRatio(colour: Color, grounds: []const Color) f32 {
 
 /// `colour` moved, in steps, until it clears `target` against every ground
 /// it can be drawn on - in whichever direction, toward white or toward
-/// black, actually gets there. This is how high contrast keeps a brand hue
-/// instead of replacing it: the token is pushed until it carries its label,
+/// black, actually gets there. This is how high contrast keeps the hue it
+/// was given instead of replacing it: the token is pushed until it carries
+/// its label,
 /// and the only colours that end at an extreme are the ones that were
 /// unreadable anyway.
 fn pushAway(colour: Color, grounds: []const Color, target: f32) Color {
@@ -305,11 +314,80 @@ fn highContrast(base: ColorTokens, on_dark: bool) ColorTokens {
     return colors;
 }
 
+/// The restaurant's own colour, as the palette spells it.
+fn rgb24(value: u24) Color {
+    const r: u8 = @truncate(value >> 16);
+    const g: u8 = @truncate(value >> 8);
+    const b: u8 = @truncate(value);
+    return rgb(r, g, b);
+}
+
+/// The label a fill can carry: whichever extreme reads better on it.
+/// Asked of a colour rather than decided by a brightness rule, because
+/// the rule is the thing the threshold is actually about.
+fn labelFor(fill: Color) Color {
+    return if (ratio(fill, black) >= ratio(fill, white)) black else white;
+}
+
+/// How far a brand is walked, in steps of eight percent, if the colour as
+/// typed cannot carry the register.
+const brand_steps = 12;
+
+/// The register with the restaurant's colour in the three places a brand
+/// is allowed to speak: the accent fill, the label it carries, and the
+/// ring a focused control draws. The rest of the palette - the danger red,
+/// the success green - means something to the operator rather than to the
+/// owner, and a brand does not get to redefine it.
+///
+/// The accent has two jobs, so a brand has to clear both: it is the ground
+/// a button's label sits on, and it is ink the markup paints prices and
+/// links with. Four and a half against the register's own surfaces is the
+/// number that means "readable either way", and it is the same promise the
+/// register's built-in accent already makes.
+///
+/// A brand that already clears it is used exactly as it was typed. One
+/// that does not is walked toward the extreme its register has room for -
+/// lighter on a dark ground, darker on a light one - until it clears. That
+/// is the only change: the hue a customer recognises survives every
+/// register, and only its strength moves.
+fn withBrandColor(base: ColorTokens, on_dark: bool, brand_color: Color) ColorTokens {
+    var colors = base;
+    const toward = if (on_dark) white else black;
+    const grounds = [_]Color{ base.background, base.surface, base.surface_subtle };
+
+    var accent = brand_color;
+    var label = labelFor(brand_color);
+    var step: usize = 0;
+    while (step <= brand_steps) : (step += 1) {
+        const candidate = if (step == 0)
+            brand_color
+        else
+            mix(brand_color, toward, @as(f32, @floatFromInt(step)) * 0.08);
+        const candidate_label = labelFor(candidate);
+        accent = candidate;
+        label = candidate_label;
+        if (minRatio(candidate, &grounds) >= 4.5 and ratio(candidate, candidate_label) >= 4.5) break;
+    }
+
+    colors.accent = accent;
+    colors.accent_text = label;
+    colors.focus_ring = accent;
+    return colors;
+}
+
 /// The tokens for the current model state. The runtime asks for these
 /// on every rebuild, so changing the theme is a model change and
 /// nothing else.
+///
+/// The brand is applied before high contrast, so a restaurant's colour
+/// is pushed by the setting that is about the eyes rather than replaced
+/// by it - the same rule the register's own accent follows.
 pub fn tokens(model: *const Model) DesignTokens {
     const chosen = model.theme_palette;
-    if (!model.theme_contrast_high) return register(chosen);
-    return withColors(highContrast(register(chosen).colors, chosen.is_dark()));
+    var colors = register(chosen).colors;
+    if (core.parseBrand(model.company_brand_field)) |typed| {
+        colors = withBrandColor(colors, chosen.is_dark(), rgb24(typed));
+    }
+    if (!model.theme_contrast_high) return withColors(colors);
+    return withColors(highContrast(colors, chosen.is_dark()));
 }

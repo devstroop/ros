@@ -100,6 +100,19 @@
             on-input="form_company_tax_edit"
           />
         </column>
+        <!-- The colour the till draws with. It is the restaurant's, not
+             the device's, so it is saved with the company and travels to
+             the other screens on the network. Left empty, the palette's
+             own accent stands. -->
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Brand colour</text>
+          <text-field
+            text="{form_company_brand}"
+            placeholder="#1F7A8C"
+            label="Brand colour"
+            on-input="form_company_brand_edit"
+          />
+        </column>
         <row gap="8">
           <button variant="ghost" on-press="open_settings">Back</button>
           <spacer grow="1"/>

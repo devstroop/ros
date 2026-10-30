@@ -127,6 +127,13 @@ one per setting, because the two settings behave differently:
 
 The device role and the current shift are targets for the same table.
 
+Not everything that looks like a setting is one. The restaurant's brand
+colour is a setting only in the sense that somebody chooses it: it
+belongs to the company rather than to the device, so it is a column on
+`company`, written by `repos.updateCompany` with the rest of the
+restaurant's details, and it reaches the other devices inside the
+reference document instead of by each machine deciding for itself.
+
 ### Not implemented
 
 There is no write path for products, categories, tables, employees,
