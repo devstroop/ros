@@ -218,7 +218,7 @@ tap button "Place order" 'Order 000001' 'TAKE THE PAYMENT'
 screenshot admin-order
 
 printf '==> the order is on the list\n'
-tap listitem "Orders" '000001' 'Pending' '1 open'
+tap listitem "Orders" '000001' 'New' '1 open'
 screenshot admin-orders
 
 # ---------------------------------------------------------------- kiosk
@@ -236,11 +236,13 @@ printf '==> the kitchen sees the ticket\n'
 start_app kiosk ros-kiosk
 automate wait >/dev/null
 assert_visible 'Kitchen' 'Display' 'Smoke Restaurant'
-tap button "Kitchen" 'Kitchen' '000001' 'Pending'
+tap button "Kitchen" 'Kitchen' '000001' 'New'
 screenshot kiosk-kitchen
 
-printf '==> the kitchen advances the ticket\n'
-tap button "Next" 'Preparing'
-screenshot kiosk-preparing
+printf '==> the kitchen works the ticket along\n'
+tap button "Start cooking" 'Cooking'
+screenshot kiosk-cooking
+tap button "Mark ready" 'Ready'
+screenshot kiosk-ready
 
 printf 'smoke-sale: PASS - setup, role picker, login, sale, orders and KDS\n'

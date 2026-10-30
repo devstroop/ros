@@ -6,10 +6,10 @@
      shares a file with its neighbours costs nothing. -->
 
 <!-- The kitchen board. One card per ticket the kitchen is working
-     through, oldest first, with a one-tap "next" that walks the order
-     along its lifecycle. The ticket rows are a derived binding: the
-     model decides which orders belong on the board and how each one is
-     summarised. -->
+     through, oldest first, with a one-tap button that names the move it
+     makes: start cooking, mark ready, hand off. The ticket rows are a
+     derived binding: the model decides which orders belong on the board
+     and how each one is summarised. -->
 
 <template name="screen-kitchen">
   <column grow="1" gap="12" padding="16" background="background">
@@ -42,7 +42,7 @@
               </row>
               <text wrap="true">{ticket.summary}</text>
               <row gap="8">
-                <button size="sm" variant="primary" disabled="{advancing}" on-press="advance_order:{ticket.id}">Next</button>
+                <button size="sm" variant="primary" disabled="{advancing}" on-press="advance_order:{ticket.id}">{ticket.advance_label}</button>
                 <text size="sm" foreground="text_muted">{ticket.waiting_label}</text>
               </row>
             </column>

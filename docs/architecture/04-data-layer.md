@@ -169,7 +169,7 @@ prevent.
 ### Query behaviour
 
 - `orders_sql` selects `status <> 5` (not voided), newest first, limit
-  200. Completed orders remain in the list.
+  200. Closed orders remain in the list.
 - `order_lines_sql` selects lines for non-voided orders, so the kitchen
   summary has data without a second round trip.
 - `products_sql` selects active products ordered by name; the POS filters

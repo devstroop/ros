@@ -2316,6 +2316,7 @@ pub const Model = struct {
                 .id = order.id,
                 .order_no = order.order_no,
                 .status_label = order.status_label,
+                .advance_label = order.advance_label,
                 .summary = summariseOrder(model, order, arena),
                 .waiting_label = waitingLabel(model, order, arena),
             };
@@ -2492,6 +2493,10 @@ pub const Ticket = struct {
     id: i64,
     order_no: []const u8,
     status_label: []const u8,
+    /// The move the board's button is about: "Start cooking", "Mark
+    /// ready", "Hand off". Only open tickets reach the board, so this is
+    /// never empty.
+    advance_label: []const u8,
     summary: []const u8,
     waiting_label: []const u8,
 };

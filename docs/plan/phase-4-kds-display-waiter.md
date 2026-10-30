@@ -60,7 +60,8 @@ missed ticket is a lost meal.
 
 - Place an order on the POS; it appears on the KDS within one refresh
   cycle without a restart.
-- Advance it on the KDS; the orders list and dashboard reflect it.
+- Move a ticket along on the KDS with the button it offers; the orders
+  list and dashboard reflect it.
 - A seeded display window shows the order status.
 - A waiter can take an order from a table and see it in the order list.
 - A kiosk can be exited deliberately.

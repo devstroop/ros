@@ -121,9 +121,11 @@ Details, including the full permission matrix, are in
 4. `repos.saveOrder` writes the order and its lines in one atomic
    `dbExec`, then the app reloads orders and navigates to
    `order_confirmation` (currently a blank pane — no template yet).
-5. The order appears on the order list and the kitchen board; **Advance**
-   moves it pending → preparing → ready → served → completed and writes
-   `order_status_history`.
+5. The order appears on the order list and the kitchen board. The board's
+   button names the move it is about to make - **Start cooking**, **Mark
+   ready**, **Hand off**, **Close ticket** - and takes the ticket
+   New → Cooking → Ready → Served → Closed, writing
+   `order_status_history` at every step.
 
 ### Kiosk kitchen
 

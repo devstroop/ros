@@ -130,25 +130,12 @@ the template:
      a dynamic token the markup cannot resolve. -->
 ```
 
-The domain even has a token-name helper that the markup cannot reach:
-
-```zig
-// src/domain/models.zig
-/// The badge tone for the status, expressed in theme tokens.
-pub fn tone(self: OrderStatus) []const u8 {
-    return switch (self) {
-        .pending => "warning",
-        .preparing => "info",
-        .ready => "success",
-        .served => "accent",
-        .completed => "text_muted",
-        .voided => "destructive",
-    };
-}
-```
-
-`status_label` is the field the markup binds; `tone()` is a Zig-side
-value.
+The domain once had a helper that answered this with a token name -
+`.pending => "warning"`, `.preparing => "info"`, and so on. Nothing
+could use it, so it is gone. `status_label` is the field the markup
+binds; a token name is not. Where a status needs to carry its own
+colour, an `<if>` chain picks the literal token for that state, or the
+dynamic styling moves into Zig.
 
 ### Message payloads must be bindings
 
@@ -159,7 +146,7 @@ a literal, never an expression.
 ```xml
 <button on-press="pick_role:{role.id}">Open</button>
 <card padding="8" on-press="add_to_cart:{product.id}">
-<button size="sm" variant="secondary" on-press="advance_order:{order.id}">Advance</button>
+<button size="sm" variant="secondary" on-press="advance_order:{order.id}">{order.advance_label}</button>
 ```
 
 A literal payload has no spelling, so a constant needs its own message.

@@ -42,13 +42,15 @@
               <text foreground="text_muted">{order.type_label}</text>
               <text>{currency_symbol}{fixed(order.total_minor / currency_divisor, currency_decimal_count)}</text>
               <!-- A closed ticket has taken its money. Offering the
-                   same two buttons again is a no-op on Advance and a
+                   same buttons again would be a no-op on the move and a
                    second charge on Pay. -->
               <if test="{order.paid}">
                 <badge>Paid</badge>
               </if>
               <else>
-                <button size="sm" variant="secondary" disabled="{advancing}" on-press="advance_order:{order.id}">Advance</button>
+                <if test="{order.advanceable}">
+                  <button size="sm" variant="secondary" disabled="{advancing}" on-press="advance_order:{order.id}">{order.advance_label}</button>
+                </if>
                 <button size="sm" variant="primary" on-press="pay_order:{order.id}">Pay</button>
               </else>
             </row>

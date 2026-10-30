@@ -1164,7 +1164,9 @@ test "a retried write is the same sale" {
         .order_no = "",
         .order_type = .dine_in,
         .status = .pending,
-        .status_label = "Pending",
+        .status_label = domain.OrderStatus.pending.label(),
+        .advance_label = domain.OrderStatus.pending.actionLabel(),
+        .advanceable = true,
         .type_label = "Dine in",
         .dining_table_id = 0,
         .customer_id = 0,
@@ -1243,7 +1245,9 @@ test "a retried sale takes the stock once and writes one op" {
         .order_no = "",
         .order_type = .dine_in,
         .status = .pending,
-        .status_label = "Pending",
+        .status_label = domain.OrderStatus.pending.label(),
+        .advance_label = domain.OrderStatus.pending.actionLabel(),
+        .advanceable = true,
         .type_label = "Dine in",
         .dining_table_id = 0,
         .customer_id = 0,
@@ -4147,13 +4151,81 @@ test "the kitchen board's live query sees a new order" {
     try testing.expectEqual(@as(i64, 77), harness.model.orders[0].id);
 }
 
+/// What each order state is called on a board, what its button is
+/// called, and whether it still has a move left. The `code` is the
+/// database's `status` ordinal: the words hang off the state, so
+/// renaming one never moves a ticket to a different state.
+const ticket_words = [_]struct {
+    status: domain.OrderStatus,
+    code: i64,
+    label: []const u8,
+    action: []const u8,
+    advanceable: bool,
+}{
+    .{ .status = .pending, .code = 0, .label = "New", .action = "Start cooking", .advanceable = true },
+    .{ .status = .preparing, .code = 1, .label = "Cooking", .action = "Mark ready", .advanceable = true },
+    .{ .status = .ready, .code = 2, .label = "Ready", .action = "Hand off", .advanceable = true },
+    .{ .status = .served, .code = 3, .label = "Served", .action = "Close ticket", .advanceable = true },
+    .{ .status = .completed, .code = 4, .label = "Closed", .action = "", .advanceable = false },
+    .{ .status = .voided, .code = 5, .label = "Voided", .action = "", .advanceable = false },
+};
+
+test "a ticket says what the floor calls it and what the button does" {
+    for (ticket_words) |word| {
+        try testing.expectEqual(word.code, @intFromEnum(word.status));
+        try testing.expectEqualStrings(word.label, word.status.label());
+        try testing.expectEqualStrings(word.action, word.status.actionLabel());
+        try testing.expectEqual(word.advanceable, word.status.advanceable());
+    }
+    // A button with nothing to say is a blank button: only a state with
+    // a move left gets a caption.
+    for (ticket_words) |word| {
+        try testing.expectEqual(word.action.len > 0, word.advanceable);
+    }
+}
+
+test "the board's row carries the words of its own state" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    repos.watchOpenOrders(harness.fx);
+    harness.drain();
+
+    // One order in every state the board shows. The board's query
+    // excludes voided, so state 5 is not written here.
+    harness.fx.dbExec(.{
+        .key = 951,
+        .statements = &.{
+            .{ .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (81, '81', 0, 0, NULL, NULL, 7, 100, 0, 0, 100, 1, '', 1, 1);", .params = &.{} },
+            .{ .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (82, '82', 0, 1, NULL, NULL, 7, 100, 0, 0, 100, 2, '', 2, 2);", .params = &.{} },
+            .{ .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (83, '83', 0, 2, NULL, NULL, 7, 100, 0, 0, 100, 3, '', 3, 3);", .params = &.{} },
+            .{ .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (84, '84', 0, 3, NULL, NULL, 7, 100, 0, 0, 100, 4, '', 4, 4);", .params = &.{} },
+            .{ .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (85, '85', 0, 4, NULL, NULL, 7, 100, 0, 0, 100, 5, '', 5, 5);", .params = &.{} },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+    try testing.expectEqual(@as(usize, 5), harness.model.orders.len);
+
+    // Decoded from the ordinal alone: the words are resolved at the
+    // door, because the markup binds fields and cannot call a method.
+    for (harness.model.orders) |order| {
+        for (ticket_words) |word| {
+            if (word.status != order.status) continue;
+            try testing.expectEqualStrings(word.label, order.status_label);
+            try testing.expectEqualStrings(word.action, order.advance_label);
+            try testing.expectEqual(word.advanceable, order.advanceable);
+        }
+    }
+}
+
 test "the kitchen board filters by station" {
     var harness = try Harness.start(testing.allocator);
     defer harness.deinit();
 
     harness.model.orders = &.{
-        .{ .id = 1, .order_no = "1", .order_type = .dine_in, .status = .pending, .status_label = "Pending", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
-        .{ .id = 2, .order_no = "2", .order_type = .dine_in, .status = .pending, .status_label = "Pending", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 1, .order_no = "1", .order_type = .dine_in, .status = .pending, .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 2, .order_no = "2", .order_type = .dine_in, .status = .pending, .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
     };
     // The first order is on the grill, the second at the bar.
     harness.model.order_lines = &.{
@@ -5948,17 +6020,20 @@ test "a sale at the till shows on the orders board and the kitchen board" {
     tree = try render.buildTree(arena, &harness.model);
     _ = try render.expectByText(tree.root, .text, "Order 000001");
 
-    // The orders board shows that number with the status under it.
+    // The orders board shows that number with the status under it, and
+    // the button says what tapping it does.
     harness.send(.{ .open_screen = @intCast(nav.Screen.orders.index()) });
     tree = try render.buildTree(arena, &harness.model);
     _ = try render.expectByText(tree.root, .text, "000001");
-    _ = try render.expectByText(tree.root, .badge, "Pending");
+    _ = try render.expectByText(tree.root, .badge, "New");
     _ = try render.expectByText(tree.root, .badge, "1 open");
+    _ = try render.expectByText(tree.root, .button, "Start cooking");
 
     // The kitchen sees the same ticket and moves it along.
     harness.send(.{ .advance_order = harness.model.orders[0].id });
     harness.send(.{ .open_screen = @intCast(nav.Screen.kds_board.index()) });
     tree = try render.buildTree(arena, &harness.model);
     _ = try render.expectByText(tree.root, .text, "000001");
-    _ = try render.expectByText(tree.root, .badge, "Preparing");
+    _ = try render.expectByText(tree.root, .badge, "Cooking");
+    _ = try render.expectByText(tree.root, .button, "Mark ready");
 }

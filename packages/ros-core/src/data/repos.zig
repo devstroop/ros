@@ -1204,12 +1204,15 @@ pub fn decodeOrders(model: *Model, bytes: []const u8) void {
     var values: [page.max_columns]page.Value = undefined;
     var index: usize = 0;
     while (index < count and reader.nextRow(&values)) : (index += 1) {
+        const status = enumFromInt(domain.OrderStatus, reader.intOf(&values, "status", 0));
         list[index] = .{
             .id = reader.intOf(&values, "id", 0),
             .order_no = model.orders_buf.dupe(reader.textOf(&values, "order_no")) orelse "",
             .order_type = enumFromInt(domain.OrderType, reader.intOf(&values, "order_type", 0)),
-            .status = enumFromInt(domain.OrderStatus, reader.intOf(&values, "status", 0)),
-            .status_label = orderStatusLabel(enumFromInt(domain.OrderStatus, reader.intOf(&values, "status", 0))),
+            .status = status,
+            .status_label = orderStatusLabel(status),
+            .advance_label = orderStatusAction(status),
+            .advanceable = status.advanceable(),
             .type_label = orderTypeLabel(enumFromInt(domain.OrderType, reader.intOf(&values, "order_type", 0))),
             .dining_table_id = reader.intOf(&values, "dining_table_id", 0),
             .customer_id = reader.intOf(&values, "customer_id", 0),
@@ -4652,6 +4655,12 @@ fn discountValueLabel(percent_bps: i64, amount_minor: i64) []const u8 {
 /// markup binds fields, not methods.
 fn orderStatusLabel(status: domain.OrderStatus) []const u8 {
     return status.label();
+}
+
+/// The caption of the board's advance button, resolved at decode time for
+/// the same reason: the markup binds fields, not methods.
+fn orderStatusAction(status: domain.OrderStatus) []const u8 {
+    return status.actionLabel();
 }
 
 fn orderTypeLabel(order_type: domain.OrderType) []const u8 {

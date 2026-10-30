@@ -2,7 +2,7 @@
 
 One concept, one word, everywhere: the rail, the status bar, the heading
 and the empty state all say the same thing about the same destination.
-The test `the product speaks one vocabulary` in
+The test `the rail, the title bar and the markup say the same thing` in
 `apps/admin/src/tests.zig` pins the rail labels, the screen titles and
 the markup text against this page, so a screen cannot quietly start
 calling the till something else.
@@ -20,6 +20,28 @@ calling the till something else.
 | **Settings** | Company, currency, tax, discounts, printers, data. | System |
 | **Kitchen** | The board the cooks work from. | — |
 | **Display** | The screen the room reads. | — |
+
+## Ticket states
+
+The state a ticket is in, and the move its button offers from there.
+Both come from `domain.OrderStatus`: the ordinal in the `status` column
+is the contract, the words are not, and renaming one never moves a
+ticket to a different state.
+
+| State | The badge says | The button says | Was called |
+|---|---|---|---|
+| new | New | Start cooking | Pending |
+| cooking | Cooking | Mark ready | Preparing |
+| ready | Ready | Hand off | — |
+| served | Served | Close ticket | — |
+| closed | Closed | no button | Completed |
+| voided | Voided | no button | — |
+
+The button names the move it makes, on the kitchen board and the orders
+board alike - so neither has a button called "Next" or "Advance". A
+ticket with no state left to move to shows no button at all, because a
+caption-less button is a blank one. **Closed** is not a ticket that has
+been rung up: it is one whose money has been taken.
 
 ## Money and tickets
 
@@ -42,9 +64,9 @@ calling the till something else.
 
 Do not use these again in anything an operator reads: Sell, Floor,
 People, Catalog, Catalogue, System, Overview, Employees, Control center,
-counter. `Advance` joins the list when the kitchen buttons name what
-they do.
+counter, Advance, Pending, Preparing, Completed.
 
 Retiring a word is not a rename of the code. `Screen.sell`, the
-`employee` table and the status integers stay: they are contracts with
-the markup's ordinals and with rows already on disk.
+`employee` table, `OrderStatus.pending` and the status integers stay:
+they are contracts with the markup's ordinals and with rows already on
+disk.

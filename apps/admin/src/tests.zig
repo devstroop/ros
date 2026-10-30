@@ -161,12 +161,14 @@ test "the setup Symbol field writes the symbol, not the code" {
     for (document.templates) |template| try expectSymbolBinding(template);
 }
 
-/// A word the product used for a destination and stopped using.
-/// `docs/glossary.md` is the list; this is the enforcement.
+/// A word the product used for a destination or a ticket state and
+/// stopped using. `docs/glossary.md` is the list; this is the enforcement.
+/// "Advance" named the machine instead of the move, and the state words
+/// are what the workflow engine called them.
 const retired_words = [_][]const u8{
-    "Sell",   "Floor",     "People",       "Catalog",
-    "Catalogue", "System", "Overview",     "Employees",
-    "Control center",
+    "Sell",      "Floor",     "People",         "Catalog", "Catalogue", "System",
+    "Overview",  "Employees", "Control center", "Advance", "Pending",   "Preparing",
+    "Completed",
 };
 
 fn expectNoRetiredWords(node: canvas.ui_markup.MarkupNode) !void {
@@ -858,7 +860,7 @@ test "a second tap while the ticket is moving does not move it twice" {
 
     var model = main.initialModel();
     model.orders = &.{
-        .{ .id = 1, .order_no = "000001", .order_type = .dine_in, .status = .pending, .status_label = "Pending", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 1, .order_no = "000001", .order_type = .dine_in, .status = .pending, .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
     };
 
     // The kitchen advances the ticket. The write is in flight: the
@@ -1005,8 +1007,8 @@ test "a decoded company does not point at the page bytes" {
 test "the model reports its own numbers instead of storing them" {
     var model = main.initialModel();
     model.orders = &.{
-        .{ .id = 1, .order_no = "1", .order_type = .dine_in, .status = .pending, .status_label = "Pending", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
-        .{ .id = 2, .order_no = "2", .order_type = .dine_in, .status = .completed, .status_label = "Completed", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 1, .order_no = "1", .order_type = .dine_in, .status = .pending, .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 2, .order_no = "2", .order_type = .dine_in, .status = .completed, .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
     };
     try testing.expectEqual(@as(usize, 2), model.order_count());
     try testing.expectEqual(@as(usize, 1), model.open_order_count());
@@ -1030,8 +1032,11 @@ test "the orders board counts open tickets and stops offering a paid one" {
     model.signed_in = true;
     model.screen_index = nav.Screen.orders.index();
     model.orders = &.{
-        .{ .id = 1, .order_no = "A-1", .order_type = .dine_in, .status = .pending, .status_label = "Pending", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 1000, .tax_minor = 0, .discount_minor = 0, .total_minor = 1000, .placed_at = 0, .notes = "" },
-        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_label = "Completed", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
+        .{ .id = 1, .order_no = "A-1", .order_type = .dine_in, .status = .pending, .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 1000, .tax_minor = 0, .discount_minor = 0, .total_minor = 1000, .placed_at = 0, .notes = "" },
+        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
+        // Closed on another device before its payment row arrived. The
+        // money is still owed, but there is no state left to move to.
+        .{ .id = 3, .order_no = "A-3", .order_type = .dine_in, .status = .completed, .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 3000, .tax_minor = 0, .discount_minor = 0, .total_minor = 3000, .placed_at = 0, .notes = "" },
     };
 
     const tree = try buildTree(arena, &model);
@@ -1040,10 +1045,12 @@ test "the orders board counts open tickets and stops offering a paid one" {
     _ = try expectByText(tree.root, .badge, "1 open");
     _ = try expectByText(tree.root, .badge, "Paid");
 
-    // One open order, so exactly one row may offer each action. The
-    // paid row must not offer either one.
-    try testing.expectEqual(@as(usize, 1), countByText(tree.root, .button, "Advance"));
-    try testing.expectEqual(@as(usize, 1), countByText(tree.root, .button, "Pay"));
+    // The button names the move rather than the machine, and only the
+    // one open row may offer it. A closed row still owes money, so it
+    // keeps its Pay button and shows no blank one where a move was.
+    try testing.expectEqual(@as(usize, 1), countByText(tree.root, .button, "Start cooking"));
+    try testing.expectEqual(@as(usize, 0), countByText(tree.root, .button, "Advance"));
+    try testing.expectEqual(@as(usize, 2), countByText(tree.root, .button, "Pay"));
 }
 
 test "a paid ticket's detail screen offers no payment" {
@@ -1057,7 +1064,7 @@ test "a paid ticket's detail screen offers no payment" {
     model.screen_index = nav.Screen.order_detail.index();
     model.selected_order_id = 2;
     model.orders = &.{
-        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_label = "Completed", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
+        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
     };
 
     const tree = try buildTree(arena, &model);

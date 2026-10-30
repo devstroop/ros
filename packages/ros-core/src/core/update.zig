@@ -2578,6 +2578,8 @@ fn placeOrder(model: *Model, fx: *Effects) void {
         .order_type = model.cart_order_type,
         .status = .pending,
         .status_label = domain.OrderStatus.pending.label(),
+        .advance_label = domain.OrderStatus.pending.actionLabel(),
+        .advanceable = domain.OrderStatus.pending.advanceable(),
         .type_label = model.cart_order_type.label(),
         .dining_table_id = 0,
         .customer_id = 0,

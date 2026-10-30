@@ -33,7 +33,9 @@ pub const OrderType = enum(i64) {
     }
 };
 
-/// Order lifecycle. The transition table lives in `domain/orders.zig`.
+/// Order lifecycle. The transition table lives in `nextStatus`, in
+/// `core/update.zig`. The ordinals are the database's `status` column and
+/// never change; only the words below do.
 pub const OrderStatus = enum(i64) {
     pending = 0,
     preparing = 1,
@@ -42,27 +44,38 @@ pub const OrderStatus = enum(i64) {
     completed = 4,
     voided = 5,
 
+    /// What the ticket is called on a board. These are the words the
+    /// floor uses, not the words the workflow engine uses: a cook says
+    /// "new" and "cooking", and a closed ticket has taken its money.
     pub fn label(self: OrderStatus) []const u8 {
         return switch (self) {
-            .pending => "Pending",
-            .preparing => "Preparing",
+            .pending => "New",
+            .preparing => "Cooking",
             .ready => "Ready",
             .served => "Served",
-            .completed => "Completed",
+            .completed => "Closed",
             .voided => "Voided",
         };
     }
 
-    /// The badge tone for the status, expressed in theme tokens.
-    pub fn tone(self: OrderStatus) []const u8 {
+    /// What pressing the board's button from here actually does. The
+    /// caption names the move, so a tap is never a mystery. An empty
+    /// label means there is no move left to make - the ticket is closed
+    /// or voided - and the board hides the button rather than showing a
+    /// blank one.
+    pub fn actionLabel(self: OrderStatus) []const u8 {
         return switch (self) {
-            .pending => "warning",
-            .preparing => "info",
-            .ready => "success",
-            .served => "accent",
-            .completed => "text_muted",
-            .voided => "destructive",
+            .pending => "Start cooking",
+            .preparing => "Mark ready",
+            .ready => "Hand off",
+            .served => "Close ticket",
+            .completed, .voided => "",
         };
+    }
+
+    /// True while there is a move left to make.
+    pub fn advanceable(self: OrderStatus) bool {
+        return self.actionLabel().len > 0;
     }
 
     pub fn fromCode(code: i64) OrderStatus {
@@ -381,6 +394,10 @@ pub const Order = struct {
     status: OrderStatus,
     /// Labels resolved at decode time: the markup binds fields.
     status_label: []const u8,
+    /// The caption of the button that moves this order to the next state.
+    /// Empty when there is no next state, and `advanceable` is false.
+    advance_label: []const u8,
+    advanceable: bool,
     type_label: []const u8,
     dining_table_id: i64,
     customer_id: i64,
