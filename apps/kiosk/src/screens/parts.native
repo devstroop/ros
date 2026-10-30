@@ -1,0 +1,66 @@
+<!-- The pieces the areas share.
+
+     An imported file defines templates only: it is spliced in before the
+     importer's own templates, so anything here can be `<use>`d from any
+     screen that imports it. -->
+
+<!-- One order state, coloured.
+
+     The SDK takes colour token **names as literals** and rejects a bound
+     token, so a state cannot carry its colour as data. The chain picks the
+     literal pair for each state and the row supplies only the ordinal it
+     already stored; `domain.OrderStatus.label()` says what the chip reads.
+
+     A template takes exactly one element child and there is no else-if in
+     this language, so the chain sits in a row that hugs the one chip it
+     renders, and the chain nests. The chip is a `row` with a `text` in it,
+     not a `badge`: a badge's own colours come from the theme's badge table
+     and a `background=` on one is ignored. -->
+
+<template name="status-badge" args="code label">
+  <row gap="0">
+    <if test="{code == 0}">
+      <row background="info" radius="sm" padding="4">
+        <text size="sm" foreground="info_text">{label}</text>
+      </row>
+    </if>
+    <else>
+      <if test="{code == 1}">
+        <row background="warning" radius="sm" padding="4">
+          <text size="sm" foreground="warning_text">{label}</text>
+        </row>
+      </if>
+      <else>
+        <if test="{code == 2}">
+          <row background="success" radius="sm" padding="4">
+            <text size="sm" foreground="success_text">{label}</text>
+          </row>
+        </if>
+        <else>
+          <if test="{code == 3}">
+            <row background="accent" radius="sm" padding="4">
+              <text size="sm" foreground="accent_text">{label}</text>
+            </row>
+          </if>
+          <else>
+            <if test="{code == 4}">
+              <row background="surface_subtle" radius="sm" padding="4">
+                <text size="sm" foreground="text_muted">{label}</text>
+              </row>
+            </if>
+            <else>
+              <if test="{code == 5}">
+                <row background="destructive" radius="sm" padding="4">
+                  <text size="sm" foreground="destructive_text">{label}</text>
+                </row>
+              </if>
+              <else>
+                <badge>{label}</badge>
+              </else>
+            </else>
+          </else>
+        </else>
+      </else>
+    </else>
+  </row>
+</template>

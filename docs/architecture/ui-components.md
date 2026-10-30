@@ -118,12 +118,17 @@ Two details that are easy to get wrong:
   is reserved for a future width shorthand.
 - A **bound** token is not accepted. `foreground="{order.tone}"` is
   rejected; dynamic styling stays in Zig through `ElementOptions.style`.
+- A `badge` ignores `background=` and `foreground=`. Its fill and text
+  come from the theme's badge table and its variant, so a coloured
+  badge passes `native check`, passes `native test`, and paints the
+  ordinary badge anyway. A state that must carry its own colour is a
+  `row` with a token fill holding a `text` drawn with another.
 
-That last one shapes the floor screen, and the reason is written into
-the template:
+That last pair of rules shapes every status in the app. The floor's
+table tile takes the first route and stays a plain badge:
 
 ```xml
-<!-- src/screens/screen-tables.native -->
+<!-- src/screens/screen-floor.native -->
 <!-- The floor. A grid of tables, each one showing who is sitting at
      it. The status is a badge, not a colour: the SDK's colour
      attributes take token names, and a status-coloured tile would need
@@ -133,9 +138,21 @@ the template:
 The domain once had a helper that answered this with a token name -
 `.pending => "warning"`, `.preparing => "info"`, and so on. Nothing
 could use it, so it is gone. `status_label` is the field the markup
-binds; a token name is not. Where a status needs to carry its own
-colour, an `<if>` chain picks the literal token for that state, or the
-dynamic styling moves into Zig.
+binds; a token name is not.
+
+A ticket takes the other route. `screens/parts.native` holds one
+`status-badge` template whose `<if>` chain picks the literal pair for
+each state, and the row supplies only the ordinal it already stored as
+`status_code`:
+
+```xml
+<use template="status-badge" code="{order.status_code}" label="{order.status_label}"/>
+```
+
+So the colour is not data, and it is not free: the pairing between a
+state, its word and its two tokens lives in the chain and in
+`status_chips` in `src/tests.zig`, and that test fails if either moves.
+`docs/glossary.md` carries the same table for the humans.
 
 ### Message payloads must be bindings
 
@@ -495,7 +512,9 @@ A `scroll` wraps its multiple children in a `column`. `gap` on the
 
 Each file in `src/screens/` is a **component file**: templates only, no
 view root. The shell is the only view root, and the screen templates are
-mounted by `<use>` inside the shell's `<if>` gates.
+mounted by `<use>` inside the shell's `<if>` gates. `parts.native` is
+one too - the file a screen imports for a piece it shares with its
+neighbours rather than a screen of its own.
 
 ## How templates are imported
 
@@ -563,6 +582,13 @@ half-one/half-two pairing is the mechanism - the `<import>` line names
 a path, and the source set is what the engine can actually read, so a
 path in one and not the other cannot resolve.
 
+A shared piece follows the same two halves. `screens/parts.native` is
+imported by every screen that `<use>`s one of its templates and embedded
+in every app's source set. An imported file defines **templates only**,
+is spliced in before its importer's own templates, and a template name
+two files both define is an error rather than a shadow - so a piece
+belonging to one screen stays in that screen's file.
+
 The test harness resolves the same closure the runtime does, so the
 tests see exactly what the app sees:
 
@@ -610,11 +636,12 @@ Restaurant OS runs the runtime engine today, in every build mode.
 
 ## The component library
 
-`src/components/` exists and is empty. The nine templates repeat their
-patterns inline: the empty state appears in four screens, the screen
-header in five, the row-with-badge in three. The table below is the
-plan - each row names a component Restaurant OS needs and the platform element it
-maps to.
+`src/components/` exists and is empty. One piece is shared today:
+`screens/parts.native`, imported by every screen file that needs it,
+holds the ticket's status chip. The rest of these patterns still repeat
+inline - the empty state appears in four screens, the screen header in
+five. The table below is the plan - each row names a component
+Restaurant OS needs and the platform element it maps to.
 
 | Component | Platform element | Needed for |
 |---|---|---|
@@ -625,8 +652,8 @@ maps to.
 | Empty state | `card` or `column` + `text foreground="text_muted"` | orders, tables, kitchen, cart |
 | Product tile | `card` + `text` | the POS menu grid |
 | Cart line row | `row` + `text` + `button size="icon"` | the POS cart |
-| Order row | `card` + `row` + `badge` + `text` | the order list |
-| Kitchen ticket | `card` + `badge` + `text` + `button` | the kitchen board |
+| Order row | `card` + `row` + `text` + status chip + `button` | the order list |
+| Kitchen ticket | `card` + status chip + `text` + `button` | the kitchen board |
 | Floor table tile | `card` + `text` + `badge` | the dining tables grid |
 | Category filter strip | `toggle-group` + `toggle-button` (exclusive, model-driven) | the POS category filter |
 | Order type switch | `segmented-control`, or `toggle-group` + `toggle-button` | the POS order type |
@@ -646,7 +673,8 @@ maps to.
 | Loading placeholder | `skeleton` / `spinner` | the shell before the first query returns |
 | Long list | `list` / `grid` with `virtualized` + `virtual-item-extent` | orders, customers, products |
 | Operator chip | `avatar` | the signed-in operator |
-| Status badge | `badge` | every status in the app |
+| Status chip | `row background="<token>"` + `text foreground="<token>_text"` | a ticket's state, on every board - `screens/parts.native` |
+| Count badge | `badge` | `{n} open`, `{n} busy of {m}` - a number, not a state |
 | Read-only report body | `code` (monospace, no chrome) | an X report, a SQL dump |
 | Help copy | `markdown` | the help screen |
 | Inline emphasis | `text` > `span` | mixed-weight one-paragraph copy |

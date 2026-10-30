@@ -28,14 +28,19 @@ Both come from `domain.OrderStatus`: the ordinal in the `status` column
 is the contract, the words are not, and renaming one never moves a
 ticket to a different state.
 
-| State | The badge says | The button says | Was called |
-|---|---|---|---|
-| new | New | Start cooking | Pending |
-| cooking | Cooking | Mark ready | Preparing |
-| ready | Ready | Hand off | — |
-| served | Served | Close ticket | — |
-| closed | Closed | no button | Completed |
-| voided | Voided | no button | — |
+| State | The chip says | Its colour | The button says | Was called |
+|---|---|---|---|---|
+| new | New | info | Start cooking | Pending |
+| cooking | Cooking | warning | Mark ready | Preparing |
+| ready | Ready | success | Hand off | — |
+| served | Served | accent | Close ticket | — |
+| closed | Closed | surface subtle | no button | Completed |
+| voided | Voided | destructive | no button | — |
+
+A state reads in the same colour on every board, so a glance at the
+kitchen wall says how far a ticket has got without reading its number.
+The colour is a theme token, not a hex, and a test pins the pairing
+between the six states, their words and their tokens.
 
 The button names the move it makes, on the kitchen board and the orders
 board alike - so neither has a button called "Next" or "Advance". A

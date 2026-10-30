@@ -1210,6 +1210,7 @@ pub fn decodeOrders(model: *Model, bytes: []const u8) void {
             .order_no = model.orders_buf.dupe(reader.textOf(&values, "order_no")) orelse "",
             .order_type = enumFromInt(domain.OrderType, reader.intOf(&values, "order_type", 0)),
             .status = status,
+            .status_code = @intFromEnum(status),
             .status_label = orderStatusLabel(status),
             .advance_label = orderStatusAction(status),
             .advanceable = status.advanceable(),

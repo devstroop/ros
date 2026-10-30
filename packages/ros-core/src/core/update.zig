@@ -2577,6 +2577,7 @@ fn placeOrder(model: *Model, fx: *Effects) void {
         .order_no = "",
         .order_type = model.cart_order_type,
         .status = .pending,
+        .status_code = @intFromEnum(domain.OrderStatus.pending),
         .status_label = domain.OrderStatus.pending.label(),
         .advance_label = domain.OrderStatus.pending.actionLabel(),
         .advanceable = domain.OrderStatus.pending.advanceable(),

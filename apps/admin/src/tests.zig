@@ -520,6 +520,7 @@ test "every text pair in the light and dark palettes clears WCAG AA" {
             .{ .name = "text on surface", .foreground = c.text, .background = c.surface, .minimum = 4.5 },
             .{ .name = "muted text on background", .foreground = c.text_muted, .background = c.background, .minimum = 4.5 },
             .{ .name = "muted text on surface", .foreground = c.text_muted, .background = c.surface, .minimum = 4.5 },
+            .{ .name = "muted text on a closed chip", .foreground = c.text_muted, .background = c.surface_subtle, .minimum = 4.5 },
             .{ .name = "accent label on accent", .foreground = c.accent_text, .background = c.accent, .minimum = 4.5 },
             .{ .name = "accent as text on background", .foreground = c.accent, .background = c.background, .minimum = 4.5 },
             .{ .name = "accent as text on surface", .foreground = c.accent, .background = c.surface, .minimum = 4.5 },
@@ -543,6 +544,160 @@ test "every text pair in the light and dark palettes clears WCAG AA" {
             try expectContrast(palette.name, pair.name, pair.foreground, pair.background, pair.minimum);
         }
     }
+}
+
+/// One state's chip, as `parts.native` must paint it and as
+/// `domain.OrderStatus` must name it.
+///
+/// A colour cannot travel as data - the SDK takes colour token names as
+/// literals only - so the pairing between a state and its colours exists
+/// in exactly two places: the markup's `<if>` chain, and here. Nothing
+/// but this test stops them drifting apart, and a chip that reads the
+/// wrong colour tells the operator the wrong thing about a live ticket.
+const status_chips = [_]struct {
+    code: i64,
+    label: []const u8,
+    background: []const u8,
+    foreground: []const u8,
+}{
+    .{ .code = 0, .label = "New", .background = "info", .foreground = "info_text" },
+    .{ .code = 1, .label = "Cooking", .background = "warning", .foreground = "warning_text" },
+    .{ .code = 2, .label = "Ready", .background = "success", .foreground = "success_text" },
+    .{ .code = 3, .label = "Served", .background = "accent", .foreground = "accent_text" },
+    .{ .code = 4, .label = "Closed", .background = "surface_subtle", .foreground = "text_muted" },
+    .{ .code = 5, .label = "Voided", .background = "destructive", .foreground = "destructive_text" },
+};
+
+/// A colour token's value, read by the name the markup writes. Walking
+/// the struct's fields means a token the theme gains needs no change here.
+fn tokenColor(colors: canvas.ColorTokens, name: []const u8) ?canvas.Color {
+    inline for (std.meta.fields(canvas.ColorTokens)) |field| {
+        if (std.mem.eql(u8, field.name, name)) return @field(colors, field.name);
+    }
+    return null;
+}
+
+fn findTemplate(document: canvas.ui_markup.MarkupDocument, name: []const u8) ?canvas.ui_markup.MarkupNode {
+    for (document.templates) |template| {
+        if (std.mem.eql(u8, template.attr("name") orelse "", name)) return template;
+    }
+    return null;
+}
+
+/// The first `attr=` anywhere below the node, which for a chip branch is
+/// the chip's own colour: the branch is a row filled with a token and the
+/// text inside it drawn with another.
+fn firstAttr(node: canvas.ui_markup.MarkupNode, name: []const u8) ?[]const u8 {
+    if (node.kind == .element) {
+        if (node.attr(name)) |value| return value;
+    }
+    for (node.children) |child| {
+        if (firstAttr(child, name)) |value| return value;
+    }
+    return null;
+}
+
+/// The ordinal a branch tests. `{code == 2}` reads as 2.
+fn conditionCode(condition: []const u8) ?i64 {
+    var index: usize = 0;
+    while (index < condition.len) : (index += 1) {
+        if (std.ascii.isDigit(condition[index])) break;
+    } else return null;
+    var value: i64 = 0;
+    while (index < condition.len and std.ascii.isDigit(condition[index])) : (index += 1) {
+        value = value * 10 + @as(i64, condition[index] - '0');
+    }
+    return value;
+}
+
+test "a ticket's chip colours the state it names, in every palette" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    const template = findTemplate(document, "status-badge") orelse {
+        std.debug.print("no status-badge template - the boards colour tickets with it\n", .{});
+        return error.StatusBadgeMissing;
+    };
+
+    const palettes = [_]struct { name: []const u8, colors: canvas.ColorTokens }{
+        .{ .name = "light", .colors = theme.light().colors },
+        .{ .name = "dark", .colors = theme.dark().colors },
+    };
+
+    for (status_chips) |chip| {
+        // The state word is the enum's, so a rename cannot leave the
+        // colour table describing a state that is no longer called that.
+        const status = domain.OrderStatus.fromCode(chip.code);
+        try testing.expectEqualStrings(chip.label, status.label());
+
+        const branch = findChipBranch(template, chip.code) orelse {
+            std.debug.print("status-badge has no branch for code {d} ({s})\n", .{ chip.code, chip.label });
+            return error.StatusChipUnmapped;
+        };
+
+        try testing.expectEqualStrings(chip.background, firstAttr(branch, "background") orelse "");
+        try testing.expectEqualStrings(chip.foreground, firstAttr(branch, "foreground") orelse "");
+
+        for (palettes) |palette| {
+            const background = tokenColor(palette.colors, chip.background) orelse {
+                std.debug.print("{s} is not a colour token\n", .{chip.background});
+                return error.UnknownColorToken;
+            };
+            const foreground = tokenColor(palette.colors, chip.foreground) orelse {
+                std.debug.print("{s} is not a colour token\n", .{chip.foreground});
+                return error.UnknownColorToken;
+            };
+            try expectContrast(
+                palette.name,
+                chip.label,
+                foreground,
+                background,
+                4.5,
+            );
+        }
+    }
+}
+
+/// The chip branch of `status-badge` that fires for one ordinal.
+fn findChipBranch(node: canvas.ui_markup.MarkupNode, code: i64) ?canvas.ui_markup.MarkupNode {
+    if (node.kind == .if_block) {
+        const condition = node.attr("test") orelse "";
+        if (conditionCode(condition)) |tested| {
+            if (tested == code and firstAttr(node, "background") != null) return node;
+        }
+    }
+    for (node.children) |child| {
+        if (findChipBranch(child, code)) |found| return found;
+    }
+    return null;
+}
+
+test "no badge is given a colour it will ignore" {
+    // `<badge>` takes its fill and text from the theme's badge table, so
+    // a `background=` on one parses, passes every check, and paints
+    // nothing. A coloured state is a row holding a coloured text; putting
+    // one on a badge would look right and be a silent no-op.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    for (document.templates) |template| try expectNoColoredBadge(template);
+}
+
+fn expectNoColoredBadge(node: canvas.ui_markup.MarkupNode) !void {
+    if (node.kind == .element and std.mem.eql(u8, node.name, "badge")) {
+        if (node.attr("background") != null or node.attr("foreground") != null) {
+            std.debug.print(
+                "{s}:{d}:{d}: a badge ignores background= and foreground=; colour a state with a row and a text\n",
+                .{ node.src_path, node.line, node.column },
+            );
+            return error.BadgeCarriesIgnoredColor;
+        }
+    }
+    for (node.children) |child| try expectNoColoredBadge(child);
 }
 
 test "changing the board ends the previous operator's session" {
@@ -860,7 +1015,7 @@ test "a second tap while the ticket is moving does not move it twice" {
 
     var model = main.initialModel();
     model.orders = &.{
-        .{ .id = 1, .order_no = "000001", .order_type = .dine_in, .status = .pending, .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 1, .order_no = "000001", .order_type = .dine_in, .status = .pending, .status_code = @intFromEnum(domain.OrderStatus.pending), .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
     };
 
     // The kitchen advances the ticket. The write is in flight: the
@@ -1007,8 +1162,8 @@ test "a decoded company does not point at the page bytes" {
 test "the model reports its own numbers instead of storing them" {
     var model = main.initialModel();
     model.orders = &.{
-        .{ .id = 1, .order_no = "1", .order_type = .dine_in, .status = .pending, .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
-        .{ .id = 2, .order_no = "2", .order_type = .dine_in, .status = .completed, .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 1, .order_no = "1", .order_type = .dine_in, .status = .pending, .status_code = @intFromEnum(domain.OrderStatus.pending), .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 2, .order_no = "2", .order_type = .dine_in, .status = .completed, .status_code = @intFromEnum(domain.OrderStatus.completed), .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
     };
     try testing.expectEqual(@as(usize, 2), model.order_count());
     try testing.expectEqual(@as(usize, 1), model.open_order_count());
@@ -1032,11 +1187,11 @@ test "the orders board counts open tickets and stops offering a paid one" {
     model.signed_in = true;
     model.screen_index = nav.Screen.orders.index();
     model.orders = &.{
-        .{ .id = 1, .order_no = "A-1", .order_type = .dine_in, .status = .pending, .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 1000, .tax_minor = 0, .discount_minor = 0, .total_minor = 1000, .placed_at = 0, .notes = "" },
-        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
+        .{ .id = 1, .order_no = "A-1", .order_type = .dine_in, .status = .pending, .status_code = @intFromEnum(domain.OrderStatus.pending), .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 1000, .tax_minor = 0, .discount_minor = 0, .total_minor = 1000, .placed_at = 0, .notes = "" },
+        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_code = @intFromEnum(domain.OrderStatus.completed), .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
         // Closed on another device before its payment row arrived. The
         // money is still owed, but there is no state left to move to.
-        .{ .id = 3, .order_no = "A-3", .order_type = .dine_in, .status = .completed, .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 3000, .tax_minor = 0, .discount_minor = 0, .total_minor = 3000, .placed_at = 0, .notes = "" },
+        .{ .id = 3, .order_no = "A-3", .order_type = .dine_in, .status = .completed, .status_code = @intFromEnum(domain.OrderStatus.completed), .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 3000, .tax_minor = 0, .discount_minor = 0, .total_minor = 3000, .placed_at = 0, .notes = "" },
     };
 
     const tree = try buildTree(arena, &model);
@@ -1064,7 +1219,7 @@ test "a paid ticket's detail screen offers no payment" {
     model.screen_index = nav.Screen.order_detail.index();
     model.selected_order_id = 2;
     model.orders = &.{
-        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
+        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_code = @intFromEnum(domain.OrderStatus.completed), .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
     };
 
     const tree = try buildTree(arena, &model);

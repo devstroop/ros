@@ -11,6 +11,8 @@
      model's live view of the `orders` table - a status change anywhere
      in the app lands here without a refresh. -->
 
+<import src="parts.native"/>
+
 <template name="screen-orders">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
@@ -38,7 +40,7 @@
           <card padding="12">
             <row gap="12" cross="center">
               <text grow="1" on-press="open_order:{order.id}">{order.order_no}</text>
-              <badge>{order.status_label}</badge>
+              <use template="status-badge" code="{order.status_code}" label="{order.status_label}"/>
               <text foreground="text_muted">{order.type_label}</text>
               <text>{currency_symbol}{fixed(order.total_minor / currency_divisor, currency_decimal_count)}</text>
               <!-- A closed ticket has taken its money. Offering the
@@ -69,7 +71,7 @@
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
       <text size="heading" grow="1">Order {selected_order_no}</text>
-      <badge>{selected_order_status}</badge>
+      <use template="status-badge" code="{selected_order_status_code}" label="{selected_order_status}"/>
       <button size="sm" variant="ghost" on-press="open_orders">Back</button>
     </row>
 

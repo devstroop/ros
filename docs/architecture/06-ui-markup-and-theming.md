@@ -230,8 +230,14 @@ open question about brand fidelity.
 
 - There is no way to supply an arbitrary 40-colour palette. The runtime
   resolves semantic tokens and an accent override.
-- Markup cannot select a colour per row, so table status is shown as a
-  badge label, not a status-coloured tile.
+- A colour cannot travel as data: `background=` and `foreground=` take
+  a token *name*, as a literal. A state that carries its own colour is
+  picked by an `<if>` chain over the ordinal the row already stores,
+  which is what `screens/parts.native` does for a ticket.
+- A `badge` ignores both attributes - its colours come from the theme's
+  badge table - so a count reads as a badge and a state as a chip.
+  The dining grid has no `<if>` chain yet and shows its table status as
+  a badge label.
 - The design system is defined twice (light and dark) rather than derived;
   adding a token means editing both.
 
@@ -256,9 +262,11 @@ There is no responsive variant yet. The shell assumes a desktop window
 - Text is real text, so the OS can read it; there is no canvas-drawn copy.
 - Focus order follows declaration order. The POS search field is not
   autofocused; login's PIN field is.
-- Colour is not the only status signal: badges carry a text label.
+- Colour is never the only status signal: a chip or a badge carries the
+  word as well, and both are real text.
 - Both palettes' text pairs are asserted against WCAG AA in
-  `src/tests.zig`; a keyboard-only pass and focus-visible checks remain.
+  `src/tests.zig`, including the six state chips; a keyboard-only pass
+  and focus-visible checks remain.
 
 ## Adding a screen: checklist
 

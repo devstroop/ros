@@ -1164,6 +1164,7 @@ test "a retried write is the same sale" {
         .order_no = "",
         .order_type = .dine_in,
         .status = .pending,
+        .status_code = @intFromEnum(domain.OrderStatus.pending),
         .status_label = domain.OrderStatus.pending.label(),
         .advance_label = domain.OrderStatus.pending.actionLabel(),
         .advanceable = true,
@@ -1245,6 +1246,7 @@ test "a retried sale takes the stock once and writes one op" {
         .order_no = "",
         .order_type = .dine_in,
         .status = .pending,
+        .status_code = @intFromEnum(domain.OrderStatus.pending),
         .status_label = domain.OrderStatus.pending.label(),
         .advance_label = domain.OrderStatus.pending.actionLabel(),
         .advanceable = true,
@@ -4212,6 +4214,7 @@ test "the board's row carries the words of its own state" {
     for (harness.model.orders) |order| {
         for (ticket_words) |word| {
             if (word.status != order.status) continue;
+            try testing.expectEqual(word.code, order.status_code);
             try testing.expectEqualStrings(word.label, order.status_label);
             try testing.expectEqualStrings(word.action, order.advance_label);
             try testing.expectEqual(word.advanceable, order.advanceable);
@@ -4224,8 +4227,8 @@ test "the kitchen board filters by station" {
     defer harness.deinit();
 
     harness.model.orders = &.{
-        .{ .id = 1, .order_no = "1", .order_type = .dine_in, .status = .pending, .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
-        .{ .id = 2, .order_no = "2", .order_type = .dine_in, .status = .pending, .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 1, .order_no = "1", .order_type = .dine_in, .status = .pending, .status_code = @intFromEnum(domain.OrderStatus.pending), .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 2, .order_no = "2", .order_type = .dine_in, .status = .pending, .status_code = @intFromEnum(domain.OrderStatus.pending), .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
     };
     // The first order is on the grill, the second at the bar.
     harness.model.order_lines = &.{
@@ -6021,11 +6024,12 @@ test "a sale at the till shows on the orders board and the kitchen board" {
     _ = try render.expectByText(tree.root, .text, "Order 000001");
 
     // The orders board shows that number with the status under it, and
-    // the button says what tapping it does.
+    // the button says what tapping it does. The state reads as a chip's
+    // text, not a badge's, because a badge cannot be given a colour.
     harness.send(.{ .open_screen = @intCast(nav.Screen.orders.index()) });
     tree = try render.buildTree(arena, &harness.model);
     _ = try render.expectByText(tree.root, .text, "000001");
-    _ = try render.expectByText(tree.root, .badge, "New");
+    _ = try render.expectByText(tree.root, .text, "New");
     _ = try render.expectByText(tree.root, .badge, "1 open");
     _ = try render.expectByText(tree.root, .button, "Start cooking");
 
@@ -6034,6 +6038,6 @@ test "a sale at the till shows on the orders board and the kitchen board" {
     harness.send(.{ .open_screen = @intCast(nav.Screen.kds_board.index()) });
     tree = try render.buildTree(arena, &harness.model);
     _ = try render.expectByText(tree.root, .text, "000001");
-    _ = try render.expectByText(tree.root, .badge, "Cooking");
+    _ = try render.expectByText(tree.root, .text, "Cooking");
     _ = try render.expectByText(tree.root, .button, "Mark ready");
 }

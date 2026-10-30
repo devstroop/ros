@@ -5,6 +5,8 @@
      than that. A file may hold several templates, so a screen that
      shares a file with its neighbours costs nothing. -->
 
+<import src="parts.native"/>
+
 <!-- The kitchen board. One card per ticket the kitchen is working
      through, oldest first, with a one-tap button that names the move it
      makes: start cooking, mark ready, hand off. The ticket rows are a
@@ -38,7 +40,7 @@
             <column gap="6">
               <row gap="8" cross="center">
                 <text size="lg" grow="1">{ticket.order_no}</text>
-                <badge>{ticket.status_label}</badge>
+                <use template="status-badge" code="{ticket.status_code}" label="{ticket.status_label}"/>
               </row>
               <text wrap="true">{ticket.summary}</text>
               <row gap="8">
@@ -79,7 +81,7 @@
             <column gap="8">
               <text size="display">{card.label}</text>
               <row gap="8" cross="center">
-                <badge>{card.status_label}</badge>
+                <use template="status-badge" code="{card.status_code}" label="{card.status_label}"/>
                 <text size="sm" foreground="text_muted">{card.type_label}</text>
               </row>
             </column>

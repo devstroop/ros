@@ -1077,6 +1077,7 @@ pub const Model = struct {
             if (!orderIsOpen(order.status)) continue;
             out[index] = .{
                 .label = displayLabel(model, order.dining_table_id, order.order_no),
+                .status_code = order.status_code,
                 .status_label = order.status_label,
                 .type_label = order.type_label,
                 .order_no = order.order_no,
@@ -1474,6 +1475,13 @@ pub const Model = struct {
     pub fn selected_order_status(model: *const Model) []const u8 {
         const order = model.selected_order() orelse return "";
         return order.status_label;
+    }
+
+    /// The same state as an ordinal, so the detail screen's chip is
+    /// coloured the way the list's is.
+    pub fn selected_order_status_code(model: *const Model) i64 {
+        const order = model.selected_order() orelse return -1;
+        return order.status_code;
     }
 
     /// The kind of sale the order being shown is.
@@ -2315,6 +2323,7 @@ pub const Model = struct {
             out[index] = .{
                 .id = order.id,
                 .order_no = order.order_no,
+                .status_code = order.status_code,
                 .status_label = order.status_label,
                 .advance_label = order.advance_label,
                 .summary = summariseOrder(model, order, arena),
@@ -2465,6 +2474,8 @@ pub const DisplayCard = struct {
     /// The table the order is on, or the order number when the order
     /// is not for a table.
     label: []const u8,
+    /// The order's own state ordinal, for `status-badge` to colour from.
+    status_code: i64,
     status_label: []const u8,
     type_label: []const u8,
     order_no: []const u8,
@@ -2492,6 +2503,8 @@ fn displayLabel(model: *const Model, table_id: i64, order_no: []const u8) []cons
 pub const Ticket = struct {
     id: i64,
     order_no: []const u8,
+    /// The order's own state ordinal, for `status-badge` to colour from.
+    status_code: i64,
     status_label: []const u8,
     /// The move the board's button is about: "Start cooking", "Mark
     /// ready", "Hand off". Only open tickets reach the board, so this is

@@ -78,8 +78,11 @@ pub const OrderStatus = enum(i64) {
         return self.actionLabel().len > 0;
     }
 
+    /// The state a stored ordinal names. A number the database cannot
+    /// produce reads as a new ticket: the safest thing to do with a
+    /// state this app does not recognise is to treat it as unfinished.
     pub fn fromCode(code: i64) OrderStatus {
-        return std.enums.fromInt(OrderStatus, code) catch .pending;
+        return std.enums.fromInt(OrderStatus, code) orelse .pending;
     }
 };
 
@@ -392,6 +395,10 @@ pub const Order = struct {
     order_no: []const u8,
     order_type: OrderType,
     status: OrderStatus,
+    /// The same state as the database's ordinal. The markup can compare
+    /// a number and cannot name a bound colour token, so this is what
+    /// `status-badge` picks its literal colours from.
+    status_code: i64,
     /// Labels resolved at decode time: the markup binds fields.
     status_label: []const u8,
     /// The caption of the button that moves this order to the next state.
