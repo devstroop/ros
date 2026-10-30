@@ -65,11 +65,23 @@ been rung up: it is one whose money has been taken.
 - **Team member** — an account with a PIN. The database row is still
   `employee`; the screen never says "employee" to a person.
 
+## Appearance
+
+- **Switch theme** — the title bar's palette control. It draws no word:
+  a sun when the room is dark and a moon when it is light, so the glyph
+  names the theme the tap brings rather than the one it leaves. Its
+  accessibility name is the move, `Switch theme`, because a glyph is a
+  drawing instruction and not a label.
+- **Light / Dark** — the two palettes today. Warm, Night and a
+  high-contrast setting are the next work on this track.
+
 ## Retired words
 
 Do not use these again in anything an operator reads: Sell, Floor,
 People, Catalog, Catalogue, System, Overview, Employees, Control center,
-counter, Advance, Pending, Preparing, Completed.
+counter, Advance, Pending, Preparing, Completed, and **Theme** as the
+name of a button - the control that changes the palette is a glyph with
+a name for the move, not a caption spelling the noun it changes.
 
 Retiring a word is not a rename of the code. `Screen.sell`, the
 `employee` table, `OrderStatus.pending` and the status integers stay:

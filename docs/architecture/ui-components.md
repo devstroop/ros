@@ -846,14 +846,18 @@ value it returns. A `toggle_theme` message flips the field, `update`
 returns, the rebuild happens, and the new palette is in place - there is
 no separate "apply theme" step and no per-element work.
 
-The button that does it is in the shell's title bar:
+The button that does it is in the shell's title bar, and it draws a
+glyph rather than a word:
 
 ```xml
-<button size="sm" variant="ghost" on-press="toggle_theme">Theme</button>
+<button size="sm" variant="ghost" icon="{theme_icon}" label="Switch theme" on-press="toggle_theme"/>
 ```
 
-`theme_dark` is in `Model.view_unbound`: the view binds the Theme
-button's message, not the flag.
+`theme_dark` is in `Model.view_unbound`: the view binds the message and
+the glyph's *name* through `theme_icon()`, never the flag. A glyph that
+cannot change with the palette would be decoration, and the name the
+control carries for a screen reader is `label=`, because an icon is a
+drawing instruction and not a label.
 
 ## Traps
 
@@ -869,6 +873,7 @@ button's message, not the flag.
 | A helper declared at file scope next to the `Model` struct | "each does not name an iterable" at run time, or a binding that never resolves | Declare it **inside** the `pub const Model = struct { ... }` body |
 | Mixing `size="sm"` with default controls in one row | Two control heights in one toolbar | One size register per row |
 | An icon-only button with no `label` | Accessible-name validation error | Add `label="..."`; `label` replaces the text content as the announced name |
+| A colour on a `<badge>` (`background="warning"`) | **No error at all** - `native check` and `native test` pass, and the badge paints the theme's own badge colours | Colour a state with a `row background="<token>"` holding a `text foreground="<token>_text"`; a `badge` is for a count, not a state |
 | `size="heading"` on a control | Teaching error naming text as the home of the typography rungs | `heading` and `display` are `text` rungs only |
 | An `<import>` with no matching entry in `app_sources.zig` | Import resolution fails loudly at the import site | Keep the `<import>` line and the `canvas.ui_markup.SourceFile` entry in step |
 | A view root inside an imported file | Validation error | An imported file defines templates only; the shell is the only view root |

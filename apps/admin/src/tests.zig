@@ -161,14 +161,51 @@ test "the setup Symbol field writes the symbol, not the code" {
     for (document.templates) |template| try expectSymbolBinding(template);
 }
 
+fn findButtonByPress(node: canvas.ui_markup.MarkupNode, on_press: []const u8) ?canvas.ui_markup.MarkupNode {
+    if (node.kind == .element and
+        std.mem.eql(u8, node.name, "button") and
+        std.mem.eql(u8, node.attr("on-press") orelse "", on_press)) return node;
+    for (node.children) |child| {
+        if (findButtonByPress(child, on_press)) |found| return found;
+    }
+    return null;
+}
+
+test "the theme control's glyph is the theme the tap brings" {
+    // The button used to read "Theme": the noun it changes, and no word
+    // about the move. A glyph says more in the same space, but only if
+    // it changes with the palette - a picture stuck to one theme is
+    // decoration, and the SDK needs a `label=` on it either way.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    const root = document.root orelse return error.NoViewRoot;
+    const button = findButtonByPress(root, "toggle_theme") orelse {
+        std.debug.print("the title bar has no toggle_theme button\n", .{});
+        return error.ThemeControlMissing;
+    };
+    try testing.expectEqualStrings("{theme_icon}", button.attr("icon") orelse "");
+    try testing.expectEqualStrings("Switch theme", button.attr("label") orelse "");
+
+    var model = main.initialModel();
+    model.theme_dark = false;
+    try testing.expectEqualStrings("moon", model.theme_icon());
+    model.theme_dark = true;
+    try testing.expectEqualStrings("sun", model.theme_icon());
+}
+
 /// A word the product used for a destination or a ticket state and
 /// stopped using. `docs/glossary.md` is the list; this is the enforcement.
-/// "Advance" named the machine instead of the move, and the state words
-/// are what the workflow engine called them.
+/// "Advance" named the machine instead of the move, the state words are
+/// what the workflow engine called them, and "Theme" was the noun on the
+/// title bar's palette control - a button that draws a glyph and names
+/// neither the move nor the theme it brings.
 const retired_words = [_][]const u8{
     "Sell",      "Floor",     "People",         "Catalog", "Catalogue", "System",
     "Overview",  "Employees", "Control center", "Advance", "Pending",   "Preparing",
-    "Completed",
+    "Completed", "Theme",
 };
 
 fn expectNoRetiredWords(node: canvas.ui_markup.MarkupNode) !void {
@@ -229,6 +266,10 @@ test "the rail, the title bar and the markup say the same thing" {
     defer arena_state.deinit();
     const document = try resolveAppDocument(arena_state.allocator());
     for (document.templates) |template| try expectNoRetiredWords(template);
+    // The shell's own words count too: the title bar is where a
+    // destination's name is most likely to be spelled the old way, and
+    // it is not a template.
+    if (document.root) |root| try expectNoRetiredWords(root);
 }
 
 /// How many widgets of `kind` carry exactly `text`. A view that must

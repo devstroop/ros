@@ -79,7 +79,8 @@
 4. Choose Waiter → tables → menu → cart → order; the order is joined to
    an open order on the table.
 5. Choose Display → the customer board shows the order cards.
-6. Title-bar **Theme** toggles light/dark.
+6. Title-bar palette glyph - a sun in the light half of the tap's
+   promise, a moon otherwise, named "Switch theme" - toggles light/dark.
 7. The admin's setup creates a starter menu, six tables, the operator
    and the installation salt; the operator signs in with the PIN they
    chose. The service and kiosk copy the menu and the people from the
@@ -179,6 +180,7 @@ a docs change.
 | D36 | A failed read left a screen saying there was nothing there | `src/app.native`, `src/core/update.zig` | FIXED: a failed read replaces the screen with the reason and a way to try again, and the failure belongs to the screen that asked for the data |
 | D38 | A ticket's button said "Advance" and its states said "Pending" and "Preparing": the workflow engine's words, not the floor's | `src/domain/models.zig`, `src/core/model.zig`, `src/data/repos.zig`, `src/screens/screen-orders.native`, `src/screens/screen-kitchen.native` | FIXED: a ticket is New, Cooking, Ready, Served, Closed or Voided, and its button names the move it makes - Start cooking, Mark ready, Hand off, Close ticket. A ticket with no move left shows no button rather than a blank one. `docs/glossary.md` is the list and a test pins it; the `status` ordinals did not move |
 | D39 | No state on a board was coloured, and the colour a badge was given was silently thrown away | `src/screens/parts.native`, `src/screens/screen-{orders,kitchen,overview,service}.native`, `src/data/repos.zig`, `src/tests.zig` | FIXED: a ticket's state reads in its own colour on every board - a chip built from a row and a text, because a `badge` ignores `background=`. The pairing of the six states with their words and their tokens is pinned by a test that also checks each pair against WCAG AA in both palettes |
+| D40 | The title bar's palette control was a word, "Theme" - the noun it changes, and no word about the move it makes | `src/app.native`, `src/core/model.zig`, `src/tests.zig`, `scripts/smoke-sale.sh` | FIXED: a sun when the room is dark and a moon when it is light, with `label="Switch theme"` so the glyph is named for what it does. The button binds `theme_icon()`, so the picture cannot freeze on one palette; the walkthrough asserts the name and screenshots the dark paint |
 
 B-002 and B-003 are fixed in the working tree of 2026-10-21, with the
 effect-key collision (D21) and the four unrenderable screens (D20) found

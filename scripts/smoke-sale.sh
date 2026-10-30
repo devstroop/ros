@@ -8,7 +8,7 @@
 # passed. This script walks the path an operator walks:
 #
 #   walk-through -> sign out -> role picker -> PIN login ->
-#   Sell -> add a dish -> Place order -> Orders -> KDS
+#   POS -> add a dish -> Place order -> Orders -> theme -> KDS
 #
 # It then copies the database the admin wrote into the kiosk's data
 # directory and asserts the same ticket is on the kitchen board, so the
@@ -220,6 +220,15 @@ screenshot admin-order
 printf '==> the order is on the list\n'
 tap listitem "Orders" '000001' 'New' '1 open'
 screenshot admin-orders
+
+# The title bar's palette control draws a glyph and no word, so the name
+# the snapshot carries is the one the accessibility label gives it. The
+# press lands last because nothing below depends on the palette: the
+# kiosk reads the database, not the admin's theme.
+printf '==> the theme control is named, and the dark palette paints\n'
+assert_visible 'Switch theme'
+tap button "Switch theme" 'Switch theme'
+screenshot admin-dark
 
 # ---------------------------------------------------------------- kiosk
 

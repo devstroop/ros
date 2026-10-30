@@ -17,7 +17,7 @@
   <row padding="12" gap="8" cross="center" background="surface">
     <text size="lg" grow="1">{company_label}</text>
     <badge>{role_label}</badge>
-    <button size="sm" variant="ghost" on-press="toggle_theme">Theme</button>
+    <button size="sm" variant="ghost" icon="{theme_icon}" label="Switch theme" on-press="toggle_theme"/>
   </row>
 
   <if test="{is_loading}">

@@ -2175,6 +2175,14 @@ pub const Model = struct {
         return model.company_name_field;
     }
 
+    /// The glyph the theme button wears: the theme the tap is about to
+    /// bring, so the control names the move rather than the state it
+    /// leaves. Both names are built-in icons - the markup binds an icon
+    /// name, and only a name.
+    pub fn theme_icon(model: *const Model) []const u8 {
+        return if (model.theme_dark) "sun" else "moon";
+    }
+
     /// The installation salt, as a slice.
     pub fn pin_salt(model: *const Model) []const u8 {
         return model.pin_salt_buf[0..model.pin_salt_len];

@@ -78,7 +78,7 @@ does) or bind an in-memory store.
 | Node budget | No assertion on `widget_nodes` |
 | Error arms (`db_failed`, failed loads) | Copy and state are untested |
 | Timer tick | Untested |
-| Theme switch | Untested at the token level |
+| Theme switch | The walkthrough presses the control and keeps a dark screenshot, and every text pair in both registers clears AA in `src/tests.zig`; no test compares the two registers field by field |
 | Accessibility names | Left to SDK validation |
 | Window resize below minimum | Untested |
 | Sidecars | No code, no tests |
