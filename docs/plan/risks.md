@@ -36,7 +36,7 @@ owner is not being managed.
 | # | Risk | L | I | Mitigation | Owner |
 |---|---|---|---|---|---|
 | R3 | SDK v0.11.0 behaviour changes or is abandoned | med | high | Pin the version; keep the wrapper surface small; track upstream | Eng |
-| R4 | `native package` signing/notarisation blocks release | med | high | Do a throwaway signed build early | Eng |
+| R4 | `native package` signing/notarisation blocks release | med | high | `scripts/package.sh` and the CI package job exercise packaging, ad-hoc signing, plist injection and DMG verification; Developer ID and notarisation still need the release credentials | Eng |
 | R5 | The app needs a C library and must `native eject` late | med | med | Decide early whether sidecars or in-process links are needed | Eng |
 | R6 | CI cost/time from building the SDK and `npm ci` every run | med | med | Cache CLI and `node_modules`; prebuilt CLI if available | Eng |
 | R7 | `.native/build` or other generated files get committed | med | low | Ignore generated dirs; document ownership | Eng |
