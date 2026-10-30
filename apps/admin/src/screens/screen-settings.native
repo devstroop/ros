@@ -7,11 +7,33 @@
 
 <!-- The settings hub. Every setting the restaurant has, in one list.
      A row opens its own screen; the settings themselves are screens of
-     their own. -->
+     their own.
+
+     Appearance sits above that list rather than at the end of it. It is
+     the only control here that takes effect on the tap instead of on a
+     Save, it belongs to this device rather than to the restaurant, and
+     a card at the bottom of a scroll is a card nobody can press: the
+     widget is in the tree, its pixels are not on the pane. -->
 
 <template name="screen-settings">
   <column grow="1" gap="12" padding="16" background="background">
     <text size="heading">Settings</text>
+
+    <card padding="12">
+      <column gap="8">
+        <text size="lg">Appearance</text>
+        <text size="sm" foreground="text_muted">The palette this device draws in. It lands on the tap, and it is this device's own choice - the restaurant does not decide what a till looks like.</text>
+        <row gap="8">
+          <for each="palettes" key="id" as="palette">
+            <toggle-button selected="{palette.id == palette_code}" on-toggle="set_palette:{palette.id}">{palette.label}</toggle-button>
+          </for>
+        </row>
+        <row gap="8" cross="center">
+          <text size="sm" foreground="text_muted" grow="1">Push the ink, the washes and the chips further from the page</text>
+          <toggle-button selected="{contrast_high}" on-toggle="toggle_contrast">High contrast</toggle-button>
+        </row>
+      </column>
+    </card>
 
     <scroll grow="1">
       <column gap="4">

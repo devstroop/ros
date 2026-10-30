@@ -233,6 +233,51 @@ pub const SaltState = enum {
     confirmed,
 };
 
+/// The palette the operator chose, in the order Settings offers them.
+///
+/// The ordinal is stored in `app_config` as soon as the choice is made,
+/// so it is a contract with rows already on disk: add a palette at the
+/// end, and never renumber one that has been written.
+pub const Palette = enum(u8) {
+    light = 0,
+    dark = 1,
+    warm = 2,
+    night = 3,
+
+    /// The word the Settings button reads.
+    pub fn label(self: Palette) []const u8 {
+        return switch (self) {
+            .light => "Light",
+            .dark => "Dark",
+            .warm => "Warm",
+            .night => "Night",
+        };
+    }
+
+    /// True for the palettes drawn on a dark ground. The title bar's
+    /// glyph turns on this and nothing else: it is the half of the day
+    /// the tap is about to bring.
+    pub fn is_dark(self: Palette) bool {
+        return self == .dark or self == .night;
+    }
+
+    /// Where the title bar's one button lands from here: the dark
+    /// palette from a light ground, the light palette from a dark one.
+    /// Warm and Night are the Settings screen's business, but the glyph
+    /// still has to promise the move it makes.
+    pub fn otherHalf(self: Palette) Palette {
+        return if (self.is_dark()) .light else .dark;
+    }
+
+    /// The palette a stored ordinal names. An ordinal this build does
+    /// not know reads as the house light one - never a black screen.
+    pub fn fromCode(code: i64) Palette {
+        const info = @typeInfo(Palette).@"enum";
+        const narrowed = std.math.cast(info.tag_type, code) orelse return .light;
+        return std.enums.fromInt(Palette, narrowed) orelse .light;
+    }
+};
+
 /// The tax on a price, in minor units.
 ///
 /// `rate_bps` is in basis points, so 500 is five percent. An inclusive
@@ -295,7 +340,8 @@ pub const Model = struct {
         "db_ready",
         "busy",
         "company_id",
-        "theme_dark",
+        "theme_palette",
+        "theme_contrast_high",
         "salt_state",
         "last_issued_order_id",
         "advance_order_id",
@@ -810,8 +856,11 @@ pub const Model = struct {
     failed_screen: nav.Screen = .admin_dashboard,
     /// The last error worth showing the operator, or empty.
     error_text: []const u8 = "",
-    /// Dark palette instead of the house light one.
-    theme_dark: bool = false,
+    /// The palette the operator chose, and whether it is pushed to its
+    /// high-contrast form. Both are chrome, not data: nothing else in
+    /// the model reads them.
+    theme_palette: Palette = .light,
+    theme_contrast_high: bool = false,
 
     // ---------------------------------------------------- derived values
     //
@@ -2180,7 +2229,22 @@ pub const Model = struct {
     /// leaves. Both names are built-in icons - the markup binds an icon
     /// name, and only a name.
     pub fn theme_icon(model: *const Model) []const u8 {
-        return if (model.theme_dark) "sun" else "moon";
+        return if (model.theme_palette.is_dark()) "sun" else "moon";
+    }
+
+    /// The palettes Settings offers, in that order.
+    pub fn palettes(_: *const Model) []const PaletteOption {
+        return &palette_options;
+    }
+
+    /// The chosen palette, as the ordinal the buttons compare against.
+    pub fn palette_code(model: *const Model) i64 {
+        return @intFromEnum(model.theme_palette);
+    }
+
+    /// Whether the chosen palette is in its high-contrast form.
+    pub fn contrast_high(model: *const Model) bool {
+        return model.theme_contrast_high;
     }
 
     /// The installation salt, as a slice.
@@ -2413,6 +2477,19 @@ pub const KitchenDish = struct {
 pub const known_table_count: i64 = 46;
 
 /// One food marking, as the product form offers it.
+/// One palette, as the Settings screen offers it.
+pub const PaletteOption = struct {
+    id: usize,
+    label: []const u8,
+};
+
+const palette_options = [_]PaletteOption{
+    .{ .id = @intFromEnum(Palette.light), .label = Palette.light.label() },
+    .{ .id = @intFromEnum(Palette.dark), .label = Palette.dark.label() },
+    .{ .id = @intFromEnum(Palette.warm), .label = Palette.warm.label() },
+    .{ .id = @intFromEnum(Palette.night), .label = Palette.night.label() },
+};
+
 pub const FoodTypeOption = struct {
     id: usize,
     label: []const u8,

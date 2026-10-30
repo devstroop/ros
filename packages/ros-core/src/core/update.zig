@@ -2264,7 +2264,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.loadForScreen(model, fx, screen);
         },
 
-        .toggle_theme => model.theme_dark = !model.theme_dark,
+        // The glyph promises the other half of the day, so this lands on
+        // one of the two palettes it names. All four are Settings' to
+        // offer, and the contrast is a setting of its own.
+        .toggle_theme => model.theme_palette = model.theme_palette.otherHalf(),
+        .set_palette => |code| model.theme_palette = model_mod.Palette.fromCode(code),
+        .toggle_contrast => model.theme_contrast_high = !model.theme_contrast_high,
 
         .tick => |timer| {
             if (timer.outcome != .fired) return;

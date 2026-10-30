@@ -8,7 +8,8 @@
 # passed. This script walks the path an operator walks:
 #
 #   walk-through -> sign out -> role picker -> PIN login ->
-#   POS -> add a dish -> Place order -> Orders -> theme -> KDS
+#   POS -> add a dish -> Place order -> Orders -> theme -> Appearance
+#   -> KDS
 #
 # It then copies the database the admin wrote into the kiosk's data
 # directory and asserts the same ticket is on the kitchen board, so the
@@ -35,7 +36,7 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     -h|--help)
-      sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -169,6 +170,29 @@ screenshot() {
     "$data_dir/screens/$name.png"
 }
 
+# The host samples the canvas's centre pixel on every present and
+# publishes it in the snapshot. It is a colour rather than a widget, so
+# it says what the page paints - which is how a control that is drawn
+# somewhere the operator cannot reach is caught: the widgets are in the
+# tree, the presses are delivered, and the picture never moves.
+centre_pixel() {
+  automate snapshot | sed -n 's/.*gpu_sample=0x\([0-9a-f]*\).*/\1/p' | head -1
+}
+
+# The canvas repaints on its own clock, so the new pixel is not always
+# published in the first snapshot after the press.
+repainted() {
+  local before="$1" screen="$2" after attempt
+  for attempt in 1 2 3 4 5 6 7 8; do
+    after="$(centre_pixel)"
+    if [ -n "$after" ] && [ "$after" != "$before" ]; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  fail "$screen still paints 0x$before after the press - the palette never reached the canvas"
+}
+
 build_app() {
   local app="$1"
   printf '==> building %s with automation\n' "$app"
@@ -222,13 +246,35 @@ tap listitem "Orders" '000001' 'New' '1 open'
 screenshot admin-orders
 
 # The title bar's palette control draws a glyph and no word, so the name
-# the snapshot carries is the one the accessibility label gives it. The
-# press lands last because nothing below depends on the palette: the
-# kiosk reads the database, not the admin's theme.
+# the snapshot carries is the one the accessibility label gives it. That
+# label reads the same in both halves of the day, so what proves the
+# press landed is the page's own colour rather than a string on it.
 printf '==> the theme control is named, and the dark palette paints\n'
 assert_visible 'Switch theme'
+page="$(centre_pixel)"
 tap button "Switch theme" 'Switch theme'
+repainted "$page" admin-dark
 screenshot admin-dark
+
+# Settings is where the other registers live. The title bar only knows
+# the two halves of the day; the four registers and the contrast are the
+# Appearance card's, and a palette that only exists in the model is a
+# palette no operator can reach. Each register button carries its chosen
+# state in the snapshot, so the assertion is that the model moved rather
+# than that a word is on the card - and the centre pixel is that the
+# canvas followed it.
+printf '==> Appearance offers every register, and each one repaints\n'
+tap listitem "Settings" 'Appearance' 'High contrast'
+for register in Light Dark Warm Night; do
+  page="$(centre_pixel)"
+  tap button "$register" "name=\"$register\".*selected"
+  repainted "$page" "settings-$register"
+  screenshot "settings-$register"
+done
+
+printf '==> high contrast sits beside the registers, on any of them\n'
+tap button "High contrast" 'name="High contrast".*selected'
+screenshot settings-night-contrast
 
 # ---------------------------------------------------------------- kiosk
 

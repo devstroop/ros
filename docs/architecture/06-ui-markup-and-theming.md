@@ -172,21 +172,23 @@ There is no else-if; each branch is its own `<if>`.
 `src/core/theme.zig` supplies `canvas.DesignTokens` on every rebuild:
 
 ```zig
-pub fn tokens(model: *const Model) canvas.DesignTokens {
-    return if (model.theme_dark) dark() else light();
+pub fn tokens(model: *const Model) DesignTokens {
+    const chosen = model.theme_palette;
+    if (!model.theme_contrast_high) return register(chosen);
+    return withColors(highContrast(register(chosen).colors, chosen.is_dark()));
 }
 ```
 
-`toggle_theme` flips `theme_dark`, so the theme is model state.
+`toggle_theme` hops between the halves of the day - Light for a dark
+register, Dark for a light one - and Settings' Appearance card sets
+`theme_palette` directly and `theme_contrast_high` beside it. Both are
+model state, so a theme change is a message, a field and a rebuild.
 
 ### Brand palette
 
 | Name | Value | Use |
 |---|---|---|
 | Primary | `#176B84` | Accent, focus ring |
-| Primary dark | `#12566A` | Reserved |
-| Secondary | `#4AC3A1` | Brand, success family |
-| Accent | `#705EE0` | Reserved |
 | Success | `#1B6E47` | Success text/status |
 | Warning | `#87520C` | Warning |
 | Danger | `#B32D22` | Destructive |
@@ -194,9 +196,12 @@ pub fn tokens(model: *const Model) canvas.DesignTokens {
 
 The light semantic fills are the darkest step of the v1 hues that clears
 WCAG AA with white text, and as text on the light background and surface
-(`tests.zig` asserts both palettes).
+(`tests.zig` asserts every text pair in all eight palettes - four
+registers, each standard and high contrast).
 
 ### Semantic tokens in use
+
+Light and Dark, the two registers the brand hues drive:
 
 | Token | Light | Dark |
 |---|---|---|
@@ -212,6 +217,12 @@ WCAG AA with white text, and as text on the light background and surface
 | `success` | `#1B6E47` | `#45B886` |
 | `warning` | `#87520C` | `#E09A3C` |
 | `info` | `#2F5EC2` | `#5B8CE0` |
+
+Warm (a laminated-menu paper for a dining-room tablet) and Night (a
+kitchen display at 3am) carry their own hues, because a cyan that clears
+AA on white rarely clears it on a near-black ground. The full four-register
+value table and the high-contrast derivation are in
+[ui-components.md](ui-components.md).
 
 ### Type, spacing, radius
 
@@ -238,8 +249,9 @@ open question about brand fidelity.
   badge table - so a count reads as a badge and a state as a chip.
   The dining grid has no `<if>` chain yet and shows its table status as
   a badge label.
-- The design system is defined twice (light and dark) rather than derived;
-  adding a token means editing both.
+- The four registers are written out; only the high-contrast form is
+  derived. A new semantic token means editing four `colors` blocks, and
+  the contrast test is what catches the one that was missed.
 
 ## Layout patterns
 

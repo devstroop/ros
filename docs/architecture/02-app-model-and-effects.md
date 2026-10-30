@@ -34,7 +34,7 @@ passing it by value.
 | POS filters | `selected_category`, `search` | 0 means "all"; search is a `TextBuffer(64)` |
 | Sign-in | `pin`, `pin_salt_buf`, `salt_state`, `login_hash`, `operator_buf`, `login_error` | The salt is only usable once the database has confirmed it |
 | Cart | `cart_buf`, `cart[50]`, `cart_len`, `cart_order_type` | Session state, never persisted until placed |
-| Runtime | `db_ready`, `busy`, `error_text`, `theme_dark` | `error_text` is shown by the shell's dismissable error banner |
+| Runtime | `db_ready`, `busy`, `error_text`, `theme_palette`, `theme_contrast_high` | `error_text` is shown by the shell's dismissable error banner; the two appearance fields are chrome the theme reads and nothing else does |
 
 ### Visibility rules
 
@@ -46,9 +46,10 @@ passing it by value.
    `visible_products(arena)`, `cart_lines(arena)`, `kitchen_tickets(arena)`.
 3. **Anything the view must not see is listed in `view_unbound`.**
    Current entries: `stack`, `employee_id`, `db_ready`, `busy`,
-   `company_id`, `theme_dark`, `salt_state`, `last_issued_order_id`,
-   `advance_order_id`. The view reads errors through the derived
-   `has_error` and `error_message` methods.
+   `company_id`, `theme_palette`, `theme_contrast_high`, `salt_state`,
+   `last_issued_order_id`, `advance_order_id`. The view reads errors
+   through the derived `has_error` and `error_message` methods, and the
+   chosen palette through `palette_code` and `contrast_high`.
 4. **Rows are plain data.** The markup cannot call a method on a row, so
    labels (`status_label`, `type_label`) are resolved at decode time and
    stored in the row.
@@ -91,7 +92,7 @@ does not fit is a menu the app cannot show; see
 | Family | Examples | Payload |
 |---|---|---|
 | Runtime-delivered | `pin_edit`, `search_edit`, `tick`, `*_loaded`, `db_failed` | Fixed by the platform: text edit event, timer event, DB result |
-| App-intent | `pick_role`, `open_section`, `add_to_cart`, `place_order`, `advance_order`, `toggle_theme` | Small scalars so markup can dispatch `on-press="add_to_cart:{product.id}"` |
+| App-intent | `pick_role`, `open_section`, `add_to_cart`, `place_order`, `advance_order`, `toggle_theme`, `set_palette`, `toggle_contrast` | Small scalars so markup can dispatch `on-press="add_to_cart:{product.id}"` |
 | Internal result | `login_checked`, `order_placed`, `order_status_saved`, `config_saved` | `EffectDbResult`; never bound by markup, listed in `Msg.view_unbound` |
 
 Design notes:

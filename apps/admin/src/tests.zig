@@ -189,11 +189,123 @@ test "the theme control's glyph is the theme the tap brings" {
     try testing.expectEqualStrings("{theme_icon}", button.attr("icon") orelse "");
     try testing.expectEqualStrings("Switch theme", button.attr("label") orelse "");
 
+    // The glyph promises the other half of the day, so on every register
+    // it has to name the palette the tap actually brings.
     var model = main.initialModel();
-    model.theme_dark = false;
+    model.theme_palette = .light;
     try testing.expectEqualStrings("moon", model.theme_icon());
-    model.theme_dark = true;
+    model.theme_palette = .warm;
+    try testing.expectEqualStrings("moon", model.theme_icon());
+    model.theme_palette = .dark;
     try testing.expectEqualStrings("sun", model.theme_icon());
+    model.theme_palette = .night;
+    try testing.expectEqualStrings("sun", model.theme_icon());
+}
+
+/// The `<for>` whose rows come from one model list.
+fn findForBlock(node: canvas.ui_markup.MarkupNode, source: []const u8) ?canvas.ui_markup.MarkupNode {
+    if (node.kind == .for_block and std.mem.eql(u8, node.attr("each") orelse "", source)) return node;
+    for (node.children) |child| {
+        if (findForBlock(child, source)) |found| return found;
+    }
+    return null;
+}
+
+fn findToggleByToggle(node: canvas.ui_markup.MarkupNode, on_toggle: []const u8) ?canvas.ui_markup.MarkupNode {
+    if (node.kind == .element and
+        std.mem.eql(u8, node.name, "toggle-button") and
+        std.mem.eql(u8, node.attr("on-toggle") orelse "", on_toggle)) return node;
+    for (node.children) |child| {
+        if (findToggleByToggle(child, on_toggle)) |found| return found;
+    }
+    return null;
+}
+
+test "Settings offers every palette, and the contrast beside them" {
+    // Four registers is a decision the model makes; the markup repeats it
+    // rather than restating it. A register the enum gained and Settings
+    // never offered is a palette no operator can choose, and the only way
+    // to catch that is to compare the buttons against the enum itself.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    const template = findTemplate(document, "screen-settings") orelse {
+        std.debug.print("no screen-settings template - Appearance lives in the settings hub\n", .{});
+        return error.SettingsScreenMissing;
+    };
+
+    const loop = findForBlock(template, "palettes") orelse {
+        std.debug.print("the settings hub draws no palette buttons\n", .{});
+        return error.PaletteListUnbound;
+    };
+    try testing.expectEqualStrings("palette", loop.attr("as") orelse "");
+    try testing.expectEqual(@as(usize, 1), loop.children.len);
+
+    const toggle = loop.children[0];
+    try testing.expectEqualStrings("toggle-button", toggle.name);
+    try testing.expectEqualStrings("{palette.id == palette_code}", toggle.attr("selected") orelse "");
+    try testing.expectEqualStrings("set_palette:{palette.id}", toggle.attr("on-toggle") orelse "");
+
+    const contrast = findToggleByToggle(template, "toggle_contrast") orelse {
+        std.debug.print("no button sends toggle_contrast - high contrast is unreachable\n", .{});
+        return error.ContrastControlMissing;
+    };
+    try testing.expectEqualStrings("{contrast_high}", contrast.attr("selected") orelse "");
+
+    // The rows the loop draws are one per palette, named as the enum
+    // names it, and no palette is offered twice.
+    var model = main.initialModel();
+    const options = model.palettes();
+    try testing.expectEqual(@as(usize, std.meta.fields(core.Palette).len), options.len);
+    inline for (std.meta.fields(core.Palette)) |field| {
+        const which = @field(core.Palette, field.name);
+        var hits: usize = 0;
+        for (options) |option| {
+            if (option.id == @intFromEnum(which)) {
+                hits += 1;
+                try testing.expectEqualStrings(which.label(), option.label);
+            }
+        }
+        try testing.expectEqual(@as(usize, 1), hits);
+    }
+}
+
+test "the palette and the contrast the theme reads are the model's" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    main.update(&model, .{ .set_palette = @intFromEnum(core.Palette.warm) }, &fx);
+    try testing.expectEqual(core.Palette.warm, model.theme_palette);
+    try testing.expectEqual(@as(i64, @intFromEnum(core.Palette.warm)), model.palette_code());
+
+    // The paint moves with the field. A setting that changes the model and
+    // not the tokens is a button that lies.
+    const warm_ground = theme.tokens(&model).colors.background;
+    try testing.expect(!std.meta.eql(warm_ground, theme.light().colors.background));
+
+    main.update(&model, .toggle_contrast, &fx);
+    try testing.expect(model.contrast_high());
+    try testing.expectEqualStrings("moon", model.theme_icon());
+    // A light register's high-contrast ink is black, and it comes from the
+    // derivation rather than the register - the palette is still Warm.
+    try testing.expect(std.meta.eql(theme.tokens(&model).colors.text, canvas.Color.rgb8(0, 0, 0)));
+
+    // The title bar's glyph hops to the other half of the day and leaves
+    // the contrast alone: how much separation a person needs is not a
+    // property of the palette they are looking at.
+    main.update(&model, .toggle_theme, &fx);
+    try testing.expectEqual(core.Palette.dark, model.theme_palette);
+    try testing.expect(model.theme_contrast_high);
+    try testing.expect(std.meta.eql(theme.tokens(&model).colors.text, canvas.Color.rgb8(255, 255, 255)));
+    try testing.expectEqualStrings("sun", model.theme_icon());
+
+    // An ordinal this app never offered is not a palette. The default is
+    // the safe answer: neither a panic nor a half-read enum.
+    main.update(&model, .{ .set_palette = 99 }, &fx);
+    try testing.expectEqual(core.Palette.light, model.theme_palette);
 }
 
 /// A word the product used for a destination or a ticket state and
@@ -548,41 +660,86 @@ test "pressing the current destination does not grow the history" {
     try testing.expectEqual(nav.Screen.kds_board, model.screen());
 }
 
-test "every text pair in the light and dark palettes clears WCAG AA" {
-    const palettes = [_]struct { name: []const u8, tokens: canvas.DesignTokens }{
-        .{ .name = "light", .tokens = theme.light() },
-        .{ .name = "dark", .tokens = theme.dark() },
-    };
+/// Every palette the runtime can hand the renderer: the four registers,
+/// and each one's high-contrast derivation. They are read through
+/// `theme.tokens` - the call the app itself makes - so a combination no
+/// test reaches is a combination nobody has looked at.
+const palette_cases = [_]struct {
+    name: []const u8,
+    palette: core.Palette,
+    high: bool,
+}{
+    .{ .name = "light", .palette = .light, .high = false },
+    .{ .name = "light high contrast", .palette = .light, .high = true },
+    .{ .name = "dark", .palette = .dark, .high = false },
+    .{ .name = "dark high contrast", .palette = .dark, .high = true },
+    .{ .name = "warm", .palette = .warm, .high = false },
+    .{ .name = "warm high contrast", .palette = .warm, .high = true },
+    .{ .name = "night", .palette = .night, .high = false },
+    .{ .name = "night high contrast", .palette = .night, .high = true },
+};
 
-    for (palettes) |palette| {
-        const c = palette.tokens.colors;
-        const pairs = [_]struct { name: []const u8, foreground: canvas.Color, background: canvas.Color, minimum: f32 }{
-            .{ .name = "text on background", .foreground = c.text, .background = c.background, .minimum = 4.5 },
-            .{ .name = "text on surface", .foreground = c.text, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "muted text on background", .foreground = c.text_muted, .background = c.background, .minimum = 4.5 },
-            .{ .name = "muted text on surface", .foreground = c.text_muted, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "muted text on a closed chip", .foreground = c.text_muted, .background = c.surface_subtle, .minimum = 4.5 },
-            .{ .name = "accent label on accent", .foreground = c.accent_text, .background = c.accent, .minimum = 4.5 },
-            .{ .name = "accent as text on background", .foreground = c.accent, .background = c.background, .minimum = 4.5 },
-            .{ .name = "accent as text on surface", .foreground = c.accent, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "destructive label on destructive", .foreground = c.destructive_text, .background = c.destructive, .minimum = 4.5 },
-            .{ .name = "destructive as text on background", .foreground = c.destructive, .background = c.background, .minimum = 4.5 },
-            .{ .name = "destructive as text on surface", .foreground = c.destructive, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "success label on success", .foreground = c.success_text, .background = c.success, .minimum = 4.5 },
-            .{ .name = "success as text on background", .foreground = c.success, .background = c.background, .minimum = 4.5 },
-            .{ .name = "success as text on surface", .foreground = c.success, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "warning label on warning", .foreground = c.warning_text, .background = c.warning, .minimum = 4.5 },
-            .{ .name = "warning as text on background", .foreground = c.warning, .background = c.background, .minimum = 4.5 },
-            .{ .name = "warning as text on surface", .foreground = c.warning, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "info label on info", .foreground = c.info_text, .background = c.info, .minimum = 4.5 },
-            .{ .name = "info as text on background", .foreground = c.info, .background = c.background, .minimum = 4.5 },
-            .{ .name = "info as text on surface", .foreground = c.info, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "focus ring on background", .foreground = c.focus_ring, .background = c.background, .minimum = 3.0 },
-            .{ .name = "focus ring on surface", .foreground = c.focus_ring, .background = c.surface, .minimum = 3.0 },
+fn paletteColors(case: @TypeOf(palette_cases[0])) canvas.ColorTokens {
+    var model = main.initialModel();
+    model.theme_palette = case.palette;
+    model.theme_contrast_high = case.high;
+    return theme.tokens(&model).colors;
+}
+
+/// A colour token's value, read by the name the markup writes. Walking
+/// the struct's fields means a token the theme gains needs no change here.
+fn tokenColor(colors: canvas.ColorTokens, name: []const u8) ?canvas.Color {
+    inline for (std.meta.fields(canvas.ColorTokens)) |field| {
+        if (std.mem.eql(u8, field.name, name)) return @field(colors, field.name);
+    }
+    return null;
+}
+
+test "every text pair in every register clears WCAG, both contrasts" {
+    for (palette_cases) |case| {
+        const colors = paletteColors(case);
+
+        // Ink carries the AAA promise: high contrast exists precisely
+        // because someone cannot read this screen at AA. A brand hue used
+        // as running text keeps its AA duty instead - pushing cyan to
+        // 7:1 against a light ground is not a colour, it is a smudge.
+        const ink: f32 = if (case.high) 7.0 else 4.5;
+        const pairs = [_]struct { name: []const u8, foreground: []const u8, background: []const u8, minimum: f32 }{
+            .{ .name = "text on background", .foreground = "text", .background = "background", .minimum = ink },
+            .{ .name = "text on surface", .foreground = "text", .background = "surface", .minimum = ink },
+            .{ .name = "text on a pressed row", .foreground = "text", .background = "surface_pressed", .minimum = ink },
+            .{ .name = "muted text on background", .foreground = "text_muted", .background = "background", .minimum = ink },
+            .{ .name = "muted text on surface", .foreground = "text_muted", .background = "surface", .minimum = ink },
+            .{ .name = "muted text on a closed chip", .foreground = "text_muted", .background = "surface_subtle", .minimum = ink },
+            .{ .name = "accent label on accent", .foreground = "accent_text", .background = "accent", .minimum = ink },
+            .{ .name = "accent as text on background", .foreground = "accent", .background = "background", .minimum = 4.5 },
+            .{ .name = "accent as text on surface", .foreground = "accent", .background = "surface", .minimum = 4.5 },
+            .{ .name = "destructive label on destructive", .foreground = "destructive_text", .background = "destructive", .minimum = ink },
+            .{ .name = "destructive as text on background", .foreground = "destructive", .background = "background", .minimum = 4.5 },
+            .{ .name = "destructive as text on surface", .foreground = "destructive", .background = "surface", .minimum = 4.5 },
+            .{ .name = "success label on success", .foreground = "success_text", .background = "success", .minimum = ink },
+            .{ .name = "success as text on background", .foreground = "success", .background = "background", .minimum = 4.5 },
+            .{ .name = "success as text on surface", .foreground = "success", .background = "surface", .minimum = 4.5 },
+            .{ .name = "warning label on warning", .foreground = "warning_text", .background = "warning", .minimum = ink },
+            .{ .name = "warning as text on background", .foreground = "warning", .background = "background", .minimum = 4.5 },
+            .{ .name = "warning as text on surface", .foreground = "warning", .background = "surface", .minimum = 4.5 },
+            .{ .name = "info label on info", .foreground = "info_text", .background = "info", .minimum = ink },
+            .{ .name = "info as text on background", .foreground = "info", .background = "background", .minimum = 4.5 },
+            .{ .name = "info as text on surface", .foreground = "info", .background = "surface", .minimum = 4.5 },
+            .{ .name = "focus ring on background", .foreground = "focus_ring", .background = "background", .minimum = 3.0 },
+            .{ .name = "focus ring on surface", .foreground = "focus_ring", .background = "surface", .minimum = 3.0 },
         };
 
         for (pairs) |pair| {
-            try expectContrast(palette.name, pair.name, pair.foreground, pair.background, pair.minimum);
+            const foreground = tokenColor(colors, pair.foreground) orelse {
+                std.debug.print("{s} is not a colour token\n", .{pair.foreground});
+                return error.UnknownColorToken;
+            };
+            const background = tokenColor(colors, pair.background) orelse {
+                std.debug.print("{s} is not a colour token\n", .{pair.background});
+                return error.UnknownColorToken;
+            };
+            try expectContrast(case.name, pair.name, foreground, background, pair.minimum);
         }
     }
 }
@@ -608,15 +765,6 @@ const status_chips = [_]struct {
     .{ .code = 4, .label = "Closed", .background = "surface_subtle", .foreground = "text_muted" },
     .{ .code = 5, .label = "Voided", .background = "destructive", .foreground = "destructive_text" },
 };
-
-/// A colour token's value, read by the name the markup writes. Walking
-/// the struct's fields means a token the theme gains needs no change here.
-fn tokenColor(colors: canvas.ColorTokens, name: []const u8) ?canvas.Color {
-    inline for (std.meta.fields(canvas.ColorTokens)) |field| {
-        if (std.mem.eql(u8, field.name, name)) return @field(colors, field.name);
-    }
-    return null;
-}
 
 fn findTemplate(document: canvas.ui_markup.MarkupDocument, name: []const u8) ?canvas.ui_markup.MarkupNode {
     for (document.templates) |template| {
@@ -662,11 +810,6 @@ test "a ticket's chip colours the state it names, in every palette" {
         return error.StatusBadgeMissing;
     };
 
-    const palettes = [_]struct { name: []const u8, colors: canvas.ColorTokens }{
-        .{ .name = "light", .colors = theme.light().colors },
-        .{ .name = "dark", .colors = theme.dark().colors },
-    };
-
     for (status_chips) |chip| {
         // The state word is the enum's, so a rename cannot leave the
         // colour table describing a state that is no longer called that.
@@ -681,12 +824,13 @@ test "a ticket's chip colours the state it names, in every palette" {
         try testing.expectEqualStrings(chip.background, firstAttr(branch, "background") orelse "");
         try testing.expectEqualStrings(chip.foreground, firstAttr(branch, "foreground") orelse "");
 
-        for (palettes) |palette| {
-            const background = tokenColor(palette.colors, chip.background) orelse {
+        for (palette_cases) |palette| {
+            const colors = paletteColors(palette);
+            const background = tokenColor(colors, chip.background) orelse {
                 std.debug.print("{s} is not a colour token\n", .{chip.background});
                 return error.UnknownColorToken;
             };
-            const foreground = tokenColor(palette.colors, chip.foreground) orelse {
+            const foreground = tokenColor(colors, chip.foreground) orelse {
                 std.debug.print("{s} is not a colour token\n", .{chip.foreground});
                 return error.UnknownColorToken;
             };
@@ -695,7 +839,7 @@ test "a ticket's chip colours the state it names, in every palette" {
                 chip.label,
                 foreground,
                 background,
-                4.5,
+                if (palette.high) 7.0 else 4.5,
             );
         }
     }

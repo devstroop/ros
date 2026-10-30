@@ -79,7 +79,8 @@ pub const Model = struct {
         "error_text",
         "company_id",
         "pending_screen",
-        "theme_dark",
+        "theme_palette",
+        "theme_contrast_high",
     };
 ```
 
@@ -219,10 +220,12 @@ presents it. Two details matter:
 
   ```zig
   /// The tokens for the current model state. The runtime asks for these
-  /// on every rebuild, so flipping the theme is a model change and
+  /// on every rebuild, so changing the theme is a model change and
   /// nothing else.
-  pub fn tokens(model: *const Model) canvas.DesignTokens {
-      return if (model.theme_dark) dark() else light();
+  pub fn tokens(model: *const Model) DesignTokens {
+      const chosen = model.theme_palette;
+      if (!model.theme_contrast_high) return register(chosen);
+      return withColors(highContrast(register(chosen).colors, chosen.is_dark()));
   }
   ```
 
@@ -288,7 +291,7 @@ to be copied — into the model's bump buffers. That rule is the reason
 | `core/update.zig` | `update(model, msg, fx)` and `boot(model, fx)`: the only writers of model state, plus the navigation helper `go`, the cart helpers, and `nextStatus`. |
 | `core/navigation.zig` | The `Role` and `Screen` enums, `Screen.title()` / `Screen.nav_section()`, the role cards, the `NavSection` enum, and the fixed-capacity `Stack`. |
 | `core/rbac.zig` | The permission matrix: `allows(role, screen)`, `home(role)`, the per-role nav rails, and `section_screen(section)`. A pure function with a total test. |
-| `core/theme.zig` | The design tokens: the brand palette, the light and dark token sets, and `tokens(model)` which picks between them. |
+| `core/theme.zig` | The design tokens: the brand palette, the four registers (Light, Dark, Warm, Night), the high-contrast derivation, and `tokens(model)` which picks between them. |
 | `core/bump.zig` | `Bump(comptime capacity)`: the fixed-capacity allocator the model uses for its rows. `alloc`, `dupe`, `dupeC`, `allocSlice`, `reset`, `used`, `free`. |
 | `domain/models.zig` | The entities: `Product`, `Order`, `OrderLine`, `DiningTable`, `Customer`, `Employee`, `CartLine`, `TaxSlab`, `Shift`, and the enums `OrderType`, `OrderStatus`, `ProductType`, `FoodType`, `TableStatus`, `PaymentMode`. |
 | `data/repos.zig` | The data layer: the effect keys, the SQL constants, the loader functions (`loadProducts`, `loadOrders`, `loadAll`, …), the decoders (`decodeProducts`, `decodeOrders`, …), the writers (`saveOrder`, `setOrderStatus`, `saveConfigValue`) and the defensive `enumFromInt` cast. |

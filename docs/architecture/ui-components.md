@@ -2,8 +2,9 @@
 
 > **Status:** Implemented. Nine templates exist: six are mounted in the
 > shell and two are session gates. `src/components/` is **empty** - the
-> component library is a plan. Theming is implemented: light and dark palettes, re-resolved on
-> every rebuild.
+> component library is a plan. Theming is implemented: four palettes -
+> Light, Dark, Warm, Night - and a high-contrast derivation of each,
+> re-resolved on every rebuild.
 > **Verification:** source review only. The Native SDK CLI is not
 > installed in this workspace, so the behaviours below were read from
 > the SDK reference and the app's own source, not exercised against a
@@ -722,9 +723,6 @@ const brand = struct {
     // clears WCAG AA with white text, and as text on the light
     // background and surface. The test in tests.zig is the guard.
     const primary = rgb(0x17, 0x6B, 0x84); // v1 cyan blue, one step down
-    const primary_dark = rgb(0x12, 0x56, 0x6A);
-    const secondary = rgb(0x4A, 0xC3, 0xA1); // v1 secondary - the teal green
-    const accent = rgb(0x70, 0x5E, 0xE0); // v1 accent - the purple
     const success = rgb(0x1B, 0x6E, 0x47);
     const warning = rgb(0x87, 0x52, 0x0C);
     const danger = rgb(0xB3, 0x2D, 0x22);
@@ -735,8 +733,6 @@ const brand = struct {
 | Brand role | Light value | Dark value | Token it drives |
 |---|---|---|---|
 | Primary (cyan blue) | `#176B84` | `#4CC2EA` | `accent`, `focus_ring` |
-| Secondary (teal green) | `#4AC3A1` | - | reserved |
-| Accent (purple) | `#705EE0` | - | reserved |
 | Success | `#1B6E47` | `#45B886` | `success` |
 | Warning | `#87520C` | `#E09A3C` | `warning` |
 | Danger | `#B32D22` | `#E85D51` | `destructive` |
@@ -745,14 +741,18 @@ const brand = struct {
 The light semantic fills are deliberately darker than v1's brand
 values: each clears WCAG AA for normal text with its paired `_text`
 token, and as text on `background` and `surface`. The test
-`every text pair in the light and dark palettes clears WCAG AA` asserts
-those combinations for both palettes, so a palette edit that breaks one
+`every text pair in every register clears WCAG, both contrasts` asserts
+those combinations for all eight palettes - four registers, each in its
+standard and its high-contrast form - so a theme edit that breaks one
 fails the suite.
 
-### The two palettes
+### The four registers
 
-`light()` and `dark()` are two complete `canvas.DesignTokens` values.
-The dark palette is the same brand one step down in luminance.
+`light()`, `dark()`, `warm()` and `night()` are four complete
+`canvas.DesignTokens` values, chosen by `register(which)`. The brand
+hues are the light register's; the other three name their own values
+because a hue that clears AA on white rarely clears it on a
+near-black ground.
 
 | Token | Light | Dark |
 |---|---|---|
@@ -774,16 +774,59 @@ The dark palette is the same brand one step down in luminance.
 | `info` | `#2F5EC2` | `#5B8CE0` |
 | `info_text` | `#FFFFFF` | `#060E18` |
 | `focus_ring` | `#176B84` | `#4CC2EA` |
+| `disabled` | `#E8ECF1` | `#232B34` |
 
-The palettes set 18 of the token names the platform's colour list
-includes. The `syntax_*` roles (the code-block palette), `shadow`,
-`scrim` and `disabled` are not set, so a screen that renders a code
-block, a shadowed surface or a disabled control should set them
-explicitly rather than assume a value.
+| Token | Warm | Night |
+|---|---|---|
+| `background` | `#FBF6EE` | `#05070A` |
+| `surface` | `#FFFBF4` | `#0C1117` |
+| `surface_subtle` | `#F1E7D6` | `#141B23` |
+| `surface_pressed` | `#DECFB6` | `#1D2530` |
+| `text` | `#241C12` | `#E9EEF5` |
+| `text_muted` | `#5C4E3C` | `#A9B6C4` |
+| `border` | `#C9BBA4` | `#2B3745` |
+| `accent` | `#8A4B18` | `#62CFF5` |
+| `accent_text` | `#FFFFFF` | `#040B10` |
+| `destructive` | `#8E2A1F` | `#FF7A6E` |
+| `destructive_text` | `#FFFFFF` | `#150504` |
+| `success` | `#4F6B1E` | `#55C894` |
+| `success_text` | `#FFFFFF` | `#04140C` |
+| `warning` | `#7A4A00` | `#F3B150` |
+| `warning_text` | `#FFFFFF` | `#150C02` |
+| `info` | `#2F5E6B` | `#79A9FF` |
+| `info_text` | `#FFFFFF` | `#050C18` |
+| `focus_ring` | `#8A4B18` | `#62CFF5` |
+| `disabled` | `#E3D6C0` | `#1A222C` |
+
+Every register sets `disabled`, and the two dark ones set `shadow` and
+`scrim` as well: the SDK's defaults for those are light-register values,
+and a shadow that is barely there reads as nothing on a near-black
+ground - a modal loses the fact that it is modal. The seven `syntax_*`
+roles stay at their transparent default, which is not "the light
+palette's ink" but the sentinel the SDK resolves to the current
+register's own `text` and `text_muted`.
+
+### The high-contrast derivation
+
+`highContrast(base, on_dark)` is not a fifth register; it is any
+register, pushed. Ink becomes pure black or white, `text_muted` moves
+until it clears 7:1 against every ground it can be drawn on (the page, a
+card, and the closed-ticket wash), the non-ink steps - `surface_subtle`,
+`surface_pressed`, `disabled`, `border` - are pulled far enough off the
+page to be told apart, and each semantic fill is pushed until it carries
+its own label at 7:1. `pushAway` walks the colour toward white and toward
+black and keeps whichever direction reaches the threshold, so a brand
+hue is only replaced by an extreme when it could not be made readable any
+other way.
+
+Settings' Appearance card turns it on; the title bar's glyph does not
+touch it, because how much separation a person needs is not a property of
+the palette they happen to be looking at.
 
 ### The type, spacing and radius scales
 
-Both palettes carry the same three scales:
+All four registers forward the same three scales, from one
+`shared_metrics` value:
 
 | Scale | Values | Token names |
 |---|---|---|
@@ -809,7 +852,7 @@ The spacing scale is not exposed as a token in markup - padding and gap
 are literal numbers - so the scale is a convention the templates
 follow, not something the platform enforces.
 
-### Light and dark are model state
+### The palette is model state
 
 The theme is a model field, and the runtime asks for the tokens on every
 rebuild:
@@ -817,22 +860,32 @@ rebuild:
 ```zig
 // src/core/theme.zig
 /// The tokens for the current model state. The runtime asks for these
-/// on every rebuild, so flipping the theme is a model change and
+/// on every rebuild, so changing the theme is a model change and
 /// nothing else.
-pub fn tokens(model: *const Model) canvas.DesignTokens {
-    return if (model.theme_dark) dark() else light();
+pub fn tokens(model: *const Model) DesignTokens {
+    const chosen = model.theme_palette;
+    if (!model.theme_contrast_high) return register(chosen);
+    return withColors(highContrast(register(chosen).colors, chosen.is_dark()));
 }
 ```
 
 ```zig
 // src/core/model.zig
-/// Dark palette instead of the house light one.
-theme_dark: bool = false,
+/// The palette the operator chose, and whether it is pushed to its
+/// high-contrast form. Both are chrome, not data: nothing else in
+/// the model reads them.
+theme_palette: Palette = .light,
+theme_contrast_high: bool = false,
 ```
 
 ```zig
 // src/core/update.zig
-.toggle_theme => model.theme_dark = !model.theme_dark,
+// The glyph promises the other half of the day, so this lands on
+// one of the two palettes it names. All four are Settings' to
+// offer, and the contrast is a setting of its own.
+.toggle_theme => model.theme_palette = model.theme_palette.otherHalf(),
+.set_palette => |code| model.theme_palette = model_mod.Palette.fromCode(code),
+.toggle_contrast => model.theme_contrast_high = !model.theme_contrast_high,
 ```
 
 ```zig
@@ -842,22 +895,36 @@ theme_dark: bool = false,
 
 `tokens_fn` is the model-owned path: the runtime calls it on every
 rebuild and re-resolves every colour and radius reference against the
-value it returns. A `toggle_theme` message flips the field, `update`
-returns, the rebuild happens, and the new palette is in place - there is
-no separate "apply theme" step and no per-element work.
+value it returns. A theme message changes a field, `update` returns, the
+rebuild happens, and the new palette is in place - there is no separate
+"apply theme" step and no per-element work.
 
-The button that does it is in the shell's title bar, and it draws a
-glyph rather than a word:
+Two controls reach those fields. The button that does it in the shell's
+title bar draws a glyph rather than a word:
 
 ```xml
 <button size="sm" variant="ghost" icon="{theme_icon}" label="Switch theme" on-press="toggle_theme"/>
 ```
 
-`theme_dark` is in `Model.view_unbound`: the view binds the message and
-the glyph's *name* through `theme_icon()`, never the flag. A glyph that
-cannot change with the palette would be decoration, and the name the
-control carries for a screen reader is `label=`, because an icon is a
-drawing instruction and not a label.
+and Settings' Appearance card offers all four registers and the
+derivation:
+
+```xml
+<for each="palettes" key="id" as="palette">
+  <toggle-button selected="{palette.id == palette_code}" on-toggle="set_palette:{palette.id}">{palette.label}</toggle-button>
+</for>
+<toggle-button selected="{contrast_high}" on-toggle="toggle_contrast">High contrast</toggle-button>
+```
+
+`theme_palette` and `theme_contrast_high` are in `Model.view_unbound`:
+the view binds the messages and the glyph's *name* through
+`theme_icon()`, never the fields. A glyph that cannot change with the
+palette would be decoration, and the name the control carries for a
+screen reader is `label=`, because an icon is a drawing instruction and
+not a label. The palette list is a file-scope table (`palette_options`)
+whose labels come from the enum, so a fifth register is one
+`Palette` case and one row, and `Settings offers every palette, and the
+contrast beside them` fails the build if the markup stops offering it.
 
 ## Traps
 
@@ -927,8 +994,14 @@ Building a component:
 
 Theming:
 
-- [ ] A new colour is added to **both** `light()` and `dark()`.
+- [ ] A new colour is added to **all four** registers - `light()`,
+      `dark()`, `warm()` and `night()` - or it is added to none and the
+      SDK default is meant to carry it.
 - [ ] A new colour or radius is a token name the markup can use as a
       literal.
+- [ ] High contrast still clears it: `highContrast` derives from whatever
+      the register set, so a new semantic fill needs no derivation work,
+      but the contrast test must be given its pair.
 - [ ] `tokens_fn` still returns the live palette for the model's
-      `theme_dark` state, so the theme flip stays a model change.
+      `theme_palette` and `theme_contrast_high`, so a theme change stays a
+      model change.

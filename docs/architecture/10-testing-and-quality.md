@@ -78,7 +78,7 @@ does) or bind an in-memory store.
 | Node budget | No assertion on `widget_nodes` |
 | Error arms (`db_failed`, failed loads) | Copy and state are untested |
 | Timer tick | Untested |
-| Theme switch | The walkthrough presses the control and keeps a dark screenshot, and every text pair in both registers clears AA in `src/tests.zig`; no test compares the two registers field by field |
+| Theme switch | The walkthrough presses the control and keeps a dark screenshot; every text pair in all eight palettes - four registers, each standard and high contrast - clears its threshold in `src/tests.zig`, and Settings is pinned to offer every register the enum has. No test compares the registers field by field |
 | Accessibility names | Left to SDK validation |
 | Window resize below minimum | Untested |
 | Sidecars | No code, no tests |
@@ -180,7 +180,7 @@ relational toolchain. A CI runner that "looks fine" will fail at step 1.
 | Receipt print on target hardware | Yes, if printing ships |
 | Two-device sync convergence | Yes, if sync ships |
 | Keyboard-only pass on POS and login | Yes |
-| Contrast audit, light and dark | Yes |
+| Contrast audit, every register in both contrasts | Yes |
 | Crash-free 30-minute service run | Yes |
 
 ## Known testing hazards

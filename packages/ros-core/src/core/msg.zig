@@ -460,8 +460,15 @@ pub const Msg = union(enum) {
     dismiss_error,
     /// Try the read that failed again.
     retry_read,
-    /// Flip between the light and dark palette.
+    /// Flip between the light and the dark palette. The title bar's one
+    /// control: Settings offers all four, the glyph offers the other
+    /// half of the day.
     toggle_theme,
+    /// Wear a specific palette. The payload is `Palette`'s ordinal, the
+    /// number a Settings row carries and `app_config` stores.
+    set_palette: i64,
+    /// Push the chosen palette to its high-contrast form, or back.
+    toggle_contrast,
     /// The wall clock tick: the model keeps `now_ms` fresh so the
     /// kitchen board can say how long a ticket has waited.
     tick: native_sdk.EffectTimer,

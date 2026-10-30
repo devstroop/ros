@@ -72,8 +72,20 @@ been rung up: it is one whose money has been taken.
   names the theme the tap brings rather than the one it leaves. Its
   accessibility name is the move, `Switch theme`, because a glyph is a
   drawing instruction and not a label.
-- **Light / Dark** — the two palettes today. Warm, Night and a
-  high-contrast setting are the next work on this track.
+- **Light / Dark** — the two halves of the day, and the only two a
+  **Switch theme** tap can land on. Dark for a room that is dim, light
+  for a room that is bright.
+- **Warm / Night** — the other two registers, chosen in Settings and
+  never by the title bar. Warm is light structure on menu-paper cream,
+  for a dining-room tablet; Night is deeper than Dark, for a kitchen
+  display at 3am.
+- **High contrast** — a derivation, not a fifth palette: the register
+  you are looking at with the ink, the washes and the chips pushed
+  further from the page. It belongs to the eyes, not to the palette, so
+  **Switch theme** carries it across.
+- **Appearance** — the Settings card that offers all four registers and
+  the contrast. It is a per-device choice; nothing about it is saved to
+  the restaurant.
 
 ## Retired words
 
