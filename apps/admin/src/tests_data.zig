@@ -25,6 +25,7 @@ const native_sdk = @import("native_sdk");
 const testing = std.testing;
 
 const main = @import("main.zig");
+const render = @import("tests.zig");
 const core = @import("ros_core").model;
 const msg_mod = @import("ros_core").msg;
 const nav = @import("ros_core").navigation;
@@ -85,7 +86,7 @@ const migration_names = [_][]const u8{
 /// leave that pointer aimed at a local that has already been moved
 /// away. Every binding that outlives its owner has to point at
 /// something that cannot move.
-const Harness = struct {
+pub const Harness = struct {
     database: *native_sdk.relational_store.Database,
     fx: *Effects,
     model: Model,
@@ -163,6 +164,26 @@ const Harness = struct {
         self.send(Msg{ .submit_login = {} });
     }
 
+    /// Give a person a PIN the way the setup does: the salted hash goes
+    /// into the row, and the model learns the salt it was hashed with.
+    fn setPin(self: *Harness, employee_id: i64, pin: []const u8) !void {
+        var hash: [auth.hash_length]u8 = undefined;
+        const hashed = auth.hashPin(test_salt, employee_id, pin, &hash) orelse return error.NoHash;
+        self.fx.dbExec(.{
+            .key = 960,
+            .statements = &.{.{
+                .sql = "UPDATE employee SET pin_hash = ?1 WHERE id = ?2;",
+                .params = &.{ .{ .text = hashed }, .{ .integer = employee_id } },
+            }},
+            .on_result = Effects.dbMsg(.company_loaded),
+        });
+        self.drain();
+
+        @memcpy(self.model.pin_salt_buf[0..test_salt.len], test_salt);
+        self.model.pin_salt_len = test_salt.len;
+        self.model.salt_state = .confirmed;
+    }
+
     /// The runtime's drain loop: take a delivered message, hand it to
     /// `update`, repeat until the channel is quiet.
     fn drain(self: *Harness) void {
@@ -206,7 +227,7 @@ const Harness = struct {
 };
 
 /// A harness with a company, one admin and a small menu already in it.
-fn seeded(allocator: std.mem.Allocator) !Harness {
+pub fn seeded(allocator: std.mem.Allocator) !Harness {
     var harness = try Harness.start(allocator);
     errdefer harness.deinit();
 
@@ -5876,4 +5897,68 @@ test "a reference too large to stage is retried, not wedged" {
         .body = "{\"version\":11,\"categories\":[{\"id\":1,\"name\":\"Retry\",\"sort_order\":0,\"active\":1}]}",
     } });
     try testing.expectEqual(@as(u64, 11), harness.model.reference_version);
+}
+
+// --------------------------------------------------- the sale path, end to end
+
+test "a sale at the till shows on the orders board and the kitchen board" {
+    // The screen tests each build a model by hand; this walks what an
+    // operator walks - picker, PIN, menu, cart, ticket - against a real
+    // database, and asserts the ticket is visible at every stop, not
+    // merely present in the model. A shell wired to the wrong screen
+    // fails here, not in a restaurant.
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try harness.setPin(7, "123456");
+
+    // The company row is in the database, but `seeded` wrote it with a
+    // plain effect and never read it back, so the app still believes
+    // this terminal is new. Boot reads the company before the picker;
+    // this does the same, and the picker is the screen again.
+    repos.loadCompany(&harness.model, harness.fx);
+    harness.drain();
+    harness.model.needs_setup = false;
+    harness.send(Msg{ .pick_role_again = {} });
+
+    // The picker lists the person the database holds.
+    harness.loadEmployees();
+    var tree = try render.buildTree(arena, &harness.model);
+    _ = try render.expectByText(tree.root, .text, "Anita");
+
+    // The PIN opens the session, and the admin lands on the dashboard.
+    harness.signIn(7, "123456");
+    try testing.expect(harness.model.signed_in);
+    tree = try render.buildTree(arena, &harness.model);
+    _ = try render.expectByText(tree.root, .text, "Dashboard");
+
+    // The till offers the menu that is in the database.
+    harness.send(.{ .open_screen = @intCast(nav.Screen.pos.index()) });
+    tree = try render.buildTree(arena, &harness.model);
+    _ = try render.expectByText(tree.root, .text, "Paneer Tikka");
+
+    // A dish in the cart becomes a ticket numbered by the database's
+    // own sequence.
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    tree = try render.buildTree(arena, &harness.model);
+    _ = try render.expectByText(tree.root, .text, "Order 000001");
+
+    // The orders board shows that number with the status under it.
+    harness.send(.{ .open_screen = @intCast(nav.Screen.orders.index()) });
+    tree = try render.buildTree(arena, &harness.model);
+    _ = try render.expectByText(tree.root, .text, "000001");
+    _ = try render.expectByText(tree.root, .badge, "Pending");
+    _ = try render.expectByText(tree.root, .badge, "1 open");
+
+    // The kitchen sees the same ticket and moves it along.
+    harness.send(.{ .advance_order = harness.model.orders[0].id });
+    harness.send(.{ .open_screen = @intCast(nav.Screen.kds_board.index()) });
+    tree = try render.buildTree(arena, &harness.model);
+    _ = try render.expectByText(tree.root, .text, "000001");
+    _ = try render.expectByText(tree.root, .badge, "Preparing");
 }
