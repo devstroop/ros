@@ -88,7 +88,7 @@ No nav section. These are reached by drilling in, not by a tab.
 | `admin_dashboard` | 8 | `overview/dashboard` | admin | Done | `column`, `row`, `card`, `text`, `badge`, `button` | `orders`, `dining_table`, `product`, `company` |
 | `control_center` | 9 | `overview/control-center` | admin | Planned | `column`, `row`, `card`, `text`, `badge`, `button` | `app_config`, `device`, `sync_state`, `orders` |
 
-## Sell
+## POS
 
 | Screen | Ord | Route-ish id | Role | Status | Platform elements | Data source |
 |---|---|---|---|---|---|---|

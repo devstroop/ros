@@ -322,7 +322,7 @@ rail and the allowed screens.
 
 | Role | Label | Sign-in | Home screen | Rail sections | Allowed screens |
 |---|---|---|---|---|---|
-| `admin` | Admin | PIN | `admin_dashboard` | Overview, Sell, Orders, Floor, Catalog, People, System | 53 (all) |
+| `admin` | Admin | PIN | `admin_dashboard` | Dashboard, POS, Orders, Dining, Menu, Team, Settings | 53 (all) |
 | `waiter` | Waiter | PIN | `waiter_tables` | Service | 15 |
 | `kds` | Kitchen | none (device) | `kds_board` | Kitchen | 4 |
 | `display` | Display | none (device) | `display_board` | Display | 4 |
@@ -467,26 +467,29 @@ pub fn nav_sections(model: *const Model) []const nav.NavItem {
 
 ```zig
 // src/core/rbac.zig
+// The label comes from `NavSection`, not from a string typed here: the
+// rail and the glossary then cannot disagree about what a destination is
+// called.
 const admin_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.overview), .label = "Overview" },
-    .{ .id = @intFromEnum(nav.NavSection.sell), .label = "Sell" },
-    .{ .id = @intFromEnum(nav.NavSection.orders), .label = "Orders" },
-    .{ .id = @intFromEnum(nav.NavSection.floor), .label = "Floor" },
-    .{ .id = @intFromEnum(nav.NavSection.catalog), .label = "Catalog" },
-    .{ .id = @intFromEnum(nav.NavSection.people), .label = "People" },
-    .{ .id = @intFromEnum(nav.NavSection.system), .label = "System" },
+    .{ .id = @intFromEnum(nav.NavSection.overview), .label = nav.NavSection.overview.label() },
+    .{ .id = @intFromEnum(nav.NavSection.sell), .label = nav.NavSection.sell.label() },
+    .{ .id = @intFromEnum(nav.NavSection.orders), .label = nav.NavSection.orders.label() },
+    .{ .id = @intFromEnum(nav.NavSection.floor), .label = nav.NavSection.floor.label() },
+    .{ .id = @intFromEnum(nav.NavSection.catalog), .label = nav.NavSection.catalog.label() },
+    .{ .id = @intFromEnum(nav.NavSection.people), .label = nav.NavSection.people.label() },
+    .{ .id = @intFromEnum(nav.NavSection.system), .label = nav.NavSection.system.label() },
 };
 
 const waiter_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.service), .label = "Service" },
+    .{ .id = @intFromEnum(nav.NavSection.service), .label = nav.NavSection.service.label() },
 };
 
 const kitchen_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.kitchen), .label = "Kitchen" },
+    .{ .id = @intFromEnum(nav.NavSection.kitchen), .label = nav.NavSection.kitchen.label() },
 };
 
 const display_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.display), .label = "Display" },
+    .{ .id = @intFromEnum(nav.NavSection.display), .label = nav.NavSection.display.label() },
 };
 
 /// The screens a role can reach from the shell rail, in rail order.

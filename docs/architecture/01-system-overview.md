@@ -116,7 +116,7 @@ Details, including the full permission matrix, are in
 1. Pick **Admin** → PIN screen → hashed PIN checked in SQL → dashboard.
 2. Dashboard loads company, categories, products, tables, employees,
    orders and order lines (`repos.loadAll`).
-3. Open **Sell** → filter/search menu → add products to cart → choose
+3. Open **POS** → filter/search menu → add products to cart → choose
    dine-in/take-away/delivery → place order.
 4. `repos.saveOrder` writes the order and its lines in one atomic
    `dbExec`, then the app reloads orders and navigates to

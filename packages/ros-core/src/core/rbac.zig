@@ -109,27 +109,31 @@ pub fn employee_role(role: Role) domain.EmployeeRole {
 // markup reads these rows on a later frame and finds garbage - a crash
 // that looks like a platform bug and is not one. Keep every table the
 // view binds at file scope, with comptime-known contents.
+//
+// The label comes from `NavSection`, not from a string typed here: the
+// rail and the glossary then cannot disagree about what a destination is
+// called.
 
 const admin_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.overview), .label = "Overview" },
-    .{ .id = @intFromEnum(nav.NavSection.sell), .label = "Sell" },
-    .{ .id = @intFromEnum(nav.NavSection.orders), .label = "Orders" },
-    .{ .id = @intFromEnum(nav.NavSection.floor), .label = "Floor" },
-    .{ .id = @intFromEnum(nav.NavSection.catalog), .label = "Catalog" },
-    .{ .id = @intFromEnum(nav.NavSection.people), .label = "People" },
-    .{ .id = @intFromEnum(nav.NavSection.system), .label = "System" },
+    .{ .id = @intFromEnum(nav.NavSection.overview), .label = nav.NavSection.overview.label() },
+    .{ .id = @intFromEnum(nav.NavSection.sell), .label = nav.NavSection.sell.label() },
+    .{ .id = @intFromEnum(nav.NavSection.orders), .label = nav.NavSection.orders.label() },
+    .{ .id = @intFromEnum(nav.NavSection.floor), .label = nav.NavSection.floor.label() },
+    .{ .id = @intFromEnum(nav.NavSection.catalog), .label = nav.NavSection.catalog.label() },
+    .{ .id = @intFromEnum(nav.NavSection.people), .label = nav.NavSection.people.label() },
+    .{ .id = @intFromEnum(nav.NavSection.system), .label = nav.NavSection.system.label() },
 };
 
 const waiter_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.service), .label = "Service" },
+    .{ .id = @intFromEnum(nav.NavSection.service), .label = nav.NavSection.service.label() },
 };
 
 const kitchen_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.kitchen), .label = "Kitchen" },
+    .{ .id = @intFromEnum(nav.NavSection.kitchen), .label = nav.NavSection.kitchen.label() },
 };
 
 const display_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.display), .label = "Display" },
+    .{ .id = @intFromEnum(nav.NavSection.display), .label = nav.NavSection.display.label() },
 };
 
 /// The screens a role can reach from the shell rail, in rail order.

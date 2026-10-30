@@ -212,7 +212,7 @@ type_into "PIN" "123456"
 tap button "Sign in" 'Dashboard' 'New order'
 
 printf '==> selling a dish\n'
-tap listitem "Sell" 'Place order' 'Search the menu'
+tap listitem "POS" 'Place order' 'Search the menu'
 tap group "Paneer Tikka" '245.00'
 tap button "Place order" 'Order 000001' 'TAKE THE PAYMENT'
 screenshot admin-order

@@ -27,7 +27,7 @@ and, for the session/history boundary,
 
 | Role | Label | Sign-in | Home | Rail |
 |---|---|---|---|---|
-| `admin` | Admin | PIN | `admin_dashboard` | Overview, Sell, Orders, Floor, Catalog, People, System |
+| `admin` | Admin | PIN | `admin_dashboard` | Dashboard, POS, Orders, Dining, Menu, Team, Settings |
 | `waiter` | Waiter | PIN | `waiter_tables` | Service |
 | `kds` | Kitchen | Device (kiosk) | `kds_board` | Kitchen |
 | `display` | Display | Device (kiosk) | `display_board` | Display |

@@ -12,7 +12,7 @@
 <template name="screen-employees-list">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
-      <text size="heading" grow="1">Employees</text>
+      <text size="heading" grow="1">Team</text>
       <text foreground="text_muted">{employee_count} on the team</text>
       <button size="sm" variant="primary" on-press="new_employee">New</button>
     </row>

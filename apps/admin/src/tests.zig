@@ -161,6 +161,74 @@ test "the setup Symbol field writes the symbol, not the code" {
     for (document.templates) |template| try expectSymbolBinding(template);
 }
 
+/// A word the product used for a destination and stopped using.
+/// `docs/glossary.md` is the list; this is the enforcement.
+const retired_words = [_][]const u8{
+    "Sell",   "Floor",     "People",       "Catalog",
+    "Catalogue", "System", "Overview",     "Employees",
+    "Control center",
+};
+
+fn expectNoRetiredWords(node: canvas.ui_markup.MarkupNode) !void {
+    if (node.kind == .text) {
+        const word = std.mem.trim(u8, node.text, " \t\r\n");
+        for (retired_words) |retired| {
+            if (std.mem.eql(u8, word, retired)) {
+                std.debug.print(
+                    "{s}:{d}:{d}: \"{s}\" is retired - docs/glossary.md says what to call it\n",
+                    .{ node.src_path, node.line, node.column, retired },
+                );
+                return error.RetiredWord;
+            }
+        }
+    }
+    for (node.children) |child| try expectNoRetiredWords(child);
+}
+
+test "the rail, the title bar and the markup say the same thing" {
+    // The operator reads the rail, the status bar and the screen's own
+    // heading at the same moment. A rename that reaches one of the three
+    // leaves the product describing one destination two ways, and the
+    // only way to catch that is to pin all three against one list.
+    const vocabulary = [_]struct { section: nav.NavSection, label: []const u8, title: []const u8 }{
+        .{ .section = .overview, .label = "Dashboard", .title = "Dashboard" },
+        .{ .section = .sell, .label = "POS", .title = "Point of sale" },
+        .{ .section = .orders, .label = "Orders", .title = "Orders" },
+        .{ .section = .floor, .label = "Dining", .title = "Dining" },
+        .{ .section = .catalog, .label = "Menu", .title = "Menu" },
+        .{ .section = .people, .label = "Team", .title = "Team" },
+        .{ .section = .system, .label = "Settings", .title = "Settings" },
+    };
+
+    for (vocabulary) |word| {
+        try testing.expectEqualStrings(word.label, word.section.label());
+        try testing.expectEqualStrings(word.title, rbac.section_screen(word.section).title());
+    }
+
+    // The rail the admin sees is exactly that list, in that order: the
+    // labels are not retyped in `rbac.zig`, they come from here.
+    const rail = rbac.nav_sections(.admin);
+    try testing.expectEqual(vocabulary.len, rail.len);
+    for (rail, 0..) |row, index| {
+        try testing.expectEqualStrings(vocabulary[index].label, row.label);
+    }
+
+    for ([_]struct { role: nav.Role, label: []const u8 }{
+        .{ .role = .waiter, .label = "Service" },
+        .{ .role = .kds, .label = "Kitchen" },
+        .{ .role = .display, .label = "Display" },
+    }) |single| {
+        const role_rail = rbac.nav_sections(single.role);
+        try testing.expectEqual(@as(usize, 1), role_rail.len);
+        try testing.expectEqualStrings(single.label, role_rail[0].label);
+    }
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const document = try resolveAppDocument(arena_state.allocator());
+    for (document.templates) |template| try expectNoRetiredWords(template);
+}
+
 /// How many widgets of `kind` carry exactly `text`. A view that must
 /// not offer a control uses this to tell "hidden" from "one row still
 /// shows it".
@@ -1164,7 +1232,7 @@ const screen_landmarks = [_]struct { template: []const u8, text: []const u8 }{
     .{ .template = "screen-dashboard", .text = "Dashboard" },
     .{ .template = "screen-pos", .text = "Cart" },
     .{ .template = "screen-pos-cart", .text = "Back to the menu" },
-    .{ .template = "screen-catalogue-list", .text = "Catalogue" },
+    .{ .template = "screen-catalogue-list", .text = "Menu" },
     .{ .template = "screen-product-form", .text = "Category" },
     .{ .template = "screen-orders", .text = "Orders" },
     .{ .template = "screen-payments", .text = "No payments yet." },
@@ -1178,7 +1246,7 @@ const screen_landmarks = [_]struct { template: []const u8, text: []const u8 }{
     .{ .template = "screen-customer-form", .text = "Customer" },
     .{ .template = "screen-order-detail", .text = "Total" },
     .{ .template = "screen-order-confirmation", .text = "Items" },
-    .{ .template = "screen-tables", .text = "Dining tables" },
+    .{ .template = "screen-tables", .text = "Dining" },
     .{ .template = "screen-table-categories", .text = "Table categories" },
     .{ .template = "screen-table-category-form", .text = "Table category" },
     .{ .template = "screen-floor-plan", .text = "Floor plan" },
@@ -1190,7 +1258,7 @@ const screen_landmarks = [_]struct { template: []const u8, text: []const u8 }{
     .{ .template = "screen-waiter-menu", .text = "Tables" },
     .{ .template = "screen-waiter-cart", .text = "Nothing on this table yet." },
     .{ .template = "screen-waiter-orders", .text = "Open orders" },
-    .{ .template = "screen-employees-list", .text = "Employees" },
+    .{ .template = "screen-employees-list", .text = "Team" },
     .{ .template = "screen-employee-form", .text = "Role" },
     .{ .template = "screen-suppliers", .text = "Suppliers" },
     .{ .template = "screen-purchase-orders", .text = "Purchase orders" },

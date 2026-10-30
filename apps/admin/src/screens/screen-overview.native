@@ -46,7 +46,7 @@
     <row gap="8">
       <button variant="primary" on-press="open_pos">New order</button>
       <button variant="secondary" on-press="open_orders">Orders</button>
-      <button variant="secondary" on-press="open_tables">Floor</button>
+      <button variant="secondary" on-press="open_tables">Dining</button>
       <spacer grow="1"/>
       <button variant="ghost" on-press="sign_out">Sign out</button>
     </row>

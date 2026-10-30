@@ -260,7 +260,7 @@
         <row cross="center"><text grow="1" foreground="text_muted">Categories</text><text>{category_count}</text></row>
         <row cross="center"><text grow="1" foreground="text_muted">Tables</text><text>{table_count}</text></row>
         <row cross="center"><text grow="1" foreground="text_muted">Orders</text><text>{order_count}</text></row>
-        <row cross="center"><text grow="1" foreground="text_muted">Employees</text><text>{employee_count}</text></row>
+        <row cross="center"><text grow="1" foreground="text_muted">Team</text><text>{employee_count}</text></row>
         <separator/>
         <text size="sm" foreground="text_muted">Everything is stored in one local database. Export, import and backup are not built yet.</text>
       </column>

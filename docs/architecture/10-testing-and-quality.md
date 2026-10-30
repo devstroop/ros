@@ -129,7 +129,7 @@ native automate assert 'widget_nodes=<n>/1024'
 
 One pixel on a canvas is not a sale, so `sale-smoke` runs
 `scripts/smoke-sale.sh`, which walks setup → sign out → role picker → PIN
-→ Sell → add a dish → Place order → Orders, then hands the database the
+→ POS → add a dish → Place order → Orders, then hands the database the
 admin wrote to the kiosk and asserts the same ticket on the kitchen board
 and advances it. Every step is an `automate assert` against the snapshot,
 so a shell gate pointing at the wrong ordinal fails the run rather than

@@ -127,13 +127,13 @@
   </split>
 </template>
 
-<!-- The catalogue: everything on the menu. A row opens the product
+<!-- The menu: every dish the restaurant sells. A row opens the product
      form, so a price can be corrected without leaving the list. -->
 
 <template name="screen-catalogue-list">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
-      <text size="heading" grow="1">Catalogue</text>
+      <text size="heading" grow="1">Menu</text>
       <text foreground="text_muted">{product_count} on the menu</text>
       <button size="sm" on-press="open_categories">Categories</button>
       <button size="sm" variant="primary" on-press="new_product">New</button>

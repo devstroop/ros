@@ -53,6 +53,12 @@ If you are new to the codebase, read in this order:
 5. [`plan/status.md`](plan/status.md) — what is actually built, screen by screen.
 6. [`plan/open-questions.md`](plan/open-questions.md) — what we do not know yet.
 
+If you are changing what an operator reads, read
+[`glossary.md`](glossary.md) first. The names the product uses for its own
+destinations are pinned by a test, so a screen that reaches for a retired
+word fails the suite rather than quietly shipping a second name for one
+thing.
+
 If you are changing a screen, also read
 [`architecture/06-ui-markup-and-theming.md`](architecture/06-ui-markup-and-theming.md)
 and the "add a screen" checklist in it.

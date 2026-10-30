@@ -245,6 +245,7 @@ the suites themselves, and `scripts/verify-all.sh` runs all of them.
 | Every gated screen renders, inside the widget budget | Markup |
 | Every screen builds a view inside the budget | Markup |
 | Every text entry draws a visible label | Markup |
+| The rail, the title bar and the markup say the same thing | Vocabulary |
 | Every effect key names one effect and no two | Data |
 | Every light and dark text pair clears WCAG AA | Theme |
 | The walk-through takes a restaurant from nothing to a POS | Setup |

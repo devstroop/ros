@@ -13,7 +13,7 @@
 <template name="screen-tables">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
-      <text size="heading" grow="1">Dining tables</text>
+      <text size="heading" grow="1">Dining</text>
       <badge>{occupied_table_count} busy of {table_count}</badge>
       <button size="sm" variant="ghost" on-press="open_floor_plan">Floor plan</button>
       <button size="sm" variant="ghost" on-press="open_table_categories">Categories</button>
