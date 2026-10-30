@@ -48,7 +48,10 @@ const boot = core.boot_role;
 ///
 /// The app's markup imports its screen templates, so the test resolves
 /// the same import closure the runtime does before building.
-fn buildTree(arena: std.mem.Allocator, model: *const Model) !AppUi.Tree {
+///
+/// Public so `tests_data.zig`, which owns the database, can assert what
+/// a real sale renders and not only what it stores.
+pub fn buildTree(arena: std.mem.Allocator, model: *const Model) !AppUi.Tree {
     const sources = main.app_sources;
     var loader = canvas.ui_markup.SourceSetLoader{ .set = &sources };
     const root_source = main.app_markup;
@@ -78,6 +81,86 @@ fn findByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) 
     return null;
 }
 
+/// Resolve the app's import closure. The static rules below read the
+/// same source the runtime compiles, so a bare field cannot hide in a
+/// screen the tested model never mounts.
+fn resolveAppDocument(arena: std.mem.Allocator) !canvas.ui_markup.MarkupDocument {
+    var loader = canvas.ui_markup.SourceSetLoader{ .set = &main.app_sources };
+    var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
+    return canvas.ui_markup.resolveImports(arena, "app.native", main.app_markup, loader.loader(), &diagnostic) catch |err| {
+        std.debug.print("import resolution failed: {s} at {d}:{d}\n", .{ @errorName(err), diagnostic.line, diagnostic.column });
+        return err;
+    };
+}
+
+/// A text-entry control. `label=` names one for a screen reader; it
+/// draws nothing, so every one of these also needs a visible label.
+fn isTextField(name: []const u8) bool {
+    return std.mem.eql(u8, name, "text-field") or
+        std.mem.eql(u8, name, "search-field") or
+        std.mem.eql(u8, name, "textarea") or
+        std.mem.eql(u8, name, "combobox");
+}
+
+fn hasVisibleLabelText(node: canvas.ui_markup.MarkupNode) bool {
+    if (node.kind != .element or !std.mem.eql(u8, node.name, "text")) return false;
+    for (node.children) |child| {
+        if (child.kind == .text and std.mem.trim(u8, child.text, " \t\r\n").len > 0) return true;
+    }
+    return false;
+}
+
+fn expectVisibleLabels(node: canvas.ui_markup.MarkupNode) !void {
+    for (node.children, 0..) |child, index| {
+        if (child.kind == .element and isTextField(child.name)) {
+            const labelled = index > 0 and hasVisibleLabelText(node.children[index - 1]);
+            if (!labelled) {
+                std.debug.print(
+                    "{s}:{d}:{d}: <{s}> has no visible label; put a <text> label immediately before it\n",
+                    .{ child.src_path, child.line, child.column, child.name },
+                );
+                return error.UnlabeledTextField;
+            }
+        }
+        try expectVisibleLabels(child);
+    }
+}
+
+fn expectSymbolBinding(node: canvas.ui_markup.MarkupNode) !void {
+    if (node.kind == .element and
+        std.mem.eql(u8, node.name, "text-field") and
+        std.mem.eql(u8, node.attr("text") orelse "", "{setup_symbol_text}"))
+    {
+        const on_input = node.attr("on-input") orelse "";
+        if (!std.mem.eql(u8, on_input, "setup_symbol_edit")) {
+            std.debug.print(
+                "{s}:{d}:{d}: the Symbol field writes {s}; it must write setup_symbol_edit\n",
+                .{ node.src_path, node.line, node.column, on_input },
+            );
+            return error.SymbolFieldWritesTheWrongBuffer;
+        }
+    }
+    for (node.children) |child| try expectSymbolBinding(child);
+}
+
+test "every text entry draws a visible label" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    for (document.templates) |template| try expectVisibleLabels(template);
+}
+
+test "the setup Symbol field writes the symbol, not the code" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    for (document.templates) |template| try expectSymbolBinding(template);
+}
+
 /// How many widgets of `kind` carry exactly `text`. A view that must
 /// not offer a control uses this to tell "hidden" from "one row still
 /// shows it".
@@ -87,7 +170,7 @@ fn countByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8)
     return count;
 }
 
-fn expectByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) !canvas.Widget {
+pub fn expectByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) !canvas.Widget {
     return findByText(widget, kind, text) orelse {
         std.debug.print("no {t} with text \"{s}\" in the view - if you changed app.native, update this test to match\n", .{ kind, text });
         return error.WidgetNotFound;
@@ -999,6 +1082,14 @@ test "the setup screen renders on a fresh installation" {
     const tree = try buildTree(arena, &model);
     _ = try expectByText(tree.root, .text, "Set up your restaurant");
     _ = try expectByText(tree.root, .button, "Create the restaurant");
+    // The accessible name alone draws nothing. Every field the
+    // operator types into also says what it is.
+    _ = try expectByText(tree.root, .text, "Restaurant name");
+    _ = try expectByText(tree.root, .text, "Your name");
+    _ = try expectByText(tree.root, .text, "Currency code");
+    _ = try expectByText(tree.root, .text, "Symbol");
+    _ = try expectByText(tree.root, .text, "PIN");
+    _ = try expectByText(tree.root, .text, "Confirm PIN");
 }
 
 test "a fresh installation shows the walk-through, not the quick setup" {
@@ -1013,6 +1104,12 @@ test "a fresh installation shows the walk-through, not the quick setup" {
     // The walk-through is on the pane...
     const tree = try buildTree(arena, &model);
     _ = try expectByText(tree.root, .text, "Step one of two. You can change any of it later.");
+    _ = try expectByText(tree.root, .text, "Restaurant name");
+    _ = try expectByText(tree.root, .text, "Address");
+    _ = try expectByText(tree.root, .text, "Phone");
+    _ = try expectByText(tree.root, .text, "Tax number");
+    _ = try expectByText(tree.root, .text, "Currency code");
+    _ = try expectByText(tree.root, .text, "Symbol");
     // ...and the quick setup is not. Its own line is the one only it
     // has; the heading the two share is the point of the screen.
     try testing.expect(findByText(tree.root, .text, "This takes a minute. Everything here can be changed later.") == null);

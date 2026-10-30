@@ -51,12 +51,15 @@
 
     <card padding="16" width="440">
       <column gap="8">
-        <text-field
-          text="{form_employee_name}"
-          placeholder="Anita"
-          label="Name"
-          on-input="form_employee_name_edit"
-        />
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Name</text>
+          <text-field
+            text="{form_employee_name}"
+            placeholder="Anita"
+            label="Name"
+            on-input="form_employee_name_edit"
+          />
+        </column>
         <row gap="4" cross="center">
           <text size="sm" foreground="text_muted" grow="1">Role</text>
           <for each="employee_roles" key="id" as="role">
@@ -85,18 +88,24 @@
 
     <card padding="16" width="460">
       <column gap="8">
-        <text-field
-          text="{form_reset_pin}"
-          placeholder="6 digits"
-          label="New PIN"
-          on-input="form_reset_pin_edit"
-        />
-        <text-field
-          text="{form_reset_pin2}"
-          placeholder="again"
-          label="Confirm PIN"
-          on-input="form_reset_pin2_edit"
-        />
+        <column gap="4">
+          <text size="sm" foreground="text_muted">New PIN</text>
+          <text-field
+            text="{form_reset_pin}"
+            placeholder="6 digits"
+            label="New PIN"
+            on-input="form_reset_pin_edit"
+          />
+        </column>
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Confirm PIN</text>
+          <text-field
+            text="{form_reset_pin2}"
+            placeholder="again"
+            label="Confirm PIN"
+            on-input="form_reset_pin2_edit"
+          />
+        </column>
         <row gap="8">
           <spacer grow="1"/>
           <button variant="primary" on-press="save_reset_pin">Reset the PIN</button>

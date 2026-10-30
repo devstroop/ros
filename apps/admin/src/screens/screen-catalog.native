@@ -117,18 +117,24 @@
           <text size="sm" foreground="text_muted" grow="1">The shelf says</text>
           <text>{form_stock_current}</text>
         </row>
-        <text-field
-          text="{form_stock_count}"
-          placeholder="the number you counted"
-          label="Counted"
-          on-input="form_stock_count_edit"
-        />
-        <text-field
-          text="{form_stock_reason}"
-          placeholder="delivery, breakage, a count"
-          label="Why it changed"
-          on-input="form_stock_reason_edit"
-        />
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Counted</text>
+          <text-field
+            text="{form_stock_count}"
+            placeholder="the number you counted"
+            label="Counted"
+            on-input="form_stock_count_edit"
+          />
+        </column>
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Why it changed</text>
+          <text-field
+            text="{form_stock_reason}"
+            placeholder="delivery, breakage, a count"
+            label="Why it changed"
+            on-input="form_stock_reason_edit"
+          />
+        </column>
         <row gap="8">
           <spacer grow="1"/>
           <button variant="primary" on-press="save_stock_count">Save the count</button>

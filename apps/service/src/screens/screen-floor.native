@@ -120,30 +120,42 @@
 
     <card padding="16" width="460">
       <column gap="8">
-        <text-field
-          text="{form_customer_name}"
-          placeholder="Anita Sharma"
-          label="Name"
-          on-input="form_customer_name_edit"
-        />
-        <text-field
-          text="{form_customer_phone}"
-          placeholder="080 4123 4567"
-          label="Phone"
-          on-input="form_customer_phone_edit"
-        />
-        <text-field
-          text="{form_customer_email}"
-          placeholder="anita@example.com"
-          label="Email"
-          on-input="form_customer_email_edit"
-        />
-        <text-field
-          text="{form_customer_address}"
-          placeholder="12 MG Road, Bengaluru"
-          label="Address"
-          on-input="form_customer_address_edit"
-        />
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Name</text>
+          <text-field
+            text="{form_customer_name}"
+            placeholder="Anita Sharma"
+            label="Name"
+            on-input="form_customer_name_edit"
+          />
+        </column>
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Phone</text>
+          <text-field
+            text="{form_customer_phone}"
+            placeholder="080 4123 4567"
+            label="Phone"
+            on-input="form_customer_phone_edit"
+          />
+        </column>
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Email</text>
+          <text-field
+            text="{form_customer_email}"
+            placeholder="anita@example.com"
+            label="Email"
+            on-input="form_customer_email_edit"
+          />
+        </column>
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Address</text>
+          <text-field
+            text="{form_customer_address}"
+            placeholder="12 MG Road, Bengaluru"
+            label="Address"
+            on-input="form_customer_address_edit"
+          />
+        </column>
         <row gap="8">
           <spacer grow="1"/>
           <button variant="primary" on-press="save_customer">Save</button>
@@ -193,12 +205,15 @@
 
     <card padding="16" width="440">
       <column gap="8">
-        <text-field
-          text="{form_table_category_name}"
-          placeholder="Main room"
-          label="Name"
-          on-input="form_table_category_name_edit"
-        />
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Name</text>
+          <text-field
+            text="{form_table_category_name}"
+            placeholder="Main room"
+            label="Name"
+            on-input="form_table_category_name_edit"
+          />
+        </column>
         <row gap="8">
           <spacer grow="1"/>
           <button variant="primary" on-press="save_table_category">Save</button>

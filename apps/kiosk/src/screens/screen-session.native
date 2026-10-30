@@ -20,49 +20,63 @@
 
     <card padding="16" width="440">
       <column gap="8">
-        <text-field
-          text="{setup_company_text}"
-          placeholder="e.g. Sharma Restaurant"
-          label="Restaurant name"
-          on-input="setup_company_edit"
-        />
-        <text-field
-          text="{setup_admin_text}"
-          placeholder="e.g. Anita"
-          label="Your name"
-          on-input="setup_admin_edit"
-        />
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Restaurant name</text>
+          <text-field
+            text="{setup_company_text}"
+            placeholder="e.g. Sharma Restaurant"
+            label="Restaurant name"
+            on-input="setup_company_edit"
+          />
+        </column>
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Your name</text>
+          <text-field
+            text="{setup_admin_text}"
+            placeholder="e.g. Anita"
+            label="Your name"
+            on-input="setup_admin_edit"
+          />
+        </column>
         <row gap="8">
-          <text-field
-            text="{setup_currency_text}"
-            placeholder="USD"
-            label="Currency code"
-            on-input="setup_currency_edit"
-            grow="1"
-          />
-          <text-field
-            text="{setup_symbol_text}"
-            placeholder="$"
-            label="Symbol"
-            on-input="setup_symbol_edit"
-            grow="1"
-          />
+          <column gap="4" grow="1">
+            <text size="sm" foreground="text_muted">Currency code</text>
+            <text-field
+              text="{setup_currency_text}"
+              placeholder="USD"
+              label="Currency code"
+              on-input="setup_currency_edit"
+            />
+          </column>
+          <column gap="4" grow="1">
+            <text size="sm" foreground="text_muted">Symbol</text>
+            <text-field
+              text="{setup_symbol_text}"
+              placeholder="$"
+              label="Symbol"
+              on-input="setup_symbol_edit"
+            />
+          </column>
         </row>
         <row gap="8">
-          <text-field
-            text="{setup_pin_text}"
-            placeholder="6 digits"
-            label="PIN"
-            on-input="setup_pin_edit"
-            grow="1"
-          />
-          <text-field
-            text="{setup_pin2_text}"
-            placeholder="again"
-            label="Confirm PIN"
-            on-input="setup_pin2_edit"
-            grow="1"
-          />
+          <column gap="4" grow="1">
+            <text size="sm" foreground="text_muted">PIN</text>
+            <text-field
+              text="{setup_pin_text}"
+              placeholder="6 digits"
+              label="PIN"
+              on-input="setup_pin_edit"
+            />
+          </column>
+          <column gap="4" grow="1">
+            <text size="sm" foreground="text_muted">Confirm PIN</text>
+            <text-field
+              text="{setup_pin2_text}"
+              placeholder="again"
+              label="Confirm PIN"
+              on-input="setup_pin2_edit"
+            />
+          </column>
         </row>
 
         <if test="{setup_failed}">
@@ -113,7 +127,7 @@
               <row gap="8" cross="center">
                 <badge>{device.kind}</badge>
                 <spacer grow="1"/>
-                <button variant="primary" on-press="pick_role:{device.id}">Open</button>
+                <button variant="primary" on-press="pick_role:{device.id}" label="{device.title}">Open</button>
               </row>
             </column>
           </card>
@@ -135,14 +149,17 @@
 
     <card padding="16" width="320">
       <column gap="8">
-        <text-field
-          text="{pin_text}"
-          placeholder="PIN"
-          label="PIN"
-          on-input="pin_edit"
-          on-submit="submit_login"
-          autofocus="true"
-        />
+        <column gap="4">
+          <text size="sm" foreground="text_muted">PIN</text>
+          <text-field
+            text="{pin_text}"
+            placeholder="PIN"
+            label="PIN"
+            on-input="pin_edit"
+            on-submit="submit_login"
+            autofocus="true"
+          />
+        </column>
         <if test="{login_failed}">
           <text foreground="destructive">{login_error}</text>
         </if>
@@ -164,45 +181,61 @@
     <text foreground="text_muted">Step one of two. You can change any of it later.</text>
     <card padding="16" width="460">
     <column gap="8">
-    <text-field
-      text="{setup_company_text}"
-      placeholder="e.g. Sharma Restaurant"
-      label="Restaurant name"
-      on-input="setup_company_edit"
-    />
-    <text-field
-      text="{wizard_address}"
-      placeholder="12 MG Road, Bengaluru"
-      label="Address"
-      on-input="wizard_address_edit"
-    />
-    <text-field
-      text="{wizard_phone}"
-      placeholder="080 4123 4567"
-      label="Phone"
-      on-input="wizard_phone_edit"
-    />
-    <text-field
-      text="{wizard_tax_number}"
-      placeholder="29ABCDE1234F1Z5"
-      label="Tax number"
-      on-input="wizard_tax_edit"
-    />
+    <column gap="4">
+      <text size="sm" foreground="text_muted">Restaurant name</text>
+      <text-field
+        text="{setup_company_text}"
+        placeholder="e.g. Sharma Restaurant"
+        label="Restaurant name"
+        on-input="setup_company_edit"
+      />
+    </column>
+    <column gap="4">
+      <text size="sm" foreground="text_muted">Address</text>
+      <text-field
+        text="{wizard_address}"
+        placeholder="12 MG Road, Bengaluru"
+        label="Address"
+        on-input="wizard_address_edit"
+      />
+    </column>
+    <column gap="4">
+      <text size="sm" foreground="text_muted">Phone</text>
+      <text-field
+        text="{wizard_phone}"
+        placeholder="080 4123 4567"
+        label="Phone"
+        on-input="wizard_phone_edit"
+      />
+    </column>
+    <column gap="4">
+      <text size="sm" foreground="text_muted">Tax number</text>
+      <text-field
+        text="{wizard_tax_number}"
+        placeholder="29ABCDE1234F1Z5"
+        label="Tax number"
+        on-input="wizard_tax_edit"
+      />
+    </column>
     <row gap="8" cross="center">
-      <text-field
-        text="{setup_currency_text}"
-        placeholder="INR"
-        label="Currency code"
-        on-input="setup_currency_edit"
-        grow="1"
-      />
-      <text-field
-        text="{setup_symbol_text}"
-        placeholder="Rs"
-        label="Symbol"
-        on-input="setup_currency_edit"
-        grow="1"
-      />
+      <column gap="4" grow="1">
+        <text size="sm" foreground="text_muted">Currency code</text>
+        <text-field
+          text="{setup_currency_text}"
+          placeholder="INR"
+          label="Currency code"
+          on-input="setup_currency_edit"
+        />
+      </column>
+      <column gap="4" grow="1">
+        <text size="sm" foreground="text_muted">Symbol</text>
+        <text-field
+          text="{setup_symbol_text}"
+          placeholder="Rs"
+          label="Symbol"
+          on-input="setup_symbol_edit"
+        />
+      </column>
     </row>
     <row gap="8">
       <spacer grow="1"/>
@@ -226,24 +259,33 @@
 
     <card padding="16" width="460">
       <column gap="8">
-        <text-field
-          text="{setup_admin_text}"
-          placeholder="e.g. Anita"
-          label="Your name"
-          on-input="setup_admin_edit"
-        />
-        <text-field
-          text="{setup_pin_text}"
-          placeholder="6 digits"
-          label="PIN"
-          on-input="setup_pin_edit"
-        />
-        <text-field
-          text="{setup_pin2_text}"
-          placeholder="again"
-          label="Confirm PIN"
-          on-input="setup_pin2_edit"
-        />
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Your name</text>
+          <text-field
+            text="{setup_admin_text}"
+            placeholder="e.g. Anita"
+            label="Your name"
+            on-input="setup_admin_edit"
+          />
+        </column>
+        <column gap="4">
+          <text size="sm" foreground="text_muted">PIN</text>
+          <text-field
+            text="{setup_pin_text}"
+            placeholder="6 digits"
+            label="PIN"
+            on-input="setup_pin_edit"
+          />
+        </column>
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Confirm PIN</text>
+          <text-field
+            text="{setup_pin2_text}"
+            placeholder="again"
+            label="Confirm PIN"
+            on-input="setup_pin2_edit"
+          />
+        </column>
         <row gap="8">
           <spacer grow="1"/>
           <button variant="ghost" on-press="wizard_back">Back</button>
