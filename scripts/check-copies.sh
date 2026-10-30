@@ -60,6 +60,32 @@ for app in $copies; do
   done
 done
 
+# ---------------------------------------------------------------- chrome
+
+# The shell - the title bar, the banners, the session gates, the rail and
+# the status bar - is shared by the three apps too, but the apps cannot
+# share `app.native` itself: the content pane inside it mounts only the
+# screens that app's role may open. So the chrome is compared as the
+# region between the shell's opening element and the pane, plus the status
+# bar line, and the pane's own `screen_index` gates are left out.
+#
+# Everything up to the pane is byte-identical in the three files today;
+# this is what keeps a chrome fix from landing in one app only.
+chrome() {
+  awk '/^<column grow="1" background="background">$/ { f = 1 }
+       f { print }
+       /<column grow="1">$/ { if (f) exit }' "$1"
+  sed -n 's|.*\(<status-bar>.*</status-bar>\).*|\1|p' "$1"
+}
+
+for app in $copies; do
+  if ! diff -q <(chrome "$source_app/src/app.native") <(chrome "$app/src/app.native") >/dev/null; then
+    printf 'chrome: %s/src/app.native drifted from %s\n' "$app" "$source_app" >&2
+    diff -u <(chrome "$source_app/src/app.native") <(chrome "$app/src/app.native") >&2
+    failed=$((failed + 1))
+  fi
+done
+
 if [ "$failed" -ne 0 ]; then
   printf '%d shared file(s) drifted - edit %s and copy it across\n' "$failed" "$source_app" >&2
   exit 1

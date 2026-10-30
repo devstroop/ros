@@ -524,19 +524,28 @@ pub const NavItem = struct {
 ```
 
 The shell draws them in a `for`, marks the current one, and dispatches
-`open_section` with the row's id:
+`open_section` with the row's id. The rail carries no heading over the
+list and no count beside it: the sections are the only rows that
+navigate, and the person signed in is anchored to the foot of it by a
+`spacer`, past a separator, because they are not a destination.
 
 ```xml
 <!-- src/app.native -->
-<column width="200" gap="2" padding="12" background="surface">
-  <text size="sm" foreground="text_muted">NAVIGATION</text>
-  <for each="nav_sections" key="id" as="section">
-    <list-item selected="{section.id == nav_section}" on-press="open_section:{section.id}">{section.label}</list-item>
-  </for>
-  <separator/>
-  <text size="sm" foreground="text_muted">{operator_label}</text>
-</column>
+<split grow="1" gap="2" value="{rail_split}" on-resize="rail_resized">
+  <column width="200" gap="2" padding="12" background="surface">
+    <for each="nav_sections" key="id" as="section">
+      <list-item selected="{section.id == nav_section}" on-press="open_section:{section.id}">{section.label}</list-item>
+    </for>
+    <spacer grow="1"/>
+    <separator/>
+    <text size="sm" foreground="text_muted">{operator_label}</text>
+  </column>
 ```
+
+`gap="2"` is the divider band the split draws between the two panes. At
+its default 9px the hairline floats in transparent space and reads as a
+gap between the rail and its own border; two pixels puts the line against
+the surface.
 
 `nav_section` is the model field that holds the current section's index
 (`model.nav_section`, set by `sectionIndex(screen)`), so the

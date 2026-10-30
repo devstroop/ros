@@ -48,30 +48,32 @@ screen that is not compiled in is a screen that does not exist.
 ```
 column
 ├── row            title bar: company, role badge, theme toggle
+├── separator        its edge - a row has no border code path
 ├── if has_error     error banner: message + Dismiss
 ├── if !role_chosen   → screen-role-picker
 ├── if role_chosen && !signed_in → screen-login
 ├── if signed_in
-│   └── split      rail (200px) | content
-│       ├── column  nav rail: sections
+│   └── split      rail | content, over a 2px divider band
+│       ├── column  nav rail: the sections, and the operator at the foot
 │       └── column  content: <if screen_index == N> gates
 └── status-bar     screen title | company | operator
 ```
 
+The rail's width is `model.rail_split`, a fraction of the window
+(0.18 by default), and `width="200"` on its column is only the floor the
+divider drags down to. `gap` on the `<split>` is the thickness of the
+divider band, whose default of 9px leaves the hairline floating in
+transparent space with the surface colour showing either side of it; the
+shell sets it to 2 so the line reads as the rail's own edge.
+
 Only the active screen is mounted. That is what keeps the 1024-node
 budget reachable.
 
-The content gates are hard-coded ordinals:
-
-| Index | Screen | Template |
-|---|---|---|
-| 8 | `admin_dashboard` | `screen-dashboard` |
-| 10 | `pos` | `screen-pos` |
-| 13 | `orders` | `screen-orders` |
-| 17 | `dining_tables` | `screen-tables` |
-| 41 | `kds_board` | `screen-kitchen` |
-
-The other 36 screens render an empty pane. See
+The content gates are hard-coded ordinals. Every screen a role may open
+is gated in that app's shell - the admin's 46 are pinned against the
+`Screen` enum by `gated_ordinals` in `apps/admin/src/tests.zig`, and the
+waiter's and the board's by the partition test in their own app - so the
+list to read is that table, not one here that rots. See
 [03-navigation-and-rbac](03-navigation-and-rbac.md).
 
 ## Markup vocabulary used

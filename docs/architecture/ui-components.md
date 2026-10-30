@@ -113,10 +113,15 @@ the rule plainly: *literals only, no bindings, no raw colors*.
 | `background`, `foreground`, `accent`, `accent-foreground`, `border-color`, `focus-ring` | `background`, `surface`, `surface_subtle`, `surface_pressed`, `text`, `text_muted`, `syntax_plain`, `syntax_comment`, `syntax_keyword`, `syntax_literal`, `syntax_function`, `syntax_property`, `syntax_constant`, `border`, `accent`, `accent_text`, `destructive`, `destructive_text`, `success`, `success_text`, `warning`, `warning_text`, `info`, `info_text`, `focus_ring`, `shadow`, `scrim`, `disabled` |
 | `radius` | `sm`, `md`, `lg`, `xl`, `none` |
 
-Two details that are easy to get wrong:
+Details that are easy to get wrong:
 
 - The attribute is **`border-color`**, not a bare `border` - that name
   is reserved for a future width shorthand.
+- Only an element that draws its own surface obeys it. `card`, `panel`,
+  `dialog`, `sheet`, `drawer`, `alert`, `bubble` and the field controls
+  emit chrome; a `row`, `column` or `stack` accepts `border-color` and
+  paints nothing. The line under a title bar is a `separator`, and the
+  edge of the nav rail is the `split`'s own divider.
 - A **bound** token is not accepted. `foreground="{order.tone}"` is
   rejected; dynamic styling stays in Zig through `ElementOptions.style`.
 - A `badge` ignores `background=` and `foreground=`. Its fill and text
@@ -646,9 +651,9 @@ Restaurant OS needs and the platform element it maps to.
 
 | Component | Platform element | Needed for |
 |---|---|---|
-| App shell | `split` + `column` | the rail-and-content frame in `app.native` |
+| App shell | `split` + `column` | the rail-and-content frame in `app.native`; `gap` on the split is the divider's thickness |
 | Nav rail | `list` + `list-item`; `tree` with `role="treeitem"` for drill-down | the role's sections, and the settings tree |
-| Screen header | `row` + `text` + `badge` | dashboard, orders, tables, kitchen |
+| Screen header | `row` + `text` + `badge`; `separator` for its edge | dashboard, orders, tables, kitchen |
 | Stat tile | `card` + `column` + `text size="display"` | the dashboard's four numbers |
 | Empty state | `card` or `column` + `text foreground="text_muted"` | orders, tables, kitchen, cart |
 | Product tile | `card` + `text` | the POS menu grid |
