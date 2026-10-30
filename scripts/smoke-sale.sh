@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+# Drive a real sale through the app, headlessly.
+#
+#   scripts/smoke-sale.sh [--keep]
+#
+# The CI smoke used to assert only that the canvas had pixels, so a
+# blank role picker or a shell gate pointing at the wrong screen still
+# passed. This script walks the path an operator walks:
+#
+#   walk-through -> sign out -> role picker -> PIN login ->
+#   Sell -> add a dish -> Place order -> Orders -> KDS
+#
+# It then copies the database the admin wrote into the kiosk's data
+# directory and asserts the same ticket is on the kitchen board, so the
+# screen after the sale is exercised too, not just the till.
+#
+# Environment:
+#   ROS_SMOKE_DATA       data directory to use (default: a temp dir)
+#   ROS_SMOKE_KEEP=1     keep the data directory and screenshots
+#   ROS_SMOKE_PRESS_MS   how long a press waits for its screen before
+#                        it is repeated (default: 3000)
+#
+# Linux CI runs this under xvfb-run; a local session can use its own
+# DISPLAY. When no DISPLAY is set, the script re-executes itself under
+# xvfb-run if it is available.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+keep="${ROS_SMOKE_KEEP:-0}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --keep)
+      keep=1
+      shift
+      ;;
+    -h|--help)
+      sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      printf 'smoke-sale: unknown argument: %s\n' "$1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ -z "${DISPLAY:-}" ] && command -v xvfb-run >/dev/null 2>&1; then
+  ROS_SMOKE_KEEP="$keep" exec xvfb-run -a "$0"
+fi
+
+if ! command -v native >/dev/null 2>&1; then
+  printf 'ros: the native CLI is not on PATH - run scripts/setup.sh\n' >&2
+  exit 1
+fi
+
+data_dir="${ROS_SMOKE_DATA:-$(mktemp -d "${TMPDIR:-/tmp}/ros-sale-smoke.XXXXXX")}"
+mkdir -p "$data_dir/logs" "$data_dir/screens"
+admin_data="$data_dir/com.devstroop.ros.admin"
+kiosk_data="$data_dir/com.devstroop.ros.kiosk"
+
+app_pid=""
+app_dir=""
+
+stop_app() {
+  if [ -n "$app_pid" ] && kill -0 "$app_pid" >/dev/null 2>&1; then
+    kill "$app_pid" >/dev/null 2>&1 || true
+    for _ in $(seq 1 100); do
+      kill -0 "$app_pid" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    kill -9 "$app_pid" >/dev/null 2>&1 || true
+    wait "$app_pid" 2>/dev/null || true
+  fi
+  app_pid=""
+}
+
+cleanup() {
+  local status="$1"
+  stop_app
+  if [ "$keep" -eq 1 ] || [ "$status" -ne 0 ]; then
+    printf 'smoke-sale: data kept at %s\n' "$data_dir"
+  else
+    rm -rf "$data_dir"
+  fi
+}
+
+trap 'status=$?; cleanup "$status"' EXIT
+
+fail() {
+  printf 'smoke-sale: %s\n' "$*" >&2
+  exit 1
+}
+
+start_app() {
+  local app="$1" bin="$2"
+  app_dir="apps/$app"
+  rm -rf "$app_dir/.zig-cache/native-sdk-automation"
+  # The automation server publishes `.zig-cache/native-sdk-automation`
+  # relative to the process's working directory, and the CLI looks for
+  # it there too. Launching from the repo root would leave the snapshot
+  # somewhere `native automate` never looks.
+  (cd "$app_dir" && exec env XDG_DATA_HOME="$data_dir" "./zig-out/bin/$bin") \
+    >"$data_dir/logs/$app.log" 2>&1 &
+  app_pid=$!
+}
+
+automate() {
+  (cd "$app_dir" && native automate "$@")
+}
+
+# The id of a widget by its role and accessible name. Names are matched
+# literally: a price with a $ in it is not a regex. The id must come
+# from the widget header — a greedy `.*#` would pick up `parent=#…`
+# later on the same line.
+snapshot_id() {
+  sed -n 's/.*widget @w1\/main-canvas#\([0-9]*\) role=.*/\1/p' | head -1
+}
+
+widget_id() {
+  local role="$1" name="$2"
+  automate snapshot | { grep -F "role=$role name=\"$name\"" || true; } | snapshot_id
+}
+
+# A view that refreshes on a timer rebuilds its tree, and a widget id
+# read from one snapshot can be retired before the command carrying it
+# arrives: the app rejects the stale id and nothing happens. So every
+# interaction is repeated until the screen says it landed.
+press_window_ms="${ROS_SMOKE_PRESS_MS:-3000}"
+
+# Press a control, and press it again if the expected screen did not
+# follow. The app's own guards - a sale still being saved, an order
+# already moving - make a repeated press safe rather than a second sale.
+tap() {
+  local role="$1" name="$2"
+  shift 2
+  local attempt id
+  for attempt in 1 2 3 4 5; do
+    id="$(widget_id "$role" "$name")"
+    [ -n "$id" ] || fail "\"$name\" left the screen and \"$*\" never appeared"
+    automate widget-click main-canvas "$id" >/dev/null 2>&1 || true
+    if automate assert --timeout-ms "$press_window_ms" "$@" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  fail "pressing \"$name\" never showed: $*"
+}
+
+type_into() {
+  local name="$1" value="$2" id attempt
+  for attempt in 1 2 3 4 5; do
+    id="$(widget_id textbox "$name")"
+    [ -n "$id" ] || fail "no textbox named \"$name\" on screen"
+    if automate widget-action main-canvas "$id" set_text "$value" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  fail "typing into \"$name\" never landed"
+}
+
+assert_visible() {
+  automate assert "$@"
+}
+
+screenshot() {
+  local name="$1"
+  automate screenshot main-canvas >/dev/null
+  cp "$app_dir/.zig-cache/native-sdk-automation/screenshot-main-canvas.png" \
+    "$data_dir/screens/$name.png"
+}
+
+build_app() {
+  local app="$1"
+  printf '==> building %s with automation\n' "$app"
+  # Debug keeps the smoke's build step short. The release build is
+  # `scripts/build.sh`'s job, and one smoke run should not wait for two
+  # ReleaseFast compiles before it tests anything.
+  (cd "apps/$app" && native build -Dautomation=true -Doptimize=Debug --yes >/dev/null)
+}
+
+# ---------------------------------------------------------------- admin
+
+build_app admin
+build_app kiosk
+
+rm -rf "$admin_data" "$kiosk_data"
+
+printf '==> booting admin on a fresh database\n'
+start_app admin ros-admin
+automate wait >/dev/null
+assert_visible 'Set up your restaurant' 'Restaurant name'
+
+printf '==> walking through setup\n'
+type_into "Restaurant name" "Smoke Restaurant"
+type_into "Address" "1 Test Lane"
+type_into "Phone" "555 0100"
+type_into "Tax number" "TEST123"
+type_into "Currency code" "USD"
+type_into "Symbol" "\$"
+tap button "Next" 'Who is the owner?' 'Your name' 'Confirm PIN'
+type_into "Your name" "Smoke Owner"
+type_into "PIN" "123456"
+type_into "Confirm PIN" "123456"
+tap button "Create my restaurant" 'Dashboard' 'New order'
+screenshot admin-dashboard
+
+printf '==> signing out and back in through the role picker\n'
+tap button "Sign out" 'Change person'
+tap button "Change person" 'Who is using this device?' 'Smoke Owner'
+tap button "Sign in" 'Smoke Owner - enter your PIN'
+type_into "PIN" "123456"
+tap button "Sign in" 'Dashboard' 'New order'
+
+printf '==> selling a dish\n'
+tap listitem "Sell" 'Place order' 'Search the menu'
+tap group "Paneer Tikka" '245.00'
+tap button "Place order" 'Order 000001' 'TAKE THE PAYMENT'
+screenshot admin-order
+
+printf '==> the order is on the list\n'
+tap listitem "Orders" '000001' 'Pending' '1 open'
+screenshot admin-orders
+
+# ---------------------------------------------------------------- kiosk
+
+printf '==> handing the database to the kiosk\n'
+stop_app
+if command -v sqlite3 >/dev/null 2>&1; then
+  sqlite3 "$admin_data/app.db" 'PRAGMA wal_checkpoint(TRUNCATE);' >/dev/null
+fi
+mkdir -p "$kiosk_data"
+rm -f "$kiosk_data"/app.db*
+cp "$admin_data"/app.db* "$kiosk_data"/
+
+printf '==> the kitchen sees the ticket\n'
+start_app kiosk ros-kiosk
+automate wait >/dev/null
+assert_visible 'Kitchen' 'Display' 'Smoke Restaurant'
+tap button "Kitchen" 'Kitchen' '000001' 'Pending'
+screenshot kiosk-kitchen
+
+printf '==> the kitchen advances the ticket\n'
+tap button "Next" 'Preparing'
+screenshot kiosk-preparing
+
+printf 'smoke-sale: PASS - setup, role picker, login, sale, orders and KDS\n'

@@ -117,7 +117,7 @@ neither is.
 
 ### Automation smoke
 
-The showcase CI runs a live app headlessly:
+Two jobs drive a live app headlessly. `smoke` proves each binary paints:
 
 ```
 native build -Dautomation=true
@@ -127,22 +127,42 @@ native automate screenshot <view>
 native automate assert 'widget_nodes=<n>/1024'
 ```
 
-Target flow: role picker → admin login (seeded PIN) → POS → add item →
-place order → orders list → KDS advance. This is the fastest way to catch a
-shell gate that points at the wrong ordinal.
+One pixel on a canvas is not a sale, so `sale-smoke` runs
+`scripts/smoke-sale.sh`, which walks setup → sign out → role picker → PIN
+→ Sell → add a dish → Place order → Orders, then hands the database the
+admin wrote to the kiosk and asserts the same ticket on the kitchen board
+and advances it. Every step is an `automate assert` against the snapshot,
+so a shell gate pointing at the wrong ordinal fails the run rather than
+rendering something plausible.
+
+Two things the script has to survive:
+
+- **Stale widget ids.** A view that refreshes on a timer rebuilds its tree,
+  and an id read from one snapshot can be retired before the click carrying
+  it arrives. Every press is repeated until the screen it expects actually
+  appears; the app's own guards — a sale still being saved, an order
+  already moving — make a repeated press safe instead of a second sale.
+- **Names, not positions.** A widget is found by role and accessible name,
+  matched literally, so a price carrying `$` is never read as a regex.
+
+The same path exists as a headless test, "a sale at the till shows on the
+orders board and the kitchen board", driven against a real migrated
+database. The test proves the state machine; the job proves the binaries
+and the screens an operator actually sees.
 
 ## CI
 
-`.github/workflows/ci.yml` has two jobs:
+`.github/workflows/ci.yml` has four jobs:
 
 1. **verify** — installs the pinned Zig 0.16.0 and Node 24, builds or
    restores the SDK CLI, then runs `scripts/verify-all.sh`
    (`native check` + `native test`).
-2. **smoke** — builds with `-Dautomation=true`, runs under `xvfb`, and
-   asserts `gpu_nonblank=true` plus a screenshot.
-
-The smoke does not sign in, place an order or assert a widget, so a broken
-sale path still passes. Extending it is gap G-018.
+2. **smoke** — one matrix leg per app: builds with `-Dautomation=true`,
+   runs under `xvfb`, and asserts `gpu_nonblank=true` plus a screenshot.
+3. **sale-smoke** — runs `scripts/smoke-sale.sh` end to end and uploads the
+   screens and app logs as an artifact, so a run that dies three screens
+   into the walk is still diagnosable from the runner.
+4. **package** — builds and signs the macOS artifacts.
 
 Pinning matters: Zig 0.17 cannot parse the SDK, and Node 22 fails the
 relational toolchain. A CI runner that "looks fine" will fail at step 1.

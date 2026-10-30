@@ -148,7 +148,7 @@ a docs change.
 | D7 | `app.json` declares a 960×600 minimum and restore policy; `main.zig` shell config does not | `app.json`, `src/main.zig` | `native dev` can open an unsupported window (B-024) |
 | D8 | ~~`busy` is set on write, not on read~~ | `src/core/update.zig` | FIXED: every read goes through `repos.query`, so the app knows it is loading, and a failed read is remembered with the screen it failed for (B-021, E-004) |
 | D9 | ~~No screen-coverage test~~ | `src/tests.zig` | FIXED: a test builds every gated screen and every screen in the enum, and asserts the widget budget. It found four screens that could never render (D20) |
-| D10 | CI smoke asserts only a non-blank canvas | `.github/workflows/ci.yml` | A blank or broken shell can still pass (G-018) |
+| D10 | ~~CI smoke asserts only a non-blank canvas~~ | `.github/workflows/ci.yml` | FIXED: `scripts/smoke-sale.sh` walks setup → sign out → role picker → PIN → till → orders → KDS through the admin and kiosk binaries, and the `sale-smoke` job fails when a screen is not the screen it claims to be (G-018, #42) |
 | D11 | No `build.zig` / `build.zig.zon` in the app | app root | Fine while managed; blocks linking a C library until `native eject` |
 | D12 | ~~`view_unbound` lists `pending_screen`, which is not a field~~ | `src/core/model.zig` | FIXED: the stale entry is gone and the salt state is listed |
 | D13 | ~~Order insert omitted `orders.updated_at`, which is `NOT NULL` with no default~~ | `packages/ros-core/src/data/repos.zig` (`saveOrder`), `apps/admin/src/schema/0005_orders.sql` | FIXED: the insert writes `updated_at`; the integration test reads the order back (B-001) |
@@ -222,6 +222,7 @@ the suites themselves, and `scripts/verify-all.sh` runs all of them.
 | The order number is a sequence | POS |
 | A failed sale does not consume an order number | POS |
 | A retried write is the same sale | POS |
+| A sale at the till shows on the orders board and the kitchen board | POS → Orders → Kitchen |
 | The tax is worked out line by line, from the product's own slab | POS |
 | An inclusive price already carries its tax | POS |
 | The tax is rounded half up | POS |
@@ -243,9 +244,11 @@ the suites themselves, and `scripts/verify-all.sh` runs all of them.
 | The shell gates the screens the enum says it does | Navigation |
 | Every gated screen renders, inside the widget budget | Markup |
 | Every screen builds a view inside the budget | Markup |
+| Every text entry draws a visible label | Markup |
 | Every effect key names one effect and no two | Data |
 | Every light and dark text pair clears WCAG AA | Theme |
 | The walk-through takes a restaurant from nothing to a POS | Setup |
+| The setup Symbol field writes the symbol, not the code | Setup |
 | A fresh database asks to be set up | Setup |
 | A manager can reset an employee's PIN | People |
 | An employee who has left is not on the team and cannot sign in | People |
@@ -276,8 +279,9 @@ the suites themselves, and `scripts/verify-all.sh` runs all of them.
 | An applied op reloads the board without an explicit query | Sync |
 
 Not covered: every decoder except the generic page reader and the
-company decoder, timer, error arms, the sidecars, and a sale through the
-UI.
+company decoder, timer, error arms, and the sidecars. The sale is walked
+headlessly now, in the suite and in CI, but it stops at the payment prompt:
+nothing in automation takes the money or prints the receipt.
 
 ## What "done" would add
 
