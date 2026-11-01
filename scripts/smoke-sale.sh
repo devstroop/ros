@@ -7,9 +7,10 @@
 # blank role picker or a shell gate pointing at the wrong screen still
 # passed. This script walks the path an operator walks:
 #
-#   walk-through -> sign out -> role picker -> PIN login ->
+#   walk-through -> sign out -> the pad -> PIN login -> the picker ->
 #   POS -> add a dish -> Place order -> Orders -> theme -> Appearance
-#   -> brand colour -> KDS
+#   -> brand colour -> Team -> reset the sign-in to a password ->
+#   the field -> KDS
 #
 # It then copies the database the admin wrote into the kiosk's data
 # directory and asserts the same ticket is on the kitchen board, so the
@@ -182,6 +183,39 @@ assert_visible() {
   automate assert "$@"
 }
 
+# A secret is typed by what it covers up.
+#
+# The field's own text is one bullet per character while the eye is
+# shut, so the reading `type_into` checks - the text the field reports -
+# is not the text that was typed. Here the dots are the proof: the
+# app holds the secret and the screen shows only its length.
+type_secret() {
+  local name="$1" value="$2" id attempt bullets
+  bullets="$(printf '•%.0s' $(seq 1 "${#value}"))"
+  for attempt in 1 2 3 4 5; do
+    id="$(widget_id textbox "$name")"
+    [ -n "$id" ] || fail "no textbox named \"$name\" on screen"
+    automate widget-action main-canvas "$id" set_text "$value" >/dev/null 2>&1 || true
+    if [ "$(box_text "$id")" = "$bullets" ]; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  fail "typing \"$value\" into \"$name\" never drew $bullets - the field reads \"$(box_text "${id:-}")\""
+}
+
+# Tap a PIN out on the pad, and take the dots as the proof of each key.
+# A tapped code has no caret and no keyboard, so nothing else on the
+# screen moves to show that the tap landed.
+tap_pin() {
+  local digits="$1" dots="" index digit
+  for index in $(seq 1 "${#digits}"); do
+    digit="${digits:$((index - 1)):1}"
+    dots="${dots}•"
+    tap button "$digit" "$dots"
+  done
+}
+
 screenshot() {
   local name="$1"
   automate screenshot main-canvas >/dev/null
@@ -240,18 +274,22 @@ type_into "Phone" "555 0100"
 type_into "Tax number" "TEST123"
 type_into "Currency code" "USD"
 type_into "Symbol" "\$"
-tap button "Next" 'Who is the owner?' 'Your name' 'Confirm PIN'
+tap button "Next" 'Who is the owner?' 'Your name' 'Sign in with' 'Confirm PIN'
 type_into "Your name" "Smoke Owner"
-type_into "PIN" "123456"
-type_into "Confirm PIN" "123456"
+type_secret "PIN" "123456"
+type_secret "Confirm" "123456"
 tap button "Create my restaurant" 'Dashboard' 'New order'
 screenshot admin-dashboard
 
-printf '==> signing out and back in through the role picker\n'
-tap button "Sign out" 'Change person'
+printf '==> signing out leaves the gate on the person who left\n'
+# The till does not go blank on them. It asks the person who was just
+# using it to prove themselves again, and it asks on the surface their
+# row says they use - so the picker is a choice, not a chore.
+tap button "Sign out" 'Smoke Owner - enter your PIN'
+screenshot login-by-pin
 tap button "Change person" 'Who is using this device?' 'Smoke Owner'
 tap button "Sign in" 'Smoke Owner - enter your PIN'
-type_into "PIN" "123456"
+tap_pin "123456"
 tap button "Sign in" 'Dashboard' 'New order'
 
 printf '==> selling a dish\n'
@@ -327,6 +365,35 @@ tap text "Company" 'Brand colour'
 assert_visible '#B4141E'
 screenshot settings-brand
 
+# How a person proves who they are is theirs, not the device's, and it
+# is a choice with two answers. The reset screen is where an owner
+# changes it, and the change is proved from both sides: the secret stays
+# covered until the eye is pressed, and the till that opens afterwards
+# offers the field rather than the pad - because the row says so, not
+# because the screen remembered what it was showing a minute ago.
+printf '==> the owner changes to a password, and the till offers the field\n'
+tap listitem "Team" 'Smoke Owner' 'Reset sign-in'
+tap button "Reset sign-in" 'Sign in with' 'Their old sign-in stops working'
+tap button "Password" 'name="Password".*selected'
+type_secret "New credential" "smoke-table-one"
+type_secret "Confirm credential" "smoke-table-one"
+tap button "Show" 'smoke-table-one'
+tap button "Hide" --absent 'smoke-table-one'
+screenshot reset-credential
+tap button "Save the new sign-in" 'Smoke Owner' 'Password'
+screenshot team-password
+
+printf '==> the dashboard is where the device signs out\n'
+tap listitem "Dashboard" 'New order' 'Sign out'
+
+printf '==> and signs back in by typing it\n'
+# The gate is the one the row now says: the field rather than the pad
+# this person left behind, still asking them by name.
+tap button "Sign out" 'Smoke Owner - enter your password'
+type_secret "Password" "smoke-table-one"
+screenshot login-by-password
+tap button "Sign in" 'Dashboard' 'New order'
+
 # ---------------------------------------------------------------- kiosk
 
 printf '==> handing the database to the kiosk\n'
@@ -351,4 +418,4 @@ screenshot kiosk-cooking
 tap button "Mark ready" 'Ready'
 screenshot kiosk-ready
 
-printf 'smoke-sale: PASS - setup, role picker, login, sale, orders, the look and KDS\n'
+printf 'smoke-sale: PASS - setup, role picker, the pad, the field, sale, orders, the look and KDS\n'

@@ -101,7 +101,7 @@
           <if test="{screen_index == 14}"><use template="screen-order-detail"/></if>
           <if test="{screen_index == 15}"><use template="screen-payments"/></if>
           <if test="{screen_index == 16}"><use template="screen-customers"/></if>
-          <if test="{screen_index == 6}"><use template="screen-reset-pin"/></if>
+          <if test="{screen_index == 6}"><use template="screen-reset-credential"/></if>
           <if test="{screen_index == 37}"><use template="screen-waiter-tables"/></if>
           <if test="{screen_index == 38}"><use template="screen-waiter-menu"/></if>
           <if test="{screen_index == 39}"><use template="screen-waiter-cart"/></if>

@@ -163,10 +163,11 @@ pub const company_buffer = 1024;
 /// The most lines one cart may carry.
 pub const max_cart_lines = 50;
 
-/// How many wrong PINs the till takes before it stops taking them.
+/// How many wrong credentials the till takes before it stops taking
+/// them.
 pub const max_login_failures = 5;
 
-/// How long the till stops taking PINs for, in milliseconds.
+/// How long the till stops taking credentials for, in milliseconds.
 pub const login_lockout_ms = 60_000;
 
 /// The decimals of a currency code, for the currencies a restaurant is
@@ -212,12 +213,13 @@ fn tenTo(exponent: i64) i64 {
 
 /// Where the installation salt stands.
 ///
-/// The salt is the one piece of state a PIN hash cannot be checked
-/// without, and there is exactly one right answer to "which salt?" - the
-/// one in the database. These four states say how sure the app is about
-/// that, because the difference between "the database has no salt" and
-/// "the database has not answered yet" is the difference between
-/// installing a salt and guessing one.
+/// The salt is the one piece of state a hash from before bcrypt cannot
+/// be checked without - a bcrypt string carries its own salt and needs
+/// nothing else. There is exactly one right answer to "which salt?" -
+/// the one in the database. These four states say how sure the app is
+/// about that, because the difference between "the database has no
+/// salt" and "the database has not answered yet" is the difference
+/// between installing a salt and guessing one.
 pub const SaltState = enum {
     /// The database has not answered yet. The salt in the model is a
     /// guess: nothing may be hashed with it.
@@ -370,6 +372,21 @@ pub const Model = struct {
         "login_hash",
         "login_hash_len",
         "login_legacy_hash",
+        "salt_buf",
+        "salt_len",
+        // A credential is the one value the view must never be able to
+        // read whole. Every field here is either the secret itself or
+        // the choice that decides how the secret is typed; the view
+        // sees the masked method and the label instead.
+        "credential",
+        "credential_kind",
+        "credential_revealed",
+        "setup_credential",
+        "setup_credential2",
+        "setup_credential_kind",
+        "form_reset_credential_buf",
+        "form_reset_credential2_buf",
+        "form_reset_credential_kind",
         "net_host_buf",
         "net_host_len",
         "net_port",
@@ -396,15 +413,17 @@ pub const Model = struct {
     /// the operator's: `admin` and `service` run one role, and only the
     /// kiosk can be moved between its two board modes.
     role: Role = boot_role,
-    /// False until a role is chosen at the role picker.
+    /// False until the picker has been answered - by a person, or by a
+    /// board on a kiosk.
     role_chosen: bool = false,
     /// True once a sign-in succeeded (kiosk roles sign in by device).
     signed_in: bool = false,
-    /// The signed-in employee. The PIN hash never lives here.
+    /// The signed-in employee. Neither the secret nor its hash lives
+    /// here.
     employee_id: i64 = 0,
     /// The employee the sign-in screen is asking about, before
-    /// anybody has signed in. The picker chooses the person; the PIN
-    /// proves they are that person.
+    /// anybody has signed in. The picker chooses the person; their
+    /// credential proves they are that person.
     sign_in_employee_id: i64 = 0,
     /// The name of the person the sign-in screen is asking about.
     sign_in_employee_name_buf: [64]u8 = undefined,
@@ -587,8 +606,12 @@ pub const Model = struct {
     /// The forms the settings and the catalogue edit.
     form_currency_code_buf: canvas.TextBuffer(8) = .{},
     form_currency_symbol_buf: canvas.TextBuffer(8) = .{},
-    form_reset_pin_buf: canvas.TextBuffer(8) = .{},
-    form_reset_pin2_buf: canvas.TextBuffer(8) = .{},
+    form_reset_credential_buf: canvas.TextBuffer(auth.max_secret_len) = .{},
+    form_reset_credential2_buf: canvas.TextBuffer(auth.max_secret_len) = .{},
+    /// The kind the owner is setting. Writing a new credential always
+    /// writes its kind with it, so nobody can be left with a password
+    /// they never chose or a PIN they cannot type.
+    form_reset_credential_kind: domain.CredentialKind = .pin,
     form_reset_employee_id: i64 = 0,
     form_reset_employee_name: []const u8 = "",
     form_category_name_buf: canvas.TextBuffer(64) = .{},
@@ -794,8 +817,12 @@ pub const Model = struct {
     /// The setup form's fields.
     setup_company_name: canvas.TextBuffer(64) = .{},
     setup_admin_name: canvas.TextBuffer(64) = .{},
-    setup_pin: canvas.TextBuffer(8) = .{},
-    setup_pin2: canvas.TextBuffer(8) = .{},
+    /// The owner's own credential, typed twice so a slip of a key is
+    /// caught before it locks them out, and of whichever kind they
+    /// chose below.
+    setup_credential: canvas.TextBuffer(auth.max_secret_len) = .{},
+    setup_credential2: canvas.TextBuffer(auth.max_secret_len) = .{},
+    setup_credential_kind: domain.CredentialKind = .pin,
     /// The company's record, the parts the quick setup does not ask
     /// for: where the restaurant is, how to reach it, and its tax
     /// number.
@@ -809,12 +836,20 @@ pub const Model = struct {
 
     // ---------------------------------------------------------- sign-in
 
-    /// The PIN being typed. The view binds a derived method, never the
-    /// buffer itself.
-    pin: canvas.TextBuffer(8) = .{},
-    /// The installation salt, hex. Empty until the database answers.
-    pin_salt_buf: [64]u8 = undefined,
-    pin_salt_len: usize = 0,
+    /// The secret being typed, whichever kind it is. The view binds a
+    /// derived method, never the buffer.
+    credential: canvas.TextBuffer(auth.max_secret_len) = .{},
+    /// How the person signing in proves who they are. It is theirs -
+    /// the picker sets it from their row - and not the device's.
+    credential_kind: domain.CredentialKind = .pin,
+    /// True when a secret field is showing the secret in the clear. The
+    /// eye turns it and nothing else does; the default is covered.
+    credential_revealed: bool = false,
+    /// The installation salt, hex. Empty until the database answers. It
+    /// salts every credential hash this installation makes, and it is
+    /// stored under the key the first version chose.
+    salt_buf: [64]u8 = undefined,
+    salt_len: usize = 0,
     /// Where the installation salt stands.
     salt_state: SaltState = .unknown,
     /// This installation's token, hex. It is a name, not a secret: it
@@ -828,24 +863,24 @@ pub const Model = struct {
     /// until the sale lands, so a retry is the same sale and not a
     /// second one.
     cart_attempt_id: i64 = 0,
-    /// The hash of the PIN being checked. Lives in the model so the
-    /// query parameter has a stable home.
+    /// The hash of the credential being checked. Lives in the model so
+    /// the query parameter has a stable home.
     login_hash: [auth.hash_length]u8 = undefined,
     /// The length of the hash in `login_hash`. The buffer is larger
     /// than the string, so the length is what says where it ends.
     login_hash_len: usize = 0,
-    /// The OLD hash of the same PIN - a SHA-256 digest. It is what the
-    /// sign-in looks up as well, so a restaurant whose employees signed
-    /// in before bcrypt can still sign in; the next sign-in rewrites
-    /// the row in the new form.
+    /// The OLD hash of the same credential - a SHA-256 digest. It is
+    /// what the sign-in looks up as well, so a restaurant whose
+    /// employees signed in before bcrypt can still sign in; the next
+    /// sign-in rewrites the row in the new form.
     login_legacy_hash: [auth.legacy_len]u8 = undefined,
     /// Storage for the signed-in operator's name.
     operator_buf: bump.Bump(1024) = .{},
     /// Why the last sign-in failed, or empty.
     login_error: []const u8 = "",
-    /// How many wrong PINs this session has seen.
+    /// How many wrong credentials this session has seen.
     login_failures: i64 = 0,
-    /// The moment the till stops accepting PINs, in epoch
+    /// The moment the till stops accepting credentials, in epoch
     /// milliseconds. Zero when it is not locked.
     login_locked_until: i64 = 0,
 
@@ -1374,17 +1409,32 @@ pub const Model = struct {
     }
 
     /// The product name in the product form.
-    /// The PIN being typed for the reset.
-    pub fn form_reset_pin(model: *const Model) []const u8 {
-        return model.form_reset_pin_buf.text();
+    /// The credential being typed for the reset, masked or not.
+    pub fn form_reset_credential(model: *const Model) []const u8 {
+        return model.masked(model.form_reset_credential_buf.text());
     }
 
-    /// The PIN being confirmed for the reset.
-    pub fn form_reset_pin2(model: *const Model) []const u8 {
-        return model.form_reset_pin2_buf.text();
+    /// The credential being confirmed for the reset, masked or not.
+    pub fn form_reset_credential2(model: *const Model) []const u8 {
+        return model.masked(model.form_reset_credential2_buf.text());
     }
 
-    /// Whose PIN is being reset.
+    /// The kind the reset form is setting, as the toggle row counts it.
+    pub fn form_reset_credential_kind_id(model: *const Model) i64 {
+        return @intFromEnum(model.form_reset_credential_kind);
+    }
+
+    /// What the reset form calls the kind it is setting.
+    pub fn form_reset_credential_label(model: *const Model) []const u8 {
+        return model.form_reset_credential_kind.label();
+    }
+
+    /// The reset form's own rule for the kind it is setting.
+    pub fn form_reset_credential_hint(model: *const Model) []const u8 {
+        return kindHint(model.form_reset_credential_kind);
+    }
+
+    /// Whose credential is being reset.
     pub fn form_reset_employee(model: *const Model) []const u8 {
         return model.form_reset_employee_name;
     }
@@ -2068,15 +2118,30 @@ pub const Model = struct {
         return model.setup_admin_name.text();
     }
 
-    /// The setup form's PIN. The buffer is the edit model; the view
-    /// binds the text.
-    pub fn setup_pin_text(model: *const Model) []const u8 {
-        return model.setup_pin.text();
+    /// The setup form's credential. The buffer is the edit model; the
+    /// view binds the text, masked or not.
+    pub fn setup_credential_text(model: *const Model) []const u8 {
+        return model.masked(model.setup_credential.text());
     }
 
-    /// The setup form's confirmation PIN.
-    pub fn setup_pin2_text(model: *const Model) []const u8 {
-        return model.setup_pin2.text();
+    /// The setup form's confirmation credential.
+    pub fn setup_credential2_text(model: *const Model) []const u8 {
+        return model.masked(model.setup_credential2.text());
+    }
+
+    /// The kind the setup form is choosing, as the toggle row counts it.
+    pub fn setup_credential_kind_id(model: *const Model) i64 {
+        return @intFromEnum(model.setup_credential_kind);
+    }
+
+    /// What the setup form calls the kind it is choosing.
+    pub fn setup_credential_label(model: *const Model) []const u8 {
+        return model.setup_credential_kind.label();
+    }
+
+    /// The setup form's own rule for the kind it is choosing.
+    pub fn setup_credential_hint(model: *const Model) []const u8 {
+        return kindHint(model.setup_credential_kind);
     }
 
     /// The setup form's currency code.
@@ -2099,8 +2164,6 @@ pub const Model = struct {
         return model.setup_error;
     }
 
-    /// Whether the setup form is complete enough to submit: a company
-    /// name, an operator name, a PIN, and the same PIN twice.
     /// True when the setup form is NOT ready to be submitted.
     ///
     /// The button binds this, so the operator cannot press a button
@@ -2109,31 +2172,39 @@ pub const Model = struct {
         return !model.setup_can_submit();
     }
 
+    /// Whether the setup form is complete enough to submit: a company
+    /// name, an operator name, a credential that suits the kind chosen
+    /// for it, and that credential twice.
     pub fn setup_can_submit(model: *const Model) bool {
         const name = std.mem.trim(u8, model.setup_company_name.text(), " ");
         const admin = std.mem.trim(u8, model.setup_admin_name.text(), " ");
-        const pin = model.setup_pin.text();
-        const pin2 = model.setup_pin2.text();
+        const secret = model.setup_credential.text();
+        const again = model.setup_credential2.text();
         if (name.len == 0 or admin.len == 0) return false;
-        if (!model.pin_is_acceptable(pin)) return false;
-        return std.mem.eql(u8, pin, pin2);
+        if (!model.credential_is_acceptable(model.setup_credential_kind, secret)) return false;
+        return std.mem.eql(u8, secret, again);
     }
 
-    /// True when a PIN is worth accepting.
+    /// True when a secret is worth accepting as the kind it is being
+    /// set to.
     ///
-    /// Six digits or more, and digits only. A four-digit PIN is ten
-    /// thousand guesses, and a stolen database is worth ten thousand
-    /// guesses: the hash can be slow, but it cannot be slow enough to
-    /// make a small space safe.
-    pub fn pin_is_acceptable(_: *const Model, pin: []const u8) bool {
-        if (pin.len < auth.min_pin_len) return false;
-        for (pin) |digit| {
-            if (digit < '0' or digit > '9') return false;
-        }
-        return true;
+    /// A PIN is six digits at least, and digits only. Four digits is ten
+    /// thousand guesses and six is a million; the hash is slow, but it
+    /// cannot be slow enough to make a small space safe, so the shape of
+    /// a PIN has to carry what the operator's care did not.
+    /// A password is eight characters at least and anything otherwise:
+    /// length is the whole of what a password buys.
+    pub fn credential_is_acceptable(_: *const Model, kind: domain.CredentialKind, secret: []const u8) bool {
+        if (secret.len > auth.max_secret_len) return false;
+        return switch (kind) {
+            .pin => secret.len >= auth.min_pin_len and
+                secret.len <= auth.max_pin_len and
+                digitsOnly(secret),
+            .password => secret.len >= auth.min_password_len,
+        };
     }
 
-    /// True when the till is refusing PINs for a while.
+    /// True when the till is refusing credentials for a while.
     pub fn login_locked(model: *const Model) bool {
         return model.login_locked_until > model.now_ms;
     }
@@ -2169,8 +2240,9 @@ pub const Model = struct {
     }
 
     /// The picker's people half: the people who work here, each of whom
-    /// signs in with a PIN. The admin and service apps show it; the
-    /// kiosk does not, because nobody types a PIN into a board.
+    /// signs in with the credential their own row names. The admin and
+    /// service apps show it; the kiosk does not, because nobody types a
+    /// credential into a board.
     pub fn show_people(_: *const Model) bool {
         return app_kind != .kiosk;
     }
@@ -2281,9 +2353,10 @@ pub const Model = struct {
         return model.theme_contrast_high;
     }
 
-    /// The installation salt, as a slice.
-    pub fn pin_salt(model: *const Model) []const u8 {
-        return model.pin_salt_buf[0..model.pin_salt_len];
+    /// The installation salt, as a slice. It is stored under the key the
+    /// first version chose, which named the only thing it salted.
+    pub fn salt(model: *const Model) []const u8 {
+        return model.salt_buf[0..model.salt_len];
     }
 
     /// The name of the person the sign-in screen is asking about.
@@ -2326,9 +2399,63 @@ pub const Model = struct {
         return model.cart_len == 0;
     }
 
-    /// The sign-in PIN as typed. The view binds this, never the buffer.
-    pub fn pin_text(model: *const Model) []const u8 {
-        return model.pin.text();
+    /// What the sign-in screen shows of the secret being typed: the
+    /// secret when the eye has opened it, and one bullet per character
+    /// when it has not. The view binds this, never the buffer.
+    pub fn credential_display(model: *const Model) []const u8 {
+        return model.masked(model.credential.text());
+    }
+
+    /// The masked face of a secret. The length is shown and the value
+    /// is not: an operator can see they have typed six characters, and
+    /// the person behind them cannot see what they were.
+    pub fn masked(model: *const Model, secret: []const u8) []const u8 {
+        if (model.credential_revealed) return secret;
+        var count: usize = 0;
+        for (secret) |byte| {
+            // A lead byte starts a character; a continuation byte does
+            // not. Counting leads is exact and cannot fail on a buffer
+            // that was clamped mid-sequence.
+            if (byte & 0xc0 != 0x80) count += 1;
+        }
+        return bullets[0 .. count * bullet_len];
+    }
+
+    /// True when the person signing in taps a code rather than types
+    /// one. The two are different surfaces and the model decides which.
+    pub fn sign_in_by_pin(model: *const Model) bool {
+        return model.credential_kind == .pin;
+    }
+
+    /// True when the person signing in types a password.
+    pub fn sign_in_by_password(model: *const Model) bool {
+        return model.credential_kind == .password;
+    }
+
+    /// The line under the sign-in heading, which says what it is asking
+    /// for in the words the person would use.
+    pub fn credential_prompt(model: *const Model) []const u8 {
+        return switch (model.credential_kind) {
+            .pin => "enter your PIN",
+            .password => "enter your password",
+        };
+    }
+
+    /// The eye's word: what pressing it would do.
+    pub fn reveal_label(model: *const Model) []const u8 {
+        if (model.credential_revealed) return "Hide";
+        return "Show";
+    }
+
+    /// The digits a PIN is tapped from, in the order a pad lays them
+    /// out. The pad draws these; it is not ten buttons written out.
+    pub fn pin_digits(_: *const Model) []const DigitOption {
+        return &pin_digit_options;
+    }
+
+    /// How a person can prove who they are, as the forms offer it.
+    pub fn credential_kinds(_: *const Model) []const CredentialKindOption {
+        return &credential_kind_options;
     }
 
     /// True when the cart is the screen being shown, rather than the
@@ -2548,6 +2675,65 @@ const employee_role_options = [_]RoleOption{
     .{ .id = @intFromEnum(domain.EmployeeRole.kitchen), .label = domain.EmployeeRole.kitchen.label() },
     .{ .id = @intFromEnum(domain.EmployeeRole.display), .label = domain.EmployeeRole.display.label() },
 };
+
+/// One key on the PIN pad. The id is the digit's own value, so the
+/// message a tap sends says which key was pressed and nothing else.
+pub const DigitOption = struct {
+    id: usize,
+    label: []const u8,
+};
+
+/// The pad's keys, in reading order: `1` at the top left, `0` last, the
+/// way a keypad has always laid them out.
+const pin_digit_options = [_]DigitOption{
+    .{ .id = 1, .label = "1" },
+    .{ .id = 2, .label = "2" },
+    .{ .id = 3, .label = "3" },
+    .{ .id = 4, .label = "4" },
+    .{ .id = 5, .label = "5" },
+    .{ .id = 6, .label = "6" },
+    .{ .id = 7, .label = "7" },
+    .{ .id = 8, .label = "8" },
+    .{ .id = 9, .label = "9" },
+    .{ .id = 0, .label = "0" },
+};
+
+/// One way of proving who you are, as a form offers it.
+pub const CredentialKindOption = struct {
+    id: usize,
+    label: []const u8,
+};
+
+const credential_kind_options = [_]CredentialKindOption{
+    .{ .id = @intFromEnum(domain.CredentialKind.pin), .label = domain.CredentialKind.pin.label() },
+    .{ .id = @intFromEnum(domain.CredentialKind.password), .label = domain.CredentialKind.password.label() },
+};
+
+/// What a kind costs to satisfy, said to whoever is typing it. The rule
+/// itself is `credential_is_acceptable`; this is the same rule in the
+/// form's own words, so the two cannot disagree by accident.
+fn kindHint(kind: domain.CredentialKind) []const u8 {
+    return switch (kind) {
+        .pin => "6 digits",
+        .password => "8 characters or more",
+    };
+}
+
+/// True when a secret holds nothing but digits, which is what a PIN is.
+/// Empty is not a PIN: it has no digits.
+fn digitsOnly(secret: []const u8) bool {
+    if (secret.len == 0) return false;
+    for (secret) |byte| {
+        if (byte < '0' or byte > '9') return false;
+    }
+    return true;
+}
+
+/// The mask a covered field wears. A bullet is three bytes of UTF-8, and
+/// there are as many of them as the longest secret has characters, so a
+/// masked field is a slice rather than a copy.
+const bullet_len = 3;
+const bullets = [bullet_len]u8{ 0xe2, 0x80, 0xa2 } ** auth.max_secret_len;
 
 /// One tile on the overview: a screen the owner can reach from the
 /// front page.

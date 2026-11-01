@@ -27,8 +27,10 @@ and no transition system. A navigation is three things and nothing else:
 Eatery v1 had 77 `GoRoute` entries with a `redirect:` callback that owned
 the permission check. That callback was the one place that knew what a
 role could open, and it was untested. Restaurant OS moves the same decision into a
-pure function (`core/rbac.zig`) that a test is meant to walk in full (the
-current matrix test is tautological; see the documentation audit),
+pure function (`core/rbac.zig`) that a test walks in full — every role
+against every screen, with the pairs that must be allowed and the pairs
+that must be refused named, and a shell-partition test per app that
+compares the markup's gates against it -
 and leaves the drawing of the result to the markup.
 
 The consequence that matters in practice: **the view never decides where
@@ -265,9 +267,12 @@ fn resetNavigation(model: *Model, gate: Screen) void {
 }
 ```
 
-A PIN role's sign-out resets to `login`; a kiosk role's sign-out resets
-to the role picker. A successful sign-in resets to the role's home, so
-the sign-in screen is never behind the first screen of the session.
+A person role's sign-out resets to the sign-in gate, which keeps asking
+the person who just left - the row is read again, so the surface is
+theirs and not the screen's memory. A kiosk role's sign-out, and a
+sign-out by a person whose row has since been removed, resets to the
+role picker. A successful sign-in resets to the role's home, so the
+sign-in screen is never behind the first screen of a session.
 
 ### How the stack is reached from the markup
 
@@ -317,13 +322,16 @@ pub const Role = enum {
     display,
 ```
 
-One binary, four dispatch modes. The role decides the home screen, the
-rail and the allowed screens.
+Three binaries, four dispatch modes between them: admin carries Admin,
+service carries Waiter, kiosk carries Kitchen and Display. A binary runs
+only the roles it was built for, and the picker offers those and no
+others. The role decides the home screen, the rail and the allowed
+screens.
 
 | Role | Label | Sign-in | Home screen | Rail sections | Allowed screens |
 |---|---|---|---|---|---|
-| `admin` | Admin | PIN | `admin_dashboard` | Dashboard, POS, Orders, Dining, Menu, Team, Settings | 53 (all) |
-| `waiter` | Waiter | PIN | `waiter_tables` | Service | 15 |
+| `admin` | Admin | PIN or password | `admin_dashboard` | Dashboard, POS, Orders, Dining, Menu, Team, Settings | 53 (all) |
+| `waiter` | Waiter | PIN or password | `waiter_tables` | Service | 15 |
 | `kds` | Kitchen | none (device) | `kds_board` | Kitchen | 4 |
 | `display` | Display | none (device) | `display_board` | Display | 4 |
 
@@ -690,7 +698,7 @@ and that difference cascades.
 
 ```zig
 // src/core/navigation.zig
-/// Kiosk roles sign in by device, not by PIN.
+/// Kiosk roles sign in by being the device, not by a credential.
 pub fn needs_sign_in(self: Role) bool {
     return switch (self) {
         .admin, .waiter => true,
@@ -701,13 +709,13 @@ pub fn needs_sign_in(self: Role) bool {
 
 | | `admin` / `waiter` | `kds` / `display` |
 |---|---|---|
-| Session start | role picker, then PIN entry | role picker only |
-| `signed_in` set by | `login_checked` (a matching PIN hash) | `pick_role` |
+| Session start | the picker of people, then the pad or the password field | the picker of device modes only |
+| `signed_in` set by | `login_checked` (the row's own hash verified) | `pick_role` |
 | Operator identity | `employee_id` + `employee_name` | none (`operator_label` reads "Not signed in") |
 | Home screen | `admin_dashboard` / `waiter_tables` | `kds_board` / `display_board` |
 | Data loaded | after a successful sign-in | immediately on role pick |
 | Allowed screens | 43 / 12 | 4 / 4 |
-| Lockout, PIN change, reset | yes | none |
+| Lockout, credential reset | yes | none |
 
 The update arm is where the difference is visible:
 
@@ -717,15 +725,12 @@ The update arm is where the difference is visible:
     model.role = role;
     model.role_chosen = true;
     model.login_error = "";
-    model.error_text = "";
-    if (role.needs_sign_in()) {
-        go(model, .login);
-    } else {
-        // Kiosk roles are signed in by device.
-        model.signed_in = true;
-        go(model, rbac.home(role));
-        repos.loadAll(fx);
-    }
+    model.role = role;
+    model.role_chosen = true;
+    if (role.needs_sign_in()) return;
+    // Kiosk roles are signed in by device.
+    model.signed_in = true;
+    repos.loadAll(model, fx);
 },
 ```
 
@@ -739,66 +744,96 @@ honest and worth stating plainly:
 - a kiosk cannot reach anything that moves money, which is the actual
   mitigation.
 
-The PIN path is the mirror image, and the salt is the reason two
-restaurants with the same PIN do not share a digest:
+The person path is the mirror image, and the salt is derived per
+employee so two people with the same secret do not share a hash
+([ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)):
 
 ```zig
 .submit_login => {
-    if (model.pin_salt().len == 0) {
-        model.login_error = "Still starting up - try again in a moment";
+    if (model.login_locked()) {
+        model.login_error = "Too many wrong tries - try again in a moment";
         return;
     }
-    if (model.pin.text().len == 0) {
-        model.login_error = "Enter your PIN";
+    if (model.credential.text().len == 0) {
+        model.login_error = missingSecret(model.credential_kind);
         return;
     }
-    auth.hashPin(model.pin_salt(), model.pin.text(), &model.login_hash);
+    // Nobody is signing in without a person: the picker chose who, and
+    // the secret says they are that person.
+    if (model.sign_in_employee_id == 0) {
+        model.login_error = "Choose who you are first";
+        return;
+    }
     fx.dbQuery(.{
         .key = repos.key_login,
-        .sql = login_sql,
-        .params = &.{.{ .text = model.login_hash[0..] }},
+        // The hash is not computed here: the row's own hash is verified
+        // against the secret, and that is ONE slow hash.
+        .sql = repos.login_sql,
+        .params = &.{.{ .integer = model.sign_in_employee_id }},
         .on_result = Effects.dbMsg(.login_checked),
     });
 },
 ```
 
-The plaintext PIN never reaches the database, and the view binds a
-derived method rather than the buffer:
+The credential never reaches the database at all - the row is fetched by
+id and verified in Zig - and the view never reaches it either. The field
+binds a masked derived method rather than the buffer, and the buffer is
+named in `Model.view_unbound`:
 
 ```zig
-/// The sign-in PIN as typed. The view binds this, never the buffer.
-pub fn pin_text(model: *const Model) []const u8 {
-    return model.pin.text();
+/// What the sign-in screen shows of the secret being typed: the
+/// secret when the eye has opened it, and one bullet per character
+/// when it has not. The view binds this, never the buffer.
+pub fn credential_display(model: *const Model) []const u8 {
+    return model.masked(model.credential.text());
 }
 ```
 
-### What a kiosk device looks like today
+A PIN does not use the field. The same buffer is filled by taps on a
+numeric pad, and the row's `auth_kind` decides which of the two surfaces
+the screen draws.
 
-A kiosk device is the same binary with a different role, and it still
-shows the role picker, the title bar, the nav rail and the status bar.
-The role picker itself announces the difference:
+### What the picker shows, per binary
+
+One heading - "Who is using this device?" - and two different answers.
+The kiosk binary has no people on it at all: nobody types a credential
+into a wall-mounted board, so it lists the two device modes. Admin and
+service list the people who work there, and each row says in its own
+badge how that person signs in.
 
 ```xml
-<for each="roles" key="id" as="role">
-  <card padding="16">
-    <column gap="4" main="center">
-      <text size="lg">{role.title}</text>
-      <text foreground="text_muted" wrap="true">{role.blurb}</text>
-      <row gap="8" cross="center">
-        <badge>{role.kind}</badge>
-        ...
+<if test="{show_people}">
+  <for each="employees" key="id" as="employee">
+    <card padding="16">
+      <column gap="4" main="center">
+        <text size="lg">{employee.name}</text>
+        <text foreground="text_muted" wrap="true">{employee.role_label}</text>
+        <row gap="8" cross="center">
+          <badge>Sign in with {employee.credential_label}</badge>
+          <spacer grow="1"/>
+          <button variant="primary" on-press="pick_employee:{employee.id}">Sign in</button>
+        </row>
+      </column>
+    </card>
+  </for>
+</if>
 ```
 
-with the `kind` field carrying "PIN sign-in" or "Kiosk":
+The device rows are a file-scope constant, and they carry the "Kiosk"
+badge that says no credential is wanted:
 
 ```zig
-const role_cards = [_]RoleCard{
-    .{ .id = @intFromEnum(Role.admin), .title = "Admin", .blurb = "Full point of sale, management, configuration and reports.", .kind = "PIN sign-in" },
-    .{ .id = @intFromEnum(Role.waiter), .title = "Waiter", .blurb = "Order taking, table management and the floor plan.", .kind = "PIN sign-in" },
+const device_cards = [_]RoleCard{
     .{ .id = @intFromEnum(Role.kds), .title = "Kitchen", .blurb = "Live kitchen tickets, station by station. No sign-in.", .kind = "Kiosk" },
     .{ .id = @intFromEnum(Role.display), .title = "Display", .blurb = "Customer-facing order status. No sign-in.", .kind = "Kiosk" },
 };
 ```
+
+Choosing a person is not a sign-in; it names one. Their row's stored role
+becomes the device's mode - so the picker never asks twice, and the mode
+comes from the binary's own role table, which is what keeps the two lists
+from disagreeing - and the next screen is the pad or the field, by their
+`auth_kind`.
 
 ## PLAN: several windows over one model
 

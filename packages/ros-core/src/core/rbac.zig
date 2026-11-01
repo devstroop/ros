@@ -15,8 +15,9 @@ const Screen = nav.Screen;
 
 /// Admin is the wildcard. Waiter is the front of house and the counter
 /// POS: the waiter takes orders and money. The two kiosk roles are
-/// device-scoped and sign in without a PIN, so their lists are short
-/// and deliberately exclude anything that changes money.
+/// device-scoped - they sign in by being the device, with no credential
+/// at all - so their lists are short and deliberately exclude anything
+/// that changes money.
 pub fn allows(role: Role, screen: Screen) bool {
     return switch (role) {
         .admin => true,
@@ -35,7 +36,7 @@ pub fn allows(role: Role, screen: Screen) bool {
             .order_detail,
             .order_confirmation,
             .customers,
-            .reset_pin,
+            .reset_credential,
             => true,
             else => false,
         },
@@ -88,9 +89,9 @@ pub fn role_for_employee(stored_role: i64) ?Role {
 ///
 /// The device's mode and the employee's role are two different things: a
 /// till in "Admin" mode needs an employee whose stored role is `admin`.
-/// A sign-in has to agree on both - otherwise a waiter's PIN opens an
-/// admin session, and the permission matrix below stops being a
-/// permission matrix at all.
+/// A sign-in has to agree on both - otherwise a waiter's credential
+/// opens an admin session, and the permission matrix below stops being
+/// a permission matrix at all.
 pub fn employee_role(role: Role) domain.EmployeeRole {
     return switch (role) {
         .admin => .admin,

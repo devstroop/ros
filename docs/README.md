@@ -117,10 +117,12 @@ template. The short version:
   session-scoped navigation (ADR-0015), what a PIN is (ADR-0016), three
   apps over TCP/IP (ADR-0017), the PIN hash is the employee's
   (ADR-0018), cross-device order identity (ADR-0019), late join and
-  compaction (ADR-0020), the counter POS is the service app (ADR-0021).
+  compaction (ADR-0020), the counter POS is the service app (ADR-0021),
+  a person chooses how they sign in (ADR-0022).
 - Superseded: one binary with four roles (ADR-0004, by ADR-0017);
   clock-based order IDs (ADR-0013, by ADR-0014); salted SHA-256 PIN
-  hashing (ADR-0007, by ADR-0016).
+  hashing (ADR-0007, by ADR-0016); ADR-0016's installation-wide salt
+  (by ADR-0018) and its six-digits-only rule (in part, by ADR-0022).
 - Proposed (need an owner): printing sidecar, desktop-first, CSV-first
   interchange.
 

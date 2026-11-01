@@ -3,9 +3,9 @@
 > **Status:** Snapshot. Regenerate by reading the source, not by trusting
 > this page. The detailed counts below describe the admin app; the
 > service and kiosk mount their role's subsets of the same core.
-> **Last verified:** 2026-10-24, by source review and the split suites.
+> **Last verified:** 2026-10-31, by source review and the split suites.
 > `scripts/verify-all.sh` is green for ros-core, admin, kiosk, net-spike
-> and service; the suites are admin 154/154, kiosk 8/8, net-spike 13/13,
+> and service; the suites are admin 211/211, kiosk 8/8, net-spike 13/13,
 > service 10/10 and ros-core 43/43.
 > `native build` produces ReleaseFast binaries.
 > `scripts/package.sh --ci` and `--check` produce and verify three macOS
@@ -27,14 +27,14 @@
 | Templates mounted in the shell | 53 in the admin (46 on the screen ordinal, seven session screens on their own condition); the service and kiosk mount their role's subset | `apps/{admin,service,kiosk}/src/app.native` |
 | Screens that render at all | 53 in the admin | every mounted template builds; a test asserts it |
 | Templates with a render test | 53 in the admin | `apps/admin/src/tests.zig` (the screen-coverage test builds each one, and finds a landmark of its own) |
-| `Msg` variants | 205 | `packages/ros-core/src/core/msg.zig` |
+| `Msg` variants | 219 | `packages/ros-core/src/core/msg.zig` |
 | Tables | 46 | `apps/admin/src/schema/*.sql` |
-| Migrations | 17 | `apps/admin/src/schema/migrations.lock.json` version 17 |
-| Read queries | 16 named constants | `packages/ros-core/src/data/repos.zig` (one named constant each, and one place that says the app is loading) |
-| Write paths | setup, order + lines, status + history, config, currency, product, employee, employee PIN, employee removal, customer, category, tax slab, discount, modifier group, dish station, stock count, payment, op log, reference version, log compaction, snapshot apply | `repos.zig` |
-| Effect keys | 62, each used once | `packages/ros-core/src/data/repos.zig`; a test asserts the uniqueness |
-| Headless tests | admin 154/154, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
-| Database integration tests | 104, green | `apps/admin/src/tests_data.zig` |
+| Migrations | 20 | `apps/admin/src/schema/migrations.lock.json` version 20 |
+| Read queries | 33 named constants | `packages/ros-core/src/data/repos.zig` (one named constant each, and one place that says the app is loading) |
+| Write paths | setup, order + lines, status + history, config, currency, product, employee, employee credential (hash and kind), employee removal, customer, category, tax slab, discount, modifier group, dish station, stock count, payment, op log, reference version, log compaction, snapshot apply | `repos.zig` |
+| Effect keys | 67, each used once | `packages/ros-core/src/data/repos.zig`; a test asserts the uniqueness |
+| Headless tests | admin 211/211, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
+| Database integration tests | 144, green | `apps/admin/src/tests_data.zig` |
 | Sidecar binaries | 0 | `tools/*` contain READMEs only |
 | CI workflows | 1 (verify, smoke, package) | `.github/workflows/ci.yml` |
 | Reusable component templates | 0 | `src/components/` empty |
@@ -45,7 +45,7 @@
 |---|---|---|
 | Build and manifest | Partial | Three `app.json` manifests, scripts, CI and the macOS package job exist; Developer ID/notarisation and the clean-machine proof remain |
 | App model | Implemented | Model, Msg, update, boot, effects keys |
-| Role picker and login | Partial | bcrypt PIN hashes, kiosk sign-in and the admin's first-run setup exist; the sign-in checks the employee's stored role (B-002) and waits for the database to confirm the salt (B-003). A service or kiosk waits for the admin's reference data instead of setting up. The PIN field is still typed in the clear (B-027, #96) |
+| Role picker and login | Partial | bcrypt credential hashes, kiosk sign-in and the admin's first-run setup exist; the sign-in checks the employee's stored role (B-002) and waits for the database to confirm the salt (B-003). A service or kiosk waits for the admin's reference data instead of setting up. A person signs in as themselves on the picker, and their row decides whether the till offers the numeric pad or a masked password field with an eye; neither shows the secret (B-027, #96, [ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)) |
 | RBAC and navigation | Implemented core | 53 screens, 4 roles, one guard, a session-scoped stack ([ADR-0015](../decisions/0015-session-scoped-navigation.md)). The waiter opens the counter POS (`pos`, `pos_cart`, `payments`); the admin app remains the wildcard superset ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)) |
 | Screen coverage | Implemented | 53 screens in the admin app; every one is mounted, renders, and has a landmark of its own. The seven session screens are mounted on their own condition, the other forty-six on their ordinal gate. The service and kiosk mount their role's subset |
 | Theming | Implemented | Four registers - light, dark, warm, night - and a high-contrast derivation of whichever one is chosen, kept on the device in `app_config`; the restaurant's own `#rrggbb` drives the accent, the label on it and the focus ring. Every text pair is asserted against WCAG AA, in all eight palettes |
@@ -56,9 +56,9 @@
 | Kitchen board | Implemented | Tickets, summary, wait time, advance |
 | Floor board | Partial | The table board shows what is true about each table; a guest cannot be moved to another table |
 | Customers | Partial | The list, the count, the load and the form all work - a customer can be written and edited. A customer still cannot be attached to an order, so the loyalty points are only ever earned by hand |
-| Employees | Partial | The list and the form work; a PIN can be reset by a manager, and an employee who has left can be removed - the row stays, so the orders they took still name them, and the last admin cannot be removed |
+| Employees | Partial | The list and the form work; how a person signs in can be reset by a manager - the same form chooses PIN or password and writes the new hash, so the old sign-in stops working the moment it is saved - and an employee who has left can be removed: the row stays, so the orders they took still name them, and the last admin cannot be removed |
 | Catalog admin | Partial | The catalogue list, the product form, the categories, the tax slabs, the discounts and the modifier groups all work. The CHOICES inside a modifier group, and which dishes a group applies to, do not |
-| Settings / setup | Partial | The admin's first run is the walk-through: the company's record, then the owner and their PIN, written in one transaction with the starter menu, the salt and six tables. The quick setup stays for an owner who wants to start serving sooner. A service or kiosk that starts first waits for the admin's reference data and cannot set up a second restaurant |
+| Settings / setup | Partial | The admin's first run is the walk-through: the company's record, then the owner and the credential they choose - a PIN or a password - written in one transaction with the starter menu, the salt and six tables. The quick setup stays for an owner who wants to start serving sooner. A service or kiosk that starts first waits for the admin's reference data and cannot set up a second restaurant |
 | Payments | Partial | Cash/card/UPI mode, confirmation and one payment write; a payment is taken once, and an order can still be closed without one. The service app takes payments too: the waiter's device owns the op and the order's status transition makes a retry the same sale ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)) |
 | Reports / compliance | Partial | The owner's read of the day exists: the takings, the orders, the tax, the discounts, and the way the money was paid. The X report, the Z report and the day close are the reports track's |
 | Printing | Scaffolded | Tables and README-only sidecar; no code |
@@ -66,13 +66,14 @@
 | Push / events | Implemented | `/v1/events` held open, chunked NDJSON, one thread per stream, 20ms wake, 15s heartbeat; one stream per peer, line-triggered pull, pending-pull follow-up, terminal reopen; 5s poll fallback |
 | Display board | Partial | The board renders and shows the order cards |
 | Waiter shell | Partial | The floor, the menu, the cart, the order list, the counter POS and payments render; the tables screen has "Counter sale" and "Payments" entry points |
-| Testing | Partial | The split suites are green via `scripts/verify-all.sh` (admin 202/202, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43); each app walks its shell against the permission matrix; `scripts/smoke-sale.sh` walks the sale, the four registers, the restaurant colour and the kitchen board headlessly (#42) |
+| Testing | Partial | The split suites are green via `scripts/verify-all.sh` (admin 211/211, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43); each app walks its shell against the permission matrix; `scripts/smoke-sale.sh` walks the sale, the four registers, the restaurant colour and the kitchen board headlessly (#42) |
 | Packaging | Partial | `scripts/package.sh` builds three macOS DMGs, injects each app's `NSLocalNetworkUsageDescription`, signs ad-hoc by default (Developer ID + notarisation through `ROS_SIGNING_IDENTITY` / `ROS_NOTARY_PROFILE`), and verifies the checksums and the app inside each DMG. CI's **Package (macOS)** job uploads the three DMGs; the clean-machine sign-off and the hosted update feed remain. See [`operations/release.md`](../operations/release.md) |
 
 ## Flows that work
 
-1. Choose Admin → PIN → dashboard (given an externally seeded employee
-   whose stored role is admin).
+1. Choose Admin → pick yourself on the people list → the pad or the
+   password field → dashboard (given an employee whose stored role is
+   admin).
 2. Orders → advance status → `orders.status` + `order_status_history`
    (given an externally seeded order).
 3. Choose Kitchen → board → advance tickets.
@@ -88,9 +89,9 @@
    the company, it reaches every till in the reference document, and the
    theme derives the accent, its label and the focus ring from it.
 7. The admin's setup creates a starter menu, six tables, the operator
-   and the installation salt; the operator signs in with the PIN they
-   chose. The service and kiosk copy the menu and the people from the
-   admin's reference document.
+   and the installation salt; the operator signs in with the credential
+   they chose, tapped or typed. The service and kiosk copy the menu and
+   the people from the admin's reference document, `auth_kind` included.
 8. An order placed on the service app reaches the kiosk board on the
    event line, without waiting for the five-second poll; the poll is
    still the fallback when the stream is down.
@@ -111,7 +112,7 @@ B-001/B-005 failures are history.
    (B-001, B-005); the integration test reads the order back.
 3. **Sign-in with the wrong role.** FIXED: the sign-in query is scoped to
    the session's role and the returned row is checked against it, so a
-   waiter's PIN no longer opens an admin session (B-002).
+   waiter's credential no longer opens an admin session (B-002).
 4. **Sign-in before the salt is confirmed.** FIXED: the sign-in waits
    until the database has confirmed the salt, and the setup writes the
    salt with the operator's hash (B-003).
@@ -151,18 +152,18 @@ a docs change.
 | D3 | ~~`loadAll` omits `loadCustomers`~~ | `packages/ros-core/src/data/repos.zig` (`loadAll`) | FIXED: `loadAll` calls `loadCustomers`; the list and the form load (B-015) |
 | D4 | Shell gates are hard-coded ordinals | `src/app.native` | A test now pins the gated ordinals against the enum, so inserting a screen fails the suite instead of remapping the UI (B-023) |
 | D5 | `orders` header badge says "open" but uses `order_count` (non-voided, including completed) | `src/screens/screen-orders.native` | Misleading count (B-012) |
-| D6 | `auth.equal` is tested but unused by the login path | `src/data/auth.zig` | Constant-time compare is not actually protecting login (B-027) |
+| D6 | ~~`auth.equal` is tested but unused by the login path~~ | `src/data/auth.zig` | FIXED: the helper is gone with the fetch-and-verify rewrite ([ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)). A modern hash is checked by bcrypt's own `strVerify`, and a legacy digest by a plain `std.mem.eql`; the login compares digests, never the secret itself, so there is no secret for a timing signal to give up (B-027) |
 | D7 | `app.json` declares a 960×600 minimum and restore policy; `main.zig` shell config does not | `app.json`, `src/main.zig` | `native dev` can open an unsupported window (B-024) |
 | D8 | ~~`busy` is set on write, not on read~~ | `src/core/update.zig` | FIXED: every read goes through `repos.query`, so the app knows it is loading, and a failed read is remembered with the screen it failed for (B-021, E-004) |
 | D9 | ~~No screen-coverage test~~ | `src/tests.zig` | FIXED: a test builds every gated screen and every screen in the enum, and asserts the widget budget. It found four screens that could never render (D20) |
-| D10 | ~~CI smoke asserts only a non-blank canvas~~ | `.github/workflows/ci.yml` | FIXED: `scripts/smoke-sale.sh` walks setup → sign out → role picker → PIN → till → orders → KDS through the admin and kiosk binaries, and the `sale-smoke` job fails when a screen is not the screen it claims to be (G-018, #42) |
+| D10 | ~~CI smoke asserts only a non-blank canvas~~ | `.github/workflows/ci.yml` | FIXED: `scripts/smoke-sale.sh` walks setup → sign out → the pad → the picker → the till → orders → Team → the password field → KDS through the admin and kiosk binaries, and the `sale-smoke` job fails when a screen is not the screen it claims to be (G-018, #42) |
 | D11 | No `build.zig` / `build.zig.zon` in the app | app root | Fine while managed; blocks linking a C library until `native eject` |
 | D12 | ~~`view_unbound` lists `pending_screen`, which is not a field~~ | `src/core/model.zig` | FIXED: the stale entry is gone and the salt state is listed |
 | D13 | ~~Order insert omitted `orders.updated_at`, which is `NOT NULL` with no default~~ | `packages/ros-core/src/data/repos.zig` (`saveOrder`), `apps/admin/src/schema/0005_orders.sql` | FIXED: the insert writes `updated_at`; the integration test reads the order back (B-001) |
 | D14 | ~~Login query ignores `employee.role`; the chosen role decides the session~~ | `src/core/update.zig` (`login_checked`), `src/data/repos.zig` (`login_sql`) | FIXED: the query asks for the session's role and the returned row is checked against it (B-002) |
 | D15 | ~~Order table/customer ids were written as `0`, not `NULL`~~ | `packages/ros-core/src/core/update.zig` (`placeOrder`) | FIXED: absent ids are written as `NULL` (B-005) |
 | D16 | ~~`decodeCompany` kept slices into page drain memory~~ | `src/data/repos.zig` (`decodeCompany`) | FIXED: every decoder copies text into the model's bump buffer, and a regression test overwrites the page after decoding to prove it (B-004) |
-| D17 | ~~PIN is a fast SHA-256 over four digits, with no lockout or masking~~ | `src/data/auth.zig`, `src/screens/screen-login.native` | FIXED: bcrypt at 2^10 rounds, six digits, and the till stops after five wrong PINs. The PIN field is still typed in the clear: the SDK has no masked text field (B-027, [ADR-0016](../decisions/0016-what-a-pin-is.md)) |
+| D17 | ~~PIN is a fast SHA-256 over four digits, with no lockout or masking~~ | `src/data/auth.zig`, `src/screens/screen-session.native` | FIXED: bcrypt at 2^10 rounds, six digits, and the till stops after five wrong credentials. The masking came with [ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md): neither surface shows the secret, because the model holds it and the markup binds a masked value - a dot for each tapped digit, a bullet for each typed character (B-027) |
 | D18 | ~~Setup exists but has gaps (currency symbol field, no disabled submit)~~ | `apps/admin/src/screens/screen-session.native`, `packages/ros-core/src/core/update.zig` | FIXED: the setup carries the currency symbol and refuses an incomplete form; the admin owns the first run |
 | D19 | ~~Status advance is not conditional; history can duplicate~~ | `src/core/update.zig` (`advance_order`), `src/data/repos.zig` (`setOrderStatus`) | FIXED: the move happens only from the status the order is in, and the history is written only when it did (B-008) |
 | D20 | Four screens bound counts the model does not have (`customer_count`, `reservation_count`, `supplier_count`, `purchase_order_count`) | `src/screens/screen-customers.native`, `screen-reservations.native`, `screen-suppliers.native`, `screen-purchase-orders.native` | FIXED: those rail destinations could never render at all. The counts are model methods now |
@@ -170,15 +171,15 @@ a docs change.
 | D22 | ~~The amounts are shown with two decimals whatever the currency is~~ | `packages/ros-core/src/core/model.zig` (`currency_divisor`), `apps/{admin,service,kiosk}/src/screens/*.native` | FIXED: the company carries its currency's decimals, the divisor comes from the model, and no amount divides by a hundred in the markup (B-013) |
 | D23 | An order can be closed without a payment | `src/core/update.zig` (`nextStatus`) | The kitchen can advance a ticket straight to closed and the money is never taken (B-014) |
 | D24 | ~~Back from home exposed the login screen; the stack froze at depth 32; cart/search/filters survived sign-out and role change~~ | `src/core/update.zig` (`resetSession`, `go`), `src/core/navigation.zig` (`Stack.push`) | FIXED: one session reset path, session gates are roots, pushing the current screen is a no-op and a full stack drops its oldest entry ([ADR-0015](../decisions/0015-session-scoped-navigation.md); B-009, B-010, B-011) |
-| D25 | The PIN salt is per installation, not per employee | `src/data/auth.zig` | A database that is cracked gives up every PIN, not one ([ADR-0016](../decisions/0016-what-a-pin-is.md)) |
+| D25 | ~~The PIN salt is per installation, not per employee~~ | `src/data/auth.zig` | FIXED: the bcrypt salt is derived from the installation salt *and* the employee's id, and a bcrypt string carries its own salt, so a row is one person's and verifies on a device that never saw the installation salt ([ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)). A cracked database still gives up every hash it holds - which is what the slow KDF, not the salt, is for ([ADR-0016](../decisions/0016-what-a-pin-is.md)) |
 | D26 | A table with an order on it still said "Free" | `src/data/repos.zig` (`openOrderForTable`, `takePayment`) | FIXED: the table is occupied when the order opens and free when it is paid for, in the same transaction as each |
 | D27 | The lists showed what the restaurant had finished with | `src/data/repos.zig` (the list queries) | FIXED: the categories, tables, customers and suppliers are filtered on `active` |
 | D28 | The shell's import closure was full | `apps/admin/src/screens/` | FIXED: the screens of one area share one file, so the ceiling is no longer the reason the forms had to share |
 | D29 | An empty pane and a working screen looked the same | `src/tests.zig` | FIXED: every screen has a landmark of its own, and the test finds it |
-| D26 | The failed-PIN counter is per session | `src/core/model.zig` | A restart clears it, so a determined guesser restarts (B-027) |
+| D26 | The failed-credential counter is per session | `src/core/model.zig` | A restart clears it, so a determined guesser restarts (B-027, [ADR-0016](../decisions/0016-what-a-pin-is.md) follow-up) |
 | D27 | ~~A second instance could confirm its own salt after a no-op write~~ | `src/core/update.zig` (`config_saved`) | FIXED: a successful salt write is read back; the model adopts the stored salt and only confirms that one (B-028) |
-| D30 | The first run was one form with six fields on it, and it asked for nothing an invoice needs | `src/screens/screen-session.native`, `src/core/update.zig` | FIXED: the first run is the walk-through the roadmap names - the company's record, then the owner and their PIN - and the restaurant is written whole or not at all |
-| D31 | A manager could not reset a PIN without SQL, and could not remove somebody who had left | `src/screens/screen-people.native`, `src/data/repos.zig` | FIXED: the reset writes a new hash and the old PIN stops working; the removal keeps the row and takes the person off the team, and the last admin is protected |
+| D30 | The first run was one form with six fields on it, and it asked for nothing an invoice needs | `src/screens/screen-session.native`, `src/core/update.zig` | FIXED: the first run is the walk-through the roadmap names - the company's record, then the owner and the credential they choose, a PIN or a password - and the restaurant is written whole or not at all |
+| D31 | A manager could not reset how a person signs in without SQL, and could not remove somebody who had left | `src/screens/screen-people.native`, `src/data/repos.zig` | FIXED: the reset form chooses the kind as well as the secret and writes both, so the old sign-in stops working the moment it is saved; the removal keeps the row and takes the person off the team, and the last admin is protected |
 | D32 | The owner could not see what the restaurant took, and could not count the stock | `src/screens/screen-overview.native`, `src/screens/screen-catalog.native` | FIXED: the payments, the report, the stock count and the dishes' stations are all screens the owner can write to |
 | D33 | An owner could not write a customer or a modifier group | `src/screens/screen-floor.native`, `src/screens/screen-settings.native` | FIXED: both have a form, and a group with no name is refused |
 | D34 | The database inspector counted the tables in a list the app kept, and the list could drift from the schema | `src/data/repos.zig` (`table_counts_sql`) | FIXED: a test compares the list with what SQLite says, so a table the schema adds and the inspector forgets is a failing test |
@@ -191,7 +192,8 @@ a docs change.
 | D42 | Appearance could be read and could not be used: its buttons were at the bottom of a scroll nobody scrolled | `src/screens/screen-settings.native`, `scripts/smoke-sale.sh` | FIXED: the card sits above the scroll. Every palette screenshot the walkthrough took came back in the same dark register, because the widgets were in the tree and off the pane - the presses were delivered to a control the operator could not see. The walkthrough now asserts the chosen state each register button reports and the canvas's own centre pixel, so a palette that stops painting fails there |
 | D43 | The look the device was given was gone at the next boot | `src/data/repos.zig`, `src/core/{model,msg,update}.zig`, `src/tests_data.zig`, `scripts/smoke-sale.sh` | FIXED: `theme_palette` and `theme_contrast` are kept in `app_config` beside the salt - no migration, they are settings rather than records - written the moment the choice is made and read back with the rest of the boot. A read that lands after a tap does not undo it; the operator's choice is the truth. The stored look belongs to the file, so a copied database carries it, which is noted in `docs/glossary.md` |
 | D44 | The restaurant had no colour of its own anywhere: the brand lived in the app's stylesheet and died there | `src/schema/0019_company_brand.sql`, `src/data/repos.zig`, `src/net/reference.zig`, `src/core/{model,theme,msg,update}.zig`, `src/screens/screen-settings.native`, `src/tests{,_data}.zig`, `scripts/smoke-sale.sh` | FIXED: `company.brand_color` is `#rrggbb` or nothing, typed in Settings → Company and saved with the rest of the restaurant's record. The theme reads it through the parser the form validates with, so the two cannot disagree, and it drives the accent, the label on that accent and the focus ring - nothing else, because a void is red in every restaurant. A brand the register cannot carry is walked toward the extreme it has room for, which keeps the hue and moves only its strength; a brand that can is used exactly as typed. It travels in the reference document, so a till that has never met the admin's stylesheet draws the awning's colour. The contrast test wears six brands over all eight palettes, and the walkthrough refuses a half-typed hash and reads a whole one back |
-| D45 | The shell's edges were wrong on every device: nothing under the title bar, the rail's hairline floating 9px off its own surface, and the rail's body a shouted heading over a list with the operator dropped under it | `src/app.native` (all three apps), `scripts/check-copies.sh`, `scripts/verify-all.sh`, `apps/service/src/tests.zig`, `docs/architecture/{06-ui-markup-and-theming,ui-components,navigation-and-roles}.md` | FIXED: a `separator` under the title bar, because a `row` has no border code path at all - `border-color` on one is accepted and paints nothing; `gap="2"` on the rail's split, which is the divider band's thickness, so the line sits against the surface instead of in the middle of transparent space; the NAVIGATION heading gone, and the person anchored to the foot of the rail past a `spacer`, because they are not a destination. The chrome lives in three files that no gate compared, which is how one fix goes out on one device - `check-copies.sh` now compares the shell up to the content pane and the status bar, and the pane's own `screen_index` gates stay excluded because they are what differs per role |
+| D46 | The credential fields' labels floated beside the box or were `label=` text nobody could see: the PIN pad's display carried a label that replaced its own accessible name, and the setup, login and reset forms drew label, field and eye on three different lines | `src/screens/{screen-session,screen-people}.native` (all three apps), `scripts/smoke-sale.sh` | FIXED: the form pattern the rest of the app uses - a `<column gap="4">` with a `<text size="sm" foreground="text_muted">` directly above the field, and the eye as the last child of a `row cross="end"` so it sits on the field's bottom edge rather than the label's. The pad's bullets got the same treatment, which also un-stuck the walkthrough: a `label=` on the bullet text replaces the name the snapshot publishes, so `tap_pin` could never read the dots back. The visible-label rule now passes on a label that is above the field rather than merely next to it |
+| D47 | Signing out left a gate that named nobody: "- enter your PIN" over a pad, whatever the person who had just left signed in with | `src/core/update.zig`, `src/tests{,_data}.zig`, `scripts/smoke-sale.sh` | FIXED: the person waiting at the gate is the caller's business, not the reset's. A successful sign-in ends the picker's pending choice, and a sign-out hands the gate back to the person whose session just ended, with the surface their row says they use - both read the row through one `choose_sign_in`, so the pad-or-field answer comes from the staff list rather than from whatever the screen last showed. A person whose row has gone during their session goes back to the picker, because a gate for nobody is a gate a secret gets typed at no one. The walkthrough now signs out into the gate the person left, and into the field for the password they were changed to |
 
 B-002 and B-003 are fixed in the working tree of 2026-10-21, with the
 effect-key collision (D21) and the four unrenderable screens (D20) found
@@ -206,7 +208,7 @@ by line from each product's own slab, a discount is spread across the
 lines and the tax follows it, a payment is taken once, and every
 transition is conditional. What is left of the money is the price
 parser and rounding (#66), an order that can close without a payment
-(D23), and the PIN's strength (B-027). The full order is in the
+(D23), and the lockout that a restart clears (B-027, D26). The full order is in the
 [audit](../review/archive/2026-10-20-audit.md).
 
 The compile-time `makeSalt` mismatch and the invisible-error-banner gap
@@ -220,14 +222,18 @@ the suites themselves, and `scripts/verify-all.sh` runs all of them.
 
 | Test | Area |
 |---|---|
-| Role picker first, four roles | Navigation |
-| PIN role → login | Session |
-| Kiosk role → board | Session |
+| The picker is the first screen and lists the device modes | Navigation |
+| The picker lists the people who work here | Navigation |
+| Picking a person opens the sign-in surface that is theirs | Session |
+| The pad taps a PIN one digit at a time | Session |
+| The secret shows as bullets, and the eye opens it | Session |
+| A person whose role is not this app's is refused | RBAC |
+| Picking a board signs the device in and opens it | Session |
 | Back from home after a sign-in stays home | Session / Stack |
 | Signing out clears the cart, filters and operator | Session |
 | Changing role ends the previous session | Session |
 | Role cannot open forbidden screen | RBAC |
-| Matrix is total (tautological; see D-007) | RBAC |
+| The permission matrix is total: every role against every screen | RBAC |
 | Back returns | Stack |
 | A full history drops its oldest entry, so navigation never freezes | Stack |
 | Pressing the current destination does not grow the history | Stack |
@@ -247,11 +253,19 @@ the suites themselves, and `scripts/verify-all.sh` runs all of them.
 | A move that does not apply leaves the order where it is | Orders |
 | A payment is taken once | Payment |
 | Integer money | Domain |
-| PIN hashing | Auth |
-| A waiter's PIN does not open an admin session | Session |
-| A sign-in waits for the database to confirm the salt | Auth |
-| A failed salt write is not a confirmed salt | Auth |
+| A PIN is hashed, never stored | Auth |
+| A PIN verifies against its own hash and nothing else | Auth |
+| Two employees with the same PIN have different hashes | Auth |
+| The old hash still verifies, so a running restaurant still works | Auth |
+| A person signs in to the role this app runs, and nobody else | Session |
+| The sign-in checks one person, not the whole staff list | Session |
+| A legacy PIN waits for the database to confirm the salt | Auth |
+| A failed salt write does not make the salt look confirmed | Auth |
+| A fresh installation gets a salt, stores it, and keeps it | Auth |
 | A second instance adopts the salt that is already stored | Auth |
+| A PIN shorter than six digits is refused | Auth |
+| The till stops taking PINs after too many wrong ones | Auth |
+| An old PIN is rewritten in the modern form the next time it signs in | Auth |
 | The page decoder | Data |
 | A decoded company does not point at the page bytes | Data |
 | A brand colour that is not a colour is refused | Data |
@@ -279,7 +293,12 @@ the suites themselves, and `scripts/verify-all.sh` runs all of them.
 | The walk-through takes a restaurant from nothing to a POS | Setup |
 | The setup Symbol field writes the symbol, not the code | Setup |
 | A fresh database asks to be set up | Setup |
-| A manager can reset an employee's PIN | People |
+| A manager can reset how an employee signs in | People |
+| A row from before the choice signs in with a PIN | People |
+| An employee is saved and can sign in | People |
+| The setup refuses a PIN that does not match | Setup |
+| An owner can open the restaurant with a password | Setup |
+| The reference says how each person signs in | Sync |
 | An employee who has left is not on the team and cannot sign in | People |
 | The last admin cannot be removed | People |
 | The payments screen shows the money the restaurant took | Money |
@@ -298,7 +317,6 @@ the suites themselves, and `scripts/verify-all.sh` runs all of them.
 | The app says it is loading while a read is on its way | Shell |
 | A read that fails is something the operator can try again | Shell |
 | A failure belongs to the screen that asked, not to the pane | Shell |
-| The rail is the role's sections and the person, and no heading over them | Shell |
 | Every session screen renders, inside the widget budget | Markup |
 | A fresh installation shows the walk-through, not the quick setup | Setup |
 | The event stream stays open, and a normal request still gets through | Wire |

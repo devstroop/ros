@@ -35,7 +35,7 @@ missed ticket is a lost meal.
 | Waiter menu/cart/orders | No templates |
 | Waiter flows | Order taking, table transfer, split bill, course timing |
 | Ticket actions | Only "next"; no recall, void, hold, re-fire |
-| Kiosk exit | No gesture or PIN to leave a kiosk role |
+| Kiosk exit | No gesture and no manager's credential to leave a kiosk role |
 | Offline | No queue if the database is busy |
 
 ## Tasks
@@ -51,7 +51,8 @@ missed ticket is a lost meal.
 6. **Build the waiter templates**: tables, menu, cart, orders.
 7. **Decide waiter-specific behaviour**: table transfer, split bill,
    course, customer note.
-8. **Add a kiosk exit** (long-press, hidden button, or manager PIN).
+8. **Add a kiosk exit** (long-press, hidden button, or a manager's
+   credential).
 9. **Add a KDS render/automation test** for a seeded set of tickets.
 10. **Define the board ordering and priority rules** (oldest first now;
     is a late ticket promoted?).

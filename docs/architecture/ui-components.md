@@ -283,14 +283,21 @@ The three controls in the app that would otherwise be unnamed:
 
 ```xml
 <text-field
-  text="{pin_text}"
-  placeholder="PIN"
-  label="PIN"
-  on-input="pin_edit"
+  grow="1"
+  text="{credential_display}"
+  placeholder="Your password"
+  label="Password"
+  on-input="credential_edit"
   on-submit="submit_login"
   autofocus="true"
 />
+<button size="sm" variant="ghost" icon="eye" label="{reveal_label}" on-press="toggle_reveal">{reveal_label}</button>
 ```
+
+`credential_display` is the masked face of the secret the model holds -
+one bullet per character until the eye opens it - so the field is named
+for what it is, and never for the value. A PIN does not use a field at
+all: it is tapped on a pad of `button`s, one per digit.
 
 ```xml
 <button size="icon" icon="x" label="Remove one" on-press="remove_from_cart:{line.product_id}"/>

@@ -35,7 +35,7 @@ pub const Role = enum {
         };
     }
 
-    /// Kiosk roles sign in by device, not by PIN.
+    /// Kiosk roles sign in by being the device, not by a credential.
     pub fn needs_sign_in(self: Role) bool {
         return switch (self) {
             .admin, .waiter => true,
@@ -55,7 +55,7 @@ pub const Screen = enum {
     setup,
     wizard,
     create_company,
-    reset_pin,
+    reset_credential,
     upgrade,
 
     // admin surfaces
@@ -133,7 +133,7 @@ pub const Screen = enum {
             .wizard => "Setup wizard",
             .create_company => "Create company",
             .login => "Sign in",
-            .reset_pin => "Reset PIN",
+            .reset_credential => "Reset sign-in",
             .upgrade => "Upgrade",
             .admin_dashboard => "Dashboard",
             .control_center => "Control centre",
@@ -225,9 +225,9 @@ pub const RoleCard = struct {
 // markup reads these rows on a later frame.
 //
 // They are the DEVICE modes only. A kitchen board and a customer
-// display sign in by being the device, and nobody types a PIN into
-// them. The people who work here are on the picker's other list, and
-// their stored role says which mode they work in.
+// display sign in by being the device, and nobody types a credential
+// into them. The people who work here are on the picker's other list,
+// and their stored role says which mode they work in.
 const device_cards = [_]RoleCard{
     .{ .id = @intFromEnum(Role.kds), .title = "Kitchen", .blurb = "Live kitchen tickets, station by station. No sign-in.", .kind = "Kiosk" },
     .{ .id = @intFromEnum(Role.display), .title = "Display", .blurb = "Customer-facing order status. No sign-in.", .kind = "Kiosk" },

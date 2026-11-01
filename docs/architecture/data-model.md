@@ -183,7 +183,7 @@ authority on what has shipped:
 
 ```json
 {
-  "version": 16,
+  "version": 20,
   "hashes": ["…one SHA-256 per migration, in order…"],
   "schema_hash": "…one hash over the whole set…"
 }
@@ -234,7 +234,7 @@ migration. Once a release ships, that stops.
 
 ## 3. Table inventory
 
-46 tables across seventeen migrations, every one `STRICT`. One line each.
+46 tables across twenty migrations, every one `STRICT`. One line each.
 
 ### 0001 — `core.sql` (4 tables)
 
@@ -244,8 +244,8 @@ The company, its currency, its people and its settings.
 |---|---|---|
 | `company` | The one company this database belongs to | `id`, `name`, `currency_code`, `currency_symbol`, `tax_inclusive`, `created_at` |
 | `currency` | One row per supported currency, so the picker has a list | `code` (PK), `symbol`, `minor_units` |
-| `employee` | Staff; the PIN is a salted SHA-256 hex digest | `id`, `name`, `role` (0–3), `pin_hash`, `active`, `created_at` |
-| `app_config` | Key/value settings — schema version, device role, PIN salt, current shift | `key` (PK), `value`, `updated_at` |
+| `employee` | Staff; the sign-in secret is a bcrypt hash of a PIN or a password | `id`, `name`, `role` (0–3), `pin_hash`, `active`, `created_at` |
+| `app_config` | Key/value settings — schema version, device role, the installation salt (key `pin_salt`), current shift | `key` (PK), `value`, `updated_at` |
 
 ### 0002 — `catalog.sql` (7 tables)
 
@@ -384,6 +384,17 @@ it is sent here instead of replaying. See
 | `sync_snapshot` | One compacted generation and its clocks | `version` (PK), `clocks`, `created_at` |
 | `sync_snapshot_op` | The encoded wire lines of that generation | `version` → `sync_snapshot`, `seq`, `line`; PK `(version, seq)` |
 
+### 0018, 0019, 0020 — three columns, no tables
+
+These add a column to an existing table, so they are listed here rather
+than as table sections. `05-schema.md` carries each one's reasoning.
+
+| Migration | Column | What it means |
+|---|---|---|
+| `0018_order_line_stock.sql` | `order_line.stock_taken` | Whether this database's shelf figure has a plate in it, so a later void knows to put it back. A snapshot-restored device never replays the sale. |
+| `0019_company_brand.sql` | `company.brand_color` | `#rrggbb` the restaurant draws with; `''` means the register's own accent. Company-wide, so it rides in the reference document, not in `app_config`. |
+| `0020_employee_credential.sql` | `employee.auth_kind` | 0 a PIN, 1 a password. The kind belongs to the person, and it decides the surface the till offers and the length rule the form applies. |
+
 ### Indexes
 
 Twenty-nine indexes exist, at the columns the current queries touch:
@@ -416,7 +427,7 @@ and reservations by `status`.
 |---|---|
 | `repos.zig` | The SQL, the effect keys, the loaders, the decoders, the writers. |
 | `page.zig` | The reader for the engine's row format. |
-| `auth.zig` | PIN hashing. Pure — no clock, no allocation, no effects. |
+| `auth.zig` | Credential hashing — bcrypt, salted per installation and per employee. Pure: no clock, no allocation, no effects. Slow on purpose, which is the only thing that makes it different from a digest. |
 
 ### How `repos.zig` is organised
 
@@ -692,10 +703,10 @@ stale, and the app does not have to guess.
 
 | Use | Why a one-shot is right |
 |---|---|
-| The sign-in check | `SELECT id, name, role FROM employee WHERE pin_hash = ?1 AND active = 1 LIMIT 1;` — a point lookup, not a stream |
+| The sign-in check | `SELECT id, name, role, auth_kind, pin_hash FROM employee WHERE id = ?1 AND active = 1 LIMIT 1;` — the picker names the person, so the row is fetched and its hash verified in Zig |
 | The menu and categories | The catalogue changes on an admin screen, not continuously |
 | The company row | `LIMIT 1`; one company per database |
-| `app_config` | The PIN salt is fetched once at boot |
+| `app_config` | The installation salt is fetched once at boot |
 | Reports and exports | A bounded range read |
 | A page of the order history | Paging, not a subscription |
 
@@ -734,195 +745,202 @@ read on the same path.
 
 ---
 
-## 6. The PIN and salt design
+## 6. The credential and salt design
+
+A person signing in is asked for one of two secrets — a tapped PIN or a
+typed password — and the database says which before the app asks. The
+hash, the salt and the check are the same for both; what differs is the
+surface and the length rule. See
+[ADR-0016](../decisions/0016-what-a-pin-is.md),
+[ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md) and
+[ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md).
 
 ### The shape of it
 
 | Piece | Where | Detail |
 |---|---|---|
-| Hash of the PIN | `employee.pin_hash` | `TEXT NOT NULL DEFAULT ''` — a 64-character hex digest |
-| Salt | `app_config` where `key = 'pin_salt'` | 64 hex characters, generated once per installation |
-| Hashing | `data/auth.zig` → `hashPin(salt, pin, out)` | SHA-256 over `salt || pin`, hex-encoded |
-| Salt generation | `data/auth.zig` → `makeSalt(io, out)` | 32 random bytes, hex-encoded, written once |
-| Comparison | `data/auth.zig` → `equal(a, b)` | Constant-time, no early exit |
+| Hash of the credential | `employee.pin_hash` | `TEXT NOT NULL DEFAULT ''` — a bcrypt crypt string, `$2b$10$<salt>$<digest>`. The name is what it held first; renaming a shipped column rewrites an on-disk contract for a word. |
+| Which secret | `employee.auth_kind` | `INTEGER NOT NULL DEFAULT 0` — 0 a PIN, 1 a password. Added by `0020`, and part of the reference document. |
+| Salt | `app_config` where `key = 'pin_salt'` | 64 hex characters, generated once per installation. The key literal is a shipped name too. |
+| Hashing | `data/auth.zig` → `hashCredential(salt, employee_id, secret, out)` | bcrypt at `cost = 10`, `silently_truncate_password = false`. Returns null rather than a half-made hash. |
+| Salt used by the hash | `deriveSalt(installation salt, employee_id)` | bcrypt's own 16 salt bytes, taken from the installation salt with the employee's id mixed in whole — so two employees with the same secret never share a hash. |
+| Verification | `data/auth.zig` → `verifyCredential(salt, secret, stored)` | A bcrypt string carries its salt, so this needs the installation salt only for a legacy digest. |
+| Length rules | `auth.min_pin_len` 6, `max_pin_len` 16, `min_password_len` 8, `max_secret_len` 72 | Per kind, because the guess space is a rule about typing. 72 is bcrypt's own ceiling, enforced so a longer secret is refused rather than truncated. |
+| Locked out | `model.login_failures`, `login_locked_until` | Five wrong secrets, then a minute of refusing even the right one. Session-scoped. |
 
-### Why salted SHA-256, and why per installation
+### Why bcrypt, and why per employee as well
 
-A PIN is a password, and PINs are short: four to six digits, so a
-million candidates at most, which a modern GPU exhausts in seconds
-against an unsalted digest. Two things follow.
+A credential is a password, and PINs are short: six digits is a hundred
+thousand candidates, which a modern GPU exhausts in seconds against a
+fast unsalted digest. Three things follow, and they pull against each
+other.
 
-**The salt defeats the precomputed table.** Every installation has its
-own salt, so the same PIN produces a different digest on every device:
+**The hash has to be slow.** A single SHA-256 over a four-digit PIN is a
+list of ten thousand candidates, and a stolen database — a backup, a
+laptop, a photograph of the screen — becomes every credential in the
+restaurant. bcrypt at 2^10 rounds is about a tenth of a second per
+guess: a pause at a once-per-shift sign-in, a season for anyone
+guessing. It is deliberately not memory-hard, because the model is built
+with `.{}.` and cannot own tens of megabytes.
 
-```zig
-/// Hash a PIN with the installation salt, hex-encoded.
-///
-/// The salt is stored in `app_config` (see the schema) and never leaves
-/// the device.
-pub fn hashPin(salt: []const u8, pin: []const u8, out: *[hex_len]u8) void {
-    var digest: [32]u8 = undefined;
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(salt);
-    hasher.update(pin);
-    hasher.final(&digest);
-```
-
-**The salt is not a secret.** It lives in `app_config` in the same
-database as the hashes. Its job is to make the digests unlinkable across
-installations, not to be secret. Two restaurants with the same PIN do
-not share a digest, so one database's hash table tells an attacker
-nothing about another's.
-
-### The plaintext never reaches the database
-
-The check happens in SQL, and the candidate hash is a query parameter:
+**The hash has to be findable, and then it does not have to be.** Under
+ADR-0007 the sign-in computed one digest and asked the database which
+row owned it, which is why the salt had to be the installation's — a
+random salt would have meant hashing once per employee per attempt. The
+employee picker removed that constraint: the person names themselves
+first, the query selects their row by id, and the row's own hash checks
+the secret.
 
 ```zig
-/// The SQL behind a sign-in attempt. The PIN is hashed before it gets
-/// here - the database never sees a plaintext PIN.
+/// The SQL behind a sign-in attempt. The person is chosen by the
+/// picker, so the row is fetched and its hash verified in Zig - the
+/// database never sees the credential at all.
 pub const login_sql =
-    \\SELECT id, name, role FROM employee
-    \\WHERE pin_hash = ?1 AND active = 1
+    \\SELECT id, name, role, auth_kind, pin_hash FROM employee
+    \\WHERE id = ?1 AND active = 1
     \\LIMIT 1;
 ;
 ```
 
-The plaintext lives in the model only for the duration of the attempt, in
-a `canvas.TextBuffer(8)`, and is cleared whether the attempt succeeds or
-fails:
+**The salt defeats the precomputed table, twice.** Per installation, so
+two restaurants with the same secret do not share a hash; per employee,
+so a cracked database gives up one credential rather than every one.
+It is DERIVED rather than random because `update` is pure and the SDK
+has no randomness effect: `deriveSalt` mixes the employee's id into the
+installation salt, and the id is known when the hash is made.
 
 ```zig
-.pin_edit => |event| model.pin.apply(event),
+/// Hash a credential for storage. The bcrypt salt is derived from the
+/// installation salt and the employee's id, so the hash is that
+/// employee's and nobody else's - and it carries its own salt and cost,
+/// which is what lets a second device check it without the installation
+/// salt.
+pub fn hashCredential(salt: []const u8, employee_id: i64, secret: []const u8, out: *[hash_length]u8) ?[]const u8 {
+    const derived = deriveSalt(salt, employee_id) orelse return null;
+    const options: bcrypt.HashOptions = .{
+        .params = .{ .rounds_log = cost, .silently_truncate_password = false },
+        .encoding = .crypt,
+    };
+    const written = bcrypt.strHashWithSalt(secret, options, out, derived) catch return null;
+    return written;
+}
 ```
 
-```zig
-model.login_error = "Sign-in failed - try again";
-model.pin.set("");
-```
+### The plaintext reaches neither the database nor the view
 
-The digest being checked lives in `model.login_hash` — "the hash of the
-PIN being checked. Lives in the model so the query parameter has a
-stable home" — and it never enters the `Employee` domain struct:
+The sign-in fetches the row and calls `verifyCredential` in Zig, so no
+hash is ever a query parameter and the database never sees a plaintext
+credential.
 
-```zig
-/// A staff member. The PIN hash never enters this struct: the login
-/// check happens in SQL, and only the id and display name come back.
-pub const Employee = struct {
-    id: i64,
-    name: []const u8,
-    role: i64,
-    active: bool,
-};
-```
+The secret lives in the model as a `canvas.TextBuffer(auth.max_secret_len)`
+— `credential` at the till, `setup_credential` and `setup_credential2`
+in the wizard, `form_reset_credential_buf` on the Team form — and every
+one of them is in `Model.view_unbound`. What the markup binds is
+`credential_display()`: the secret when the eye has opened it, and one
+bullet per character when it has not.
+
+That is a mask the app owns rather than a field mode the SDK offers, and
+the difference matters for the caret. Content events on a
+`TextBuffer` are caret-relative, so editing a buffer whose view shows
+bullets still lands in the right place; `move_caret` and
+`set_selection` are absolute byte offsets into whatever the view last
+saw, which is not the secret. `applySecretEdit` applies the edit and
+pins the caret back. The bullets count characters, not bytes — a
+nine-character password shows nine of them, in three bytes each.
+
+The secret is cleared on every outcome: a wrong one, a locked till, a
+mismatched kind, and a session that reset after a right one.
+
+### The kind decides the surface, and the row decides the kind
+
+`Employee` carries `auth_kind` and its `credential_label`, so the picker,
+the forms and the sign-in screen all ask the same question in the words
+the person would use: "enter your PIN" over a numeric pad, "enter your
+password" over a masked field.
+
+The employee list the app loaded is a convenience. The row the sign-in
+fetches is the truth, and if the two disagree the kind flips, the secret
+is cleared, the screen explains itself — *"This person signs in with a
+password - type it"* — and **no failure is counted**. A change made on
+another device is the app's own bookkeeping problem, not something the
+person should be locked out for.
 
 ### The salt lifecycle
 
 The salt is a **provisional** value at boot and becomes real when the
-database confirms it.
+database confirms it. `model.salt_state` is a `SaltState` —
+`.unknown`, `.installing`, `.verifying`, `.confirmed` — because the
+sequence is not one step.
 
 1. `main.zig` generates a provisional salt, because this is the only
    place with an `Io`:
 
    ```zig
-   auth.makeSalt(init.io, &app_state.model.pin_salt_buf);
-   app_state.model.pin_salt_len = app_state.model.pin_salt_buf.len;
+   auth.makeSalt(init.io, &app_state.model.salt_buf);
+   app_state.model.salt_len = app_state.model.salt_buf.len;
    ```
-
-   `model.salt_is_provisional` starts `true`.
 
 2. `boot` asks the database for the stored salt
    (`repos.loadConfig` → `fx.dbQuery` → `Msg.config_loaded`).
 
-3. The `config_loaded` arm takes one of three paths:
+3. The `config_loaded` page:
+
+   * **No row, or an empty value** → a fresh installation. The state
+     becomes `.installing`, and the query's terminal `.done` result
+     writes the provisional salt with `createSalt`. If the read comes
+     back empty while the state is `.verifying`, the write did not land:
+     sign-in is blocked and the error says so, because retrying there
+     loops.
+   * **A row with a value** → adopt it over the provisional one and set
+     `.confirmed`. Only now can the reference document be built (admin)
+     or its version read (peer), because the employee hashes were made
+     with that salt.
+
+4. `config_saved` is not proof. `saveConfigValue` writes
+   `ON CONFLICT DO NOTHING`, so a second instance that stored a different
+   salt first still reports success. The state goes to `.verifying` and
+   the salt is read back.
+
+5. A sign-in against a **legacy digest** waits for `.confirmed`, because
+   that is the one hash the installation salt is needed for:
 
    ```zig
-   .config_loaded => |result| {
-       if (result.outcome != .ok) return;
-       if (result.kind != .page) return;
-       var reader = page.Reader.init(result.bytes);
-       var values: [page.max_columns]page.Value = undefined;
-       if (!reader.readHeader() or !reader.nextRow(&values)) {
-           // No salt yet: this is a fresh installation. Make one.
-           createSalt(model, fx);
-           return;
-       }
-       const salt = reader.textOf(&values, "value");
-       if (salt.len == 0) {
-           createSalt(model, fx);
-           return;
-       }
-       const copied = model.pin_salt_buf[0..];
-       const length = @min(salt.len, copied.len);
-       @memcpy(copied[0..length], salt[0..length]);
-       model.pin_salt_len = length;
-       model.salt_is_provisional = false;
-   },
-   ```
-
-   * No row, or an empty value → fresh installation → `createSalt`
-     writes the provisional salt to the database.
-   * A row with a value → adopt the stored salt, overwriting the
-     provisional one, and clear the provisional flag.
-
-   ```zig
-   /// A fresh installation keeps the salt made at boot and writes it once.
-   /// The PIN hashes are useless without it, so it is persisted before the
-   /// first sign-in is possible.
-   fn createSalt(model: *Model, fx: *Effects) void {
-       model.salt_is_provisional = false;
-       repos.saveConfigValue(fx, repos.key_config, "pin_salt", model.pin_salt(), fx.wallMs());
+   if (auth.isLegacy(stored) and (model.salt().len == 0 or model.salt_state != .confirmed)) {
+       model.login_error = "Still starting up - try again in a moment";
+       model.credential.clear();
+       return;
    }
    ```
 
-4. Sign-in currently refuses only an **empty** salt. It does not yet
-   check `salt_is_provisional`, so a very fast sign-in can still race the
-   first config read. This is a known defect (see `plan/status.md`, D1),
-   not the intended design:
+   A bcrypt hash needs nothing but its own string, so it never waits.
+   This closes the race the earlier version of this page recorded as a
+   known defect.
 
-   ```zig
-   .submit_login => {
-       if (model.pin_salt().len == 0) {
-           model.login_error = "Still starting up - try again in a moment";
-           return;
-       }
-   ```
+### Replacing an old digest
 
-### The comparison helper
-
-```zig
-/// Compare two hashes without an early exit - a constant-time compare
-/// keeps the check honest even though the attacker controls neither
-/// side's timing in a meaningful way here.
-pub fn equal(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    var difference: u8 = 0;
-    for (a, b) |x, y| difference |= x ^ y;
-    return difference == 0;
-}
-```
-
-The sign-in path compares in SQL (`pin_hash = ?1`), so `equal` is not on
-that path today. It exists for the paths where two digests meet in Zig:
-a PIN change that re-hashes against the stored hash, and the reset-PIN
-flow.
+A hash written before bcrypt is a bare sixty-four-character hex digest,
+and `isLegacy` says so by shape. Such a row still signs in — a restaurant
+that has been running is not stopped by a decision about its storage —
+and the sign-in computes the modern hash *before* the session reset
+clears the secret it is made from, then writes it. The old digest is
+worth nothing to anyone holding the database, and that moment is when it
+stops being worth something. After the rewrite the row carries its own
+salt, so a second device can check it with nothing else.
 
 ### The test
 
 ```zig
-test "a PIN is hashed, never stored" {
-    auth.hashPin("salt", "1234", &hash_a);
-    auth.hashPin("salt", "1234", &hash_b);
-    auth.hashPin("other-salt", "1234", &hash_c);
-
-    try testing.expectEqualSlices(u8, &hash_a, &hash_b);
-    // A different salt gives a different hash: two restaurants with
-    // the same PIN do not share a digest.
-    try testing.expect(!std.mem.eql(u8, &hash_a, &hash_c));
-    try testing.expect(auth.equal(&hash_a, &hash_b));
-    try testing.expect(!auth.equal(&hash_a, &hash_c));
+test "two employees with the same PIN have different hashes" {
+    auth.hashCredential(salt, 1, "123456", &hash_a);
+    auth.hashCredential(salt, 2, "123456", &hash_b);
+    ...
 }
 ```
+
+`tests_data.zig` covers the rest of the path against the real schema: the
+sign-in checks one person rather than the whole staff list, a row from
+before `auth_kind` signs in with a PIN, the row overrides a stale list
+without counting a failure, and the reference document carries the kind.
 
 ---
 
@@ -934,7 +952,7 @@ comments the Restaurant OS code carries about its predecessor.
 | v1 | Restaurant OS | Why it matters |
 |---|---|---|
 | Money in `REAL` columns — `grandTotal REAL`, `mrpPrice REAL`, `discountRate REAL` | Money in `INTEGER` minor units; rates in basis points | Binary floats lose cents. A day's total cannot be reconstructed exactly from them. |
-| `employee.pin TEXT` — the PIN in the clear | `employee.pin_hash TEXT` — a salted SHA-256 digest | A curious operator with a database file could read any PIN, and a stolen file leaked every PIN at once. |
+| `employee.pin TEXT` — the PIN in the clear | `employee.pin_hash TEXT` — a bcrypt hash, and `auth_kind` says what it hashes | A curious operator with a database file could read any PIN, and a stolen file leaked every PIN at once. A digest of a four-digit code leaks them anyway; see [ADR-0016](../decisions/0016-what-a-pin-is.md). |
 | `company.password TEXT` | Removed; the company row carries no credential | One credential, one place, one algorithm. |
 | 39 tables with loose affinity, no `STRICT` | 46 tables, every one `STRICT`, every enum constrained by a `CHECK` | A declared type has to mean something, or the mistake surfaces three layers away. |
 | No type discipline on enums — `productType INTEGER`, `type INTEGER` with no allowed set | `CHECK (product_type IN (0, 1, 2, 3, 4))`, `CHECK (status IN (0, 1, 2, 3, 4, 5))`, `CHECK (role IN (0, 1, 2, 3))` | The database refuses an impossible state, not the app. |

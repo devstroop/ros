@@ -36,7 +36,7 @@ rules and the checklist for adding a screen.
 | The markup never mutates state | One place decides what is true |
 | Derived values are methods | A stored field that could be computed drifts |
 | Permissions are a pure function | A permission check you cannot test is not a permission check |
-| PINs are salted and hashed | v1 stored them in the clear |
+| A credential is a slow hash, salted per person | v1 stored PINs in the clear |
 | Migrations are append-only | The lock file is the authority for what has shipped |
 
 ## Commit messages
@@ -45,7 +45,7 @@ The repository uses Conventional Commits:
 
 ```
 feat(pos): modifier sheet with per-group selection
-fix(auth): reject a PIN when the installation salt is missing
+fix(auth): wait for the salt before checking a legacy digest
 docs(plan): mark the payments screen as phase 2
 refactor(model): move the cart into its own module
 ```

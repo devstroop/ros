@@ -16,7 +16,7 @@ calling the till something else.
 | **Orders** | Every ticket the restaurant is still working, and the paid ones below it. | — |
 | **Dining** | The room: tables, their status, reservations, customers. | Floor, Dining tables |
 | **Menu** | What the restaurant sells: dishes, categories, prices, stock, suppliers. | Catalog, Catalogue |
-| **Team** | The people with a PIN on this device. | People, Employees, staff |
+| **Team** | The people who sign in to this restaurant, with a PIN or a password. | People, Employees, staff |
 | **Settings** | Company, currency, tax, discounts, printers, data. | System |
 | **Kitchen** | The board the cooks work from. | — |
 | **Display** | The screen the room reads. | — |
@@ -62,8 +62,31 @@ been rung up: it is one whose money has been taken.
 
 - **Role** — how a device runs: Admin, Waiter, Kitchen, Display.
 - **Operator** — the person signed in right now.
-- **Team member** — an account with a PIN. The database row is still
+- **Team member** — an account that signs in. The database row is still
   `employee`; the screen never says "employee" to a person.
+
+## Signing in
+
+- **Credential** — the one word for what a person types or taps to prove
+  who they are. The app has two kinds, and a person uses one of them;
+  the row says which.
+- **PIN** — six to sixteen digits, tapped on the pad, because a till is
+  used with an elbow in view of a queue. Short, numeric, and masked to
+  dots even on the pad.
+- **Password** — eight characters or more, typed in the field. A pad has
+  no shift key, so a password is never asked for on one.
+- **The pad** — the numeric surface a PIN is tapped on, with Clear and
+  Back. It is the PIN's only input, and it cannot type a letter.
+- **Show / Hide** — the eye beside a secret. It opens the value on the
+  screen the person is holding; it changes nothing that is stored, and
+  it carries a word as well as the glyph, because the icon set has an
+  eye and no eye-off.
+- **Sign-in** — the act, and the name of the button that performs it.
+  Not "log in", not "authenticate": an operator signs in.
+- **Too many wrong tries** — what the till says after five wrong
+  credentials in a row, when it refuses even the right one for a minute.
+  The screen names the state in the operator's words, not in a
+  countdown.
 
 ## Appearance
 

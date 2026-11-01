@@ -478,7 +478,7 @@ test "the picker lists the people who work here" {
     _ = try expectByText(tree.root, .text, "Waiter");
 }
 
-test "picking a person lands on the PIN screen, in the mode they work in" {
+test "picking a person opens the sign-in surface that is theirs" {
     // The kiosk shows the device modes, not people.
     if (app == .kiosk) return;
 
@@ -492,6 +492,17 @@ test "picking a person lands on the PIN screen, in the mode they work in" {
     var model = main.initialModel();
     model.employees = &.{
         .{ .id = 7, .name = "Sam", .role = @intFromEnum(rbac.employee_role(boot)), .role_label = boot.label(), .active = true },
+        .{
+            .id = 8,
+            .name = "Ravi",
+            .role = @intFromEnum(rbac.employee_role(boot)),
+            .role_label = boot.label(),
+            .active = true,
+            // A manager who types rather than taps. The kind is the
+            // person's, so it comes off the row and nowhere else.
+            .auth_kind = .password,
+            .credential_label = domain.CredentialKind.password.label(),
+        },
     };
     main.update(&model, .{ .pick_employee = 7 }, &fx);
 
@@ -508,6 +519,94 @@ test "picking a person lands on the PIN screen, in the mode they work in" {
     const tree = try buildTree(arena, &model);
     _ = try expectByText(tree.root, .text, "Sign in");
     _ = try expectByText(tree.root, .text, "Sam - enter your PIN");
+
+    // A PIN is tapped, so the pad is on the screen and no keyboard
+    // field is: one of the two surfaces is built at a time, never both.
+    try testing.expect(model.sign_in_by_pin());
+    _ = try expectByText(tree.root, .button, "Clear");
+    _ = try expectByText(tree.root, .button, "Back");
+
+    // The other person is asked for the other thing, in the other
+    // shape. Choosing a person resets the session, so this is the same
+    // screen rebuilt rather than a second screen.
+    main.update(&model, .{ .pick_employee = 8 }, &fx);
+    try testing.expect(model.sign_in_by_password());
+    const other = try buildTree(arena, &model);
+    _ = try expectByText(other.root, .text, "Ravi - enter your password");
+    _ = try expectByText(other.root, .text, "Password");
+    _ = try expectByText(other.root, .button, "Show");
+    try testing.expect(findByText(other.root, .button, "Clear") == null);
+}
+
+test "the secret shows as bullets, and the eye opens it" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    model.credential.set("s3cret");
+
+    // Six keys pressed, six dots shown, and none of them the ones
+    // that were pressed. A queue can see how far along the cashier is
+    // and nothing else.
+    const masked = model.credential_display();
+    try testing.expectEqual(@as(usize, 6 * 3), masked.len);
+    try testing.expect(std.mem.indexOf(u8, masked, "s3cret") == null);
+
+    // The eye changes the face only. The buffer keeps what it holds,
+    // because that is what gets hashed.
+    main.update(&model, .{ .toggle_reveal = {} }, &fx);
+    try testing.expectEqualStrings("s3cret", model.credential_display());
+    try testing.expectEqualStrings("Hide", model.reveal_label());
+
+    main.update(&model, .{ .toggle_reveal = {} }, &fx);
+    try testing.expectEqualStrings("Show", model.reveal_label());
+    try testing.expectEqualStrings(masked, model.credential_display());
+
+    // A character is a character and not a byte: a password with an
+    // accented key in it shows one dot for each key, not one for each
+    // byte of it.
+    model.credential.set("café-pass");
+    try testing.expectEqual(@as(usize, 9 * 3), model.credential_display().len);
+}
+
+test "the pad taps a PIN one digit at a time" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+
+    // The order a keypad has always laid them out: 1 at the top left,
+    // 0 last. The pad draws this table; it is not ten buttons typed
+    // out in markup, so a missing key cannot go unnoticed.
+    const digits = model.pin_digits();
+    try testing.expectEqual(@as(usize, 10), digits.len);
+    try testing.expectEqualStrings("1", digits[0].label);
+    try testing.expectEqual(@as(usize, 1), digits[0].id);
+    try testing.expectEqualStrings("0", digits[9].label);
+    try testing.expectEqual(@as(usize, 0), digits[9].id);
+
+    for ([_]usize{ 4, 8, 2, 1, 5, 5 }) |digit| {
+        main.update(&model, .{ .credential_digit = @intCast(digit) }, &fx);
+    }
+    try testing.expectEqualStrings("482155", model.credential.text());
+    try testing.expectEqual(@as(usize, 6 * 3), model.credential_display().len);
+
+    // Back gives one digit up; Clear starts over. Both are pad keys,
+    // because a tapped code has no caret and no keyboard to edit it.
+    main.update(&model, .{ .credential_back = {} }, &fx);
+    try testing.expectEqualStrings("48215", model.credential.text());
+    main.update(&model, .{ .credential_clear = {} }, &fx);
+    try testing.expectEqual(@as(usize, 0), model.credential.text().len);
+    main.update(&model, .{ .credential_back = {} }, &fx);
+    try testing.expectEqual(@as(usize, 0), model.credential.text().len);
+
+    // And the pad stops taking digits at the length a PIN is allowed
+    // to reach, so a stuck key cannot grow the buffer forever.
+    for (0..auth.max_pin_len) |_| {
+        main.update(&model, .{ .credential_digit = 7 }, &fx);
+    }
+    main.update(&model, .{ .credential_digit = 7 }, &fx);
+    try testing.expectEqual(auth.max_pin_len, model.credential.text().len);
 }
 
 test "a person whose role is not this app's is refused" {
@@ -1016,6 +1115,11 @@ test "signing out clears the cart, the filters and the operator" {
     model.selected_category = 1;
     model.employee_id = 7;
     model.employee_name = "Anita";
+    // The gate a sign-out lands on asks the person who just left, so
+    // the session has to be somebody the staff list knows.
+    model.employees = &.{
+        .{ .id = 7, .name = "Anita", .role = @intFromEnum(rbac.employee_role(boot)), .role_label = boot.label(), .active = true },
+    };
     model.error_text = "Something went wrong";
 
     main.update(&model, .{ .sign_out = {} }, &fx);
@@ -1029,6 +1133,12 @@ test "signing out clears the cart, the filters and the operator" {
     try testing.expectEqual(gate, model.screen());
     try testing.expectEqual(@as(i64, 0), model.employee_id);
     try testing.expectEqualStrings("", model.employee_name);
+    // The gate keeps the person, because a gate that names nobody is a
+    // gate a secret gets typed at no one.
+    if (gate == .login) {
+        try testing.expectEqual(@as(i64, 7), model.sign_in_employee_id);
+        try testing.expectEqualStrings("Anita", model.sign_in_employee_name());
+    }
     try testing.expectEqual(@as(usize, 0), model.cart_count());
     try testing.expectEqual(@as(usize, 0), model.search.text().len);
     try testing.expectEqual(@as(i64, 0), model.selected_category);
@@ -1110,9 +1220,9 @@ test "a PIN is hashed, never stored" {
     var hash_b: [auth.hash_length]u8 = undefined;
     var hash_c: [auth.hash_length]u8 = undefined;
 
-    const a = auth.hashPin(salt, 1, "123456", &hash_a) orelse return error.NoHash;
-    const b = auth.hashPin(salt, 1, "123456", &hash_b) orelse return error.NoHash;
-    const c = auth.hashPin("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 1, "123456", &hash_c) orelse return error.NoHash;
+    const a = auth.hashCredential(salt, 1, "123456", &hash_a) orelse return error.NoHash;
+    const b = auth.hashCredential(salt, 1, "123456", &hash_b) orelse return error.NoHash;
+    const c = auth.hashCredential("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 1, "123456", &hash_c) orelse return error.NoHash;
 
     // The same PIN, the same salt and the same employee give the same
     // hash: the hash is made from what the app knows.
@@ -1132,14 +1242,14 @@ test "a PIN is hashed, never stored" {
 test "a PIN verifies against its own hash and nothing else" {
     const salt = "0123456789abcdef0123456789abcdef";
     var hash: [auth.hash_length]u8 = undefined;
-    const stored = auth.hashPin(salt, 1, "123456", &hash) orelse return error.NoHash;
+    const stored = auth.hashCredential(salt, 1, "123456", &hash) orelse return error.NoHash;
 
-    try testing.expect(auth.verifyPin(salt, "123456", stored));
-    try testing.expect(!auth.verifyPin(salt, "123457", stored));
+    try testing.expect(auth.verifyCredential(salt, "123456", stored));
+    try testing.expect(!auth.verifyCredential(salt, "123457", stored));
     // The hash carries the salt it was made with, so it verifies on
     // its own terms: the installation is what scopes the LOOKUP, not
     // the check.
-    try testing.expect(auth.verifyPin("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "123456", stored));
+    try testing.expect(auth.verifyCredential("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "123456", stored));
 }
 
 test "the old hash still verifies, so a running restaurant still works" {
@@ -1149,29 +1259,30 @@ test "the old hash still verifies, so a running restaurant still works" {
 
     // The old digest is recognised as old, and it verifies.
     try testing.expect(auth.isLegacy(stored));
-    try testing.expect(auth.verifyPin(salt, "123456", stored));
-    try testing.expect(!auth.verifyPin(salt, "123457", stored));
+    try testing.expect(auth.verifyCredential(salt, "123456", stored));
+    try testing.expect(!auth.verifyCredential(salt, "123457", stored));
     // A bcrypt string is not an old one.
     var modern: [auth.hash_length]u8 = undefined;
-    const bcrypt_hash = auth.hashPin(salt, 1, "123456", &modern) orelse return error.NoHash;
+    const bcrypt_hash = auth.hashCredential(salt, 1, "123456", &modern) orelse return error.NoHash;
     try testing.expect(!auth.isLegacy(bcrypt_hash));
 }
 
 test "two employees with the same PIN have different hashes" {
-    // The salt is the installation's AND the employee's, so a database
-    // that is cracked gives up one PIN rather than every PIN.
+    // The salt is the installation's AND the employee's, so two rows
+    // that hold the same code hold different hashes, and a hash says
+    // nothing about its neighbour.
     const salt = "0123456789abcdef0123456789abcdef";
     var first: [auth.hash_length]u8 = undefined;
     var second: [auth.hash_length]u8 = undefined;
 
-    const a = auth.hashPin(salt, 1, "123456", &first) orelse return error.NoHash;
-    const b = auth.hashPin(salt, 2, "123456", &second) orelse return error.NoHash;
+    const a = auth.hashCredential(salt, 1, "123456", &first) orelse return error.NoHash;
+    const b = auth.hashCredential(salt, 2, "123456", &second) orelse return error.NoHash;
 
     // Neither hash is the other's.
     try testing.expect(!std.mem.eql(u8, a, b));
     // And both still check their own PIN.
-    try testing.expect(auth.verifyPin(salt, "123456", a));
-    try testing.expect(auth.verifyPin(salt, "123456", b));
+    try testing.expect(auth.verifyCredential(salt, "123456", a));
+    try testing.expect(auth.verifyCredential(salt, "123456", b));
 }
 
 test "the tax is rounded half up, and an inclusive price keeps it inside" {
@@ -1587,6 +1698,10 @@ test "the setup screen renders on a fresh installation" {
     _ = try expectByText(tree.root, .text, "Your name");
     _ = try expectByText(tree.root, .text, "Currency code");
     _ = try expectByText(tree.root, .text, "Symbol");
+    // The kind is chosen here too, and the two fields name it: a form
+    // that asks for a "Confirm PIN" while the owner chose a password is
+    // a form that was written for one answer.
+    _ = try expectByText(tree.root, .text, "Sign in with");
     _ = try expectByText(tree.root, .text, "PIN");
     _ = try expectByText(tree.root, .text, "Confirm PIN");
 }
@@ -1709,7 +1824,7 @@ const screen_landmarks = [_]struct { template: []const u8, text: []const u8 }{
     .{ .template = "screen-create-company", .text = "Step one of two. You can change any of it later." },
     .{ .template = "screen-upgrade", .text = "This database is newer than Restaurant OS" },
     .{ .template = "screen-landing", .text = "A restaurant operating system: point of sale, kitchen display, customer display and back office." },
-    .{ .template = "screen-reset-pin", .text = "The old PIN stops working the moment this is written." },
+    .{ .template = "screen-reset-credential", .text = "Their old sign-in stops working the moment this is written." },
 };
 
 /// The widgets in a tree, the tree itself included.
@@ -1963,7 +2078,7 @@ fn screen_index_of(template: []const u8) usize {
         .{ .template = "screen-create-company", .screen = .create_company },
         .{ .template = "screen-upgrade", .screen = .upgrade },
         .{ .template = "screen-landing", .screen = .landing },
-        .{ .template = "screen-reset-pin", .screen = .reset_pin },
+        .{ .template = "screen-reset-credential", .screen = .reset_credential },
     };
     for (names) |entry| {
         if (std.mem.eql(u8, entry.template, template)) return entry.screen.index();

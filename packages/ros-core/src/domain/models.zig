@@ -170,8 +170,9 @@ pub const Company = struct {
     tax_number: []const u8,
 };
 
-/// A staff member. The PIN hash never enters this struct: the login
-/// check happens in SQL, and only the id and display name come back.
+/// A staff member. The credential hash never enters this struct: the
+/// login check happens in SQL, and only the id and display name come
+/// back.
 pub const Employee = struct {
     id: i64,
     name: []const u8,
@@ -179,6 +180,11 @@ pub const Employee = struct {
     /// The role, as text.
     role_label: []const u8,
     active: bool,
+    /// How this person signs in. Defaults to a PIN, which is what every
+    /// row written before the column existed is.
+    auth_kind: CredentialKind = .pin,
+    /// That, as the screen says it. The list binds a field, not a method.
+    credential_label: []const u8 = CredentialKind.pin.label(),
 };
 
 pub const ProductCategory = struct {
@@ -275,6 +281,31 @@ pub const EmployeeRole = enum(i64) {
     /// untrusted, and a role the app does not know is not a role.
     pub fn fromInt(code: i64) ?EmployeeRole {
         return std.enums.fromInt(EmployeeRole, code);
+    }
+};
+
+/// How a person proves who they are at a till. A PIN is short, numeric and
+/// tapped on a screen in front of a queue; a password is longer, mixed and
+/// typed. The kind is the person's, not the device's: the same manager taps
+/// a code at the counter and types one at the office machine.
+pub const CredentialKind = enum(i64) {
+    pin = 0,
+    password = 1,
+
+    pub fn label(self: CredentialKind) []const u8 {
+        return switch (self) {
+            .pin => "PIN",
+            .password => "Password",
+        };
+    }
+
+    /// The stored kind, from the number the database holds. Null when the
+    /// number is not a kind this app knows - the added column has no CHECK
+    /// to lean on, because SQLite refuses one on a column added after the
+    /// table - so this is the only thing standing between a corrupt row and
+    /// a till that offers the wrong surface.
+    pub fn fromInt(code: i64) ?CredentialKind {
+        return std.enums.fromInt(CredentialKind, code);
     }
 };
 

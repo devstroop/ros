@@ -8,7 +8,8 @@
 //!
 //! The list is the service role's partition: the session screens, the
 //! waiter's four screens, the order they come from, the customers the
-//! waiter looks up, and the confirmation and PIN reset the role owns.
+//! waiter looks up, and the confirmation and the credential reset the
+//! role owns.
 
 const native_sdk = @import("native_sdk");
 const canvas = native_sdk.canvas;

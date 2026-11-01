@@ -304,7 +304,12 @@ There is no responsive variant yet. The shell assumes a desktop window
   interactive controls.
 - Text is real text, so the OS can read it; there is no canvas-drawn copy.
 - Focus order follows declaration order. The POS search field is not
-  autofocused; login's PIN field is.
+  autofocused; login's password field is. A PIN is tapped on a pad, so
+  that screen has nothing to focus.
+- A secret is masked by the model, not by the field: the markup binds
+  `credential_display()`, which is one bullet per character until the
+  eye is pressed. The buffer that holds the secret is in
+  `Model.view_unbound`, so no template can bind it.
 - Colour is never the only status signal: a chip or a badge carries the
   word as well, and both are real text.
 - Every register's text pairs are asserted against WCAG AA in

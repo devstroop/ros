@@ -26,16 +26,21 @@ This project follows a lightweight MADR-style format.
 | [0013](0013-clock-based-order-ids.md) | Clock-based order IDs | Superseded by ADR-0014 |
 | [0014](0014-order-identity.md) | The order identity: a sequence, an id and a request key | Accepted; cross-device half in ADR-0019 |
 | [0015](0015-session-scoped-navigation.md) | A session owns its state and its history | Accepted |
-| [0016](0016-what-a-pin-is.md) | What a PIN is in this app | Accepted, decision 3 superseded by ADR-0018 |
+| [0016](0016-what-a-pin-is.md) | What a PIN is in this app | Accepted; decision 3 superseded by ADR-0018, decision 1 made PIN-only by ADR-0022 |
 | [0017](0017-three-apps-over-tcp-ip.md) | Three apps, one core, TCP/IP between them | Accepted |
 | [0018](0018-the-pin-hash-is-the-employees.md) | The PIN hash is the employee's | Accepted |
 | [0019](0019-cross-device-order-identity.md) | Cross-device order identity: a local row id and an origin pair | Accepted |
 | [0020](0020-late-join-and-compaction.md) | Late join, snapshots and log compaction | Accepted |
 | [0021](0021-counter-pos-is-the-service-app.md) | The counter POS is the service app | Accepted |
+| [0022](0022-a-person-chooses-how-they-sign-in.md) | A person chooses how they sign in | Accepted |
 
 ADR-0017 was accepted on 2026-10-24. It supersedes ADR-0004 (four
 roles in one binary) and revises ADR-0009 (the op-log sidecar); the op
 log stays, and the apps carry the transport themselves.
+
+ADR-0022 was accepted on 2026-10-31. It partially supersedes ADR-0016:
+the six-digit rule is now the rule for a PIN, and a person may choose a
+password instead. The hash, the cost and the lockout are unchanged.
 
 ## Drafts
 

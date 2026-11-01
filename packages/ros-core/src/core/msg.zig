@@ -22,16 +22,26 @@ pub const Msg = union(enum) {
     /// device signs in by being the device.
     pick_role: u8,
     /// The picker: the chosen employee's id. An employee is a PERSON,
-    /// and a person proves who they are with a PIN.
+    /// and a person proves who they are with a credential - a PIN or a
+    /// password, whichever they chose.
     pick_employee: i64,
-    /// The sign-in PIN changed (the payload is the runtime's text edit).
-    pin_edit: canvas.TextInputEvent,
+    /// The sign-in credential changed (the payload is the runtime's text
+    /// edit). Only a password is typed; a PIN is tapped.
+    credential_edit: canvas.TextInputEvent,
+    /// The PIN pad: which key was tapped. The payload is the digit.
+    credential_digit: i64,
+    /// The PIN pad: the key that starts the code over.
+    credential_clear,
+    /// The PIN pad: the key that takes the last digit back.
+    credential_back,
+    /// The eye: show the secret, or cover it again.
+    toggle_reveal,
     /// The sign-in form was submitted.
     submit_login,
-    /// The PIN check came back.
+    /// The credential check came back.
     login_checked: native_sdk.EffectDbResult,
-    /// A PIN was rewritten in the modern form.
-    pin_rehashed: native_sdk.EffectDbResult,
+    /// A credential was rewritten in the modern form.
+    credential_rehashed: native_sdk.EffectDbResult,
     /// Leave the session.
     sign_out,
     /// Back to the role picker (from the sign-in screen).
@@ -52,8 +62,10 @@ pub const Msg = union(enum) {
     /// The setup form changed.
     setup_company_edit: canvas.TextInputEvent,
     setup_admin_edit: canvas.TextInputEvent,
-    setup_pin_edit: canvas.TextInputEvent,
-    setup_pin2_edit: canvas.TextInputEvent,
+    setup_credential_edit: canvas.TextInputEvent,
+    setup_credential2_edit: canvas.TextInputEvent,
+    /// The owner chose how they will sign in. The payload is the kind.
+    setup_credential_kind: i64,
     setup_currency_edit: canvas.TextInputEvent,
     /// The currency SYMBOL changed. It has its own message because it
     /// has its own field: the code and the symbol are two different
@@ -302,13 +314,15 @@ pub const Msg = union(enum) {
     /// The product was saved.
     product_saved: native_sdk.EffectDbResult,
 
-    /// Reset an employee's PIN.
-    reset_employee_pin: i64,
+    /// Reset how an employee proves who they are.
+    reset_employee_credential: i64,
     /// The reset form changed.
-    form_reset_pin_edit: canvas.TextInputEvent,
-    form_reset_pin2_edit: canvas.TextInputEvent,
-    /// Save the new PIN.
-    save_reset_pin,
+    form_reset_credential_edit: canvas.TextInputEvent,
+    form_reset_credential2_edit: canvas.TextInputEvent,
+    /// The kind the reset form is setting.
+    form_reset_credential_kind: i64,
+    /// Save the new credential.
+    save_reset_credential,
     /// The employee form changed.
     form_employee_name_edit: canvas.TextInputEvent,
     /// The employee's role.
@@ -535,6 +549,7 @@ pub const Msg = union(enum) {
         "reference_version_loaded",
         "reference_applied",
         "login_checked",
+        "credential_rehashed",
         "products_loaded",
         "categories_loaded",
         "tables_loaded",

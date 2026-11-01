@@ -71,14 +71,13 @@ No nav section. These are reached by drilling in, not by a tab.
 
 | Screen | Ord | Route-ish id | Role | Status | Platform elements | Data source |
 |---|---|---|---|---|---|---|
-| `setup` | 3 | `onboarding/setup` | first run | Partial (working tree; B-031/B-032) | `column`, `card`, `text-field`, `text`, `button` | `company`, `employee`, `product`, `dining_table` (one `setupCompany` transaction) |
-| `role_picker` | 0 | `session/role-picker` | all four | Done | `column`, `card`, `text`, `badge`, `button` | none — the four role cards are a file-scope constant in `core/navigation.zig` |
-| `login` | 1 | `session/login` | admin, waiter | Done | `column`, `card`, `text-field`, `text`, `button` | `employee` (the check is the SQL in `core/update.zig`), `app_config` (the PIN salt) |
-| `landing` | 2 | `session/landing` | all four | Planned | `column`, `text`, `button` | `company`, `app_config` |
-| `setup` | 3 | `session/setup` | admin | Planned | `column`, `row`, `text-field`, `button` | `app_config`, `company` |
-| `wizard` | 4 | `session/wizard` | admin | Planned | `column`, `row`, `text-field`, `select`, `button` | `company`, `employee`, `dining_table_category`, `dining_table`, `product_category`, `product` |
-| `create_company` | 5 | `session/create-company` | admin | Planned | `column`, `text-field`, `select`, `dropdown-menu`, `button` | `company`, `currency` |
-| `reset_pin` | 6 | `session/reset-pin` | admin, waiter | Planned | `column`, `text-field`, `button`, `alert` | `employee`, `app_config` |
+| `setup` | 3 | `session/setup` | admin, first run | Done | `column`, `card`, `row`, `text-field`, `text`, `toggle-button`, `button` | `company`, `employee`, `product`, `dining_table` (one `setupCompany` transaction, salt included) |
+| `role_picker` | 0 | `session/role-picker` | all four | Done | `column`, `card`, `text`, `badge`, `button`, `spacer` | the device modes are a file-scope constant in `core/navigation.zig`; the people come from `employee` |
+| `login` | 1 | `session/login` | admin, waiter | Done | `column`, `card`, `grid`, `row`, `text-field`, `text`, `button` | `employee` (the row's own bcrypt hash, checked in `core/update.zig`), `app_config` (the installation salt a pre-bcrypt digest needs) |
+| `landing` | 2 | `session/landing` | all four | Done | `column`, `text` | `company` (the name it shows) |
+| `wizard` | 4 | `session/wizard` | admin | Done | `column`, `card`, `row`, `text-field`, `text`, `toggle-button`, `button`, `spacer` | `company`, `employee`, `dining_table_category`, `dining_table`, `product_category`, `product` |
+| `create_company` | 5 | `session/create-company` | admin | Done | `column`, `card`, `row`, `text-field`, `text`, `spacer` | `company`, `currency` |
+| `reset_credential` | 6 | `session/reset-credential` | admin, waiter | Done | `column`, `card`, `row`, `text-field`, `text`, `toggle-button`, `button` | `employee` (the hash and the kind are written together) |
 | `upgrade` | 7 | `session/upgrade` | admin | Planned | `column`, `text`, `button` | `subscription` |
 
 ## Admin

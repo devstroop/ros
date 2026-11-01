@@ -27,16 +27,23 @@ and, for the session/history boundary,
 
 | Role | Label | Sign-in | Home | Rail |
 |---|---|---|---|---|
-| `admin` | Admin | PIN | `admin_dashboard` | Dashboard, POS, Orders, Dining, Menu, Team, Settings |
-| `waiter` | Waiter | PIN | `waiter_tables` | Service |
+| `admin` | Admin | PIN or password | `admin_dashboard` | Dashboard, POS, Orders, Dining, Menu, Team, Settings |
+| `waiter` | Waiter | PIN or password | `waiter_tables` | Service |
 | `kds` | Kitchen | Device (kiosk) | `kds_board` | Kitchen |
 | `display` | Display | Device (kiosk) | `display_board` | Display |
 
 Kiosk roles are signed in by device: choosing the role sets
-`signed_in = true` and loads the shell data. There is no PIN, no lockout
-and no operator identity for them. This is intentional for a wall-mounted
-board, but it means a kiosk cannot attribute an action to a person. That
-is an open question in [`plan/open-questions.md`](../plan/open-questions.md).
+`signed_in = true` and loads the shell data. There is no credential to
+type, no lockout and no operator identity for them. This is intentional
+for a wall-mounted board, but it means a kiosk cannot attribute an action
+to a person. That is an open question in
+[`plan/open-questions.md`](../plan/open-questions.md).
+
+A role that needs a person opens the people list first: the operator
+names themselves, and their row answers two questions at once - which
+mode this device switches to, and whether they tap a PIN or type a
+password. Nobody is asked to choose the mode twice, and the mode comes
+from the binary's own role table, so the two cannot disagree.
 
 ## The 53 screens
 
@@ -192,7 +199,7 @@ pattern in this SDK; see the comment in `rbac.zig`.
 role picker
    │ pick_role(admin|waiter)        pick_role(kds|display)
    ▼                                      ▼
- login (PIN)                          signed in by device
+ login (people → pad or field)        signed in by device
    │ submit_login                         │
    ▼                                      ▼
  signed in ──▶ home ──▶ loadAll ────────▶ home
@@ -209,6 +216,14 @@ on `gate`. Device settings (theme, splits, station filter, salt, device
 token) are kept. The reset is called from `pick_role`, a successful
 `login_checked`, `sign_out`, `pick_role_again`, and setup's success and
 failure paths.
+
+The one thing the reset does not decide is who the gate asks for. A
+successful sign-in clears the picker's pending choice, and `sign_out`
+reads the person who just left back off the staff list through
+`choose_sign_in`, so the gate they land on names them and offers the
+surface their row says they use. A sign-out whose row has gone - the
+person was removed mid-session - has no gate to go back to, and opens
+the picker.
 
 ### `open_section`: a fixed bug worth remembering
 

@@ -1,13 +1,15 @@
-<!-- The the people: the staff and the form that makes a new one.
+<!-- The people: the staff and the form that makes a new one.
 
      The screens of one area share one file: the shell's import closure
      allows thirty-two files, and the app is a product with more screens
      than that. A file may hold several templates, so a screen that
      shares a file with its neighbours costs nothing. -->
 
-<!-- The people who work here, and what they can do. The PIN is never
-     shown here: a screen that could show it would be a screen that
-     could leak it. -->
+<!-- The people who work here, and what they can do. The credential is
+     never shown here: a screen that could show it would be a screen
+     that could leak it. What is shown is how each person proves who
+     they are, because the owner needs to know that much to help them
+     sign in. -->
 
 <template name="screen-employees-list">
   <column grow="1" gap="12" padding="16" background="background">
@@ -29,7 +31,8 @@
           <row background="surface" radius="md" padding="10" gap="10" cross="center">
             <text grow="1" on-press="edit_employee:{employee.id}">{employee.name}</text>
             <badge>{employee.role_label}</badge>
-            <button size="sm" variant="ghost" on-press="reset_employee_pin:{employee.id}">Reset PIN</button>
+            <badge>{employee.credential_label}</badge>
+            <button size="sm" variant="ghost" on-press="reset_employee_credential:{employee.id}">Reset sign-in</button>
             <button size="sm" variant="ghost" on-press="deactivate_employee:{employee.id}">Remove</button>
           </row>
         </for>
@@ -38,9 +41,9 @@
   </column>
 </template>
 
-<!-- The employee form: who works here and what they can do. The PIN
-     is set separately, by the owner - it is never on a screen that
-     could be shoulder-surfed, and never in the list. -->
+<!-- The employee form: who works here and what they can do. The
+     credential is set separately, by the owner - it is never on a
+     screen that could be shoulder-surfed, and never in the list. -->
 
 <template name="screen-employee-form">
   <column grow="1" gap="12" padding="16" background="background">
@@ -75,42 +78,57 @@
   </column>
 </template>
 
-<!-- The PIN reset. An employee forgets their PIN, and the only way
-     to help them is to set a new one. The old one is gone the moment
-     the new one is written: a hash is replaced, not added. -->
+<!-- The sign-in reset. An employee cannot get in, and the only way to
+     help them is to set a new secret - of whichever kind they are
+     moving to. The old one is gone the moment the new one is written:
+     a hash is replaced, not added. -->
 
-<template name="screen-reset-pin">
+<template name="screen-reset-credential">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
-      <text size="heading" grow="1">Reset {form_reset_employee}'s PIN</text>
+      <text size="heading" grow="1">Reset {form_reset_employee}'s sign-in</text>
       <button size="sm" variant="ghost" on-press="open_employees">Back</button>
     </row>
 
     <card padding="16" width="460">
       <column gap="8">
-        <column gap="4">
-          <text size="sm" foreground="text_muted">New PIN</text>
-          <text-field
-            text="{form_reset_pin}"
-            placeholder="6 digits"
-            label="New PIN"
-            on-input="form_reset_pin_edit"
-          />
-        </column>
-        <column gap="4">
-          <text size="sm" foreground="text_muted">Confirm PIN</text>
-          <text-field
-            text="{form_reset_pin2}"
-            placeholder="again"
-            label="Confirm PIN"
-            on-input="form_reset_pin2_edit"
-          />
-        </column>
+        <row gap="4" cross="center">
+          <text size="sm" foreground="text_muted" grow="1">Sign in with</text>
+          <for each="credential_kinds" key="id" as="kind">
+            <toggle-button selected="{kind.id == form_reset_credential_kind_id}" on-toggle="form_reset_credential_kind:{kind.id}">{kind.label}</toggle-button>
+          </for>
+        </row>
+        <row gap="8" cross="end">
+          <column gap="4" grow="1">
+            <text size="sm" foreground="text_muted">{form_reset_credential_label}</text>
+            <text-field
+              grow="1"
+              text="{form_reset_credential}"
+              placeholder="{form_reset_credential_hint}"
+              label="New credential"
+              on-input="form_reset_credential_edit"
+            />
+          </column>
+          <button size="sm" variant="ghost" icon="eye" label="{reveal_label}" on-press="toggle_reveal">{reveal_label}</button>
+        </row>
+        <row gap="8" cross="end">
+          <column gap="4" grow="1">
+            <text size="sm" foreground="text_muted">Confirm {form_reset_credential_label}</text>
+            <text-field
+              grow="1"
+              text="{form_reset_credential2}"
+              placeholder="again"
+              label="Confirm credential"
+              on-input="form_reset_credential2_edit"
+            />
+          </column>
+          <button size="sm" variant="ghost" icon="eye" label="{reveal_label}" on-press="toggle_reveal">{reveal_label}</button>
+        </row>
         <row gap="8">
           <spacer grow="1"/>
-          <button variant="primary" on-press="save_reset_pin">Reset the PIN</button>
+          <button variant="primary" on-press="save_reset_credential">Save the new sign-in</button>
         </row>
-        <text size="sm" foreground="text_muted">The old PIN stops working the moment this is written.</text>
+        <text size="sm" foreground="text_muted">Their old sign-in stops working the moment this is written.</text>
       </column>
     </card>
   </column>

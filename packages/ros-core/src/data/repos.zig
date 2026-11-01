@@ -152,7 +152,7 @@ pub const table_categories_sql =
 ;
 
 pub const employees_sql =
-    \\SELECT id, name, role, active
+    \\SELECT id, name, role, active, auth_kind
     \\FROM employee
     \\WHERE active = 1
     \\ORDER BY name;
@@ -205,7 +205,8 @@ pub const order_lines_sql =
     \\ORDER BY order_id, created_at, id;
 ;
 
-/// One setting out of `app_config`. The PIN salt lives there.
+/// One setting out of `app_config`: the installation salt, kept under
+/// the `pin_salt` key the app has always used.
 pub const config_sql =
     \\SELECT key, value FROM app_config WHERE key = 'pin_salt' LIMIT 1;
 ;
@@ -253,16 +254,6 @@ pub const payments_sql =
     \\LIMIT 200;
 ;
 
-/// The sign-in query.
-///
-/// The role is part of the lookup, not a check afterwards: the session
-/// is for ONE operating mode, and the employee who may work that mode is
-/// the one whose stored role says so. A PIN that belongs to a waiter
-/// finds no row here when the till is in admin mode, and the sign-in is
-/// refused.
-///
-/// The two parameters are the PIN hash (text) and the stored role
-/// (integer) - see `rbac.employee_role`.
 /// The sign-in reads the employee the picker chose.
 ///
 /// The lookup is by EMPLOYEE, not by hash. The person is already
@@ -271,15 +262,23 @@ pub const payments_sql =
 /// would need the hash to be findable, which is why the salt used to
 /// be derived rather than random, and why the sign-in used to hash
 /// once per candidate.
+///
+/// The row carries the stored role, and `update` compares it with the
+/// mode this device runs: a waiter who is on the list of an admin till
+/// gets no session. The row also carries `auth_kind` and the hash
+/// itself, which is what makes a replicated row enough to sign in from.
+///
+/// See `rbac.employee_role`.
+
 /// The id the setup gives the first employee.
 ///
-/// The setup's PIN hash is derived from this id, so it is named here
-/// once: the insert and the hash must not drift apart, or the first
-/// administrator's PIN could never be verified.
+/// The setup's credential hash is derived from this id, so it is named
+/// here once: the insert and the hash must not drift apart, or the first
+/// administrator's credential could never be verified.
 pub const first_employee_id: i64 = 1;
 
 pub const login_sql =
-    \\SELECT id, name, role, pin_hash FROM employee
+    \\SELECT id, name, role, auth_kind, pin_hash FROM employee
     \\WHERE id = ?1 AND active = 1
     \\LIMIT 1;
 ;
@@ -723,14 +722,17 @@ pub fn loadConfig(model: *Model, fx: *Effects) void {
 /// The write is a single statement and the engine runs it atomically
 /// with anything else in the same transaction.
 ///
-/// The salt is written ONCE and never replaced. Every PIN hash in the
-/// database was computed against the salt that is already there, so a
-/// later boot that overwrites it would lock every employee out of the
-/// till. `DO NOTHING` makes the first salt win.
+/// The salt is written ONCE and never replaced. A digest from before
+/// bcrypt is the installation salt with the secret in it, so a later
+/// boot that overwrote the salt would lock out everybody whose row
+/// still holds one. A bcrypt string carries its own salt, so the rows
+/// this app writes today verify whatever becomes of the installation
+/// salt - but there is no reason to replace the first one, and
+/// `DO NOTHING` says so.
 ///
 /// The setup transaction writes the salt too - that is the path a fresh
-/// installation takes, because the operator's PIN hash and the salt it
-/// was hashed with must land together or not at all.
+/// installation takes, because the operator's credential hash and the
+/// salt it was hashed with must land together or not at all.
 pub fn saveSalt(fx: *Effects, key: u64, salt: []const u8, at: i64) void {
     var params: [2]native_sdk.EffectDbValue = .{
         .{ .text = salt },
@@ -925,19 +927,22 @@ pub fn loadCustomers(model: *Model, fx: *Effects) void {
     query(model, fx, key_customers, customers_sql, &.{}, Effects.dbMsg(.customers_loaded));
 }
 
-/// Replace an employee's PIN.
+/// Replace how an employee proves who they are.
 ///
 /// A hash is replaced, not added: the old one stops working the moment
-/// the new one is written, which is what a reset means.
-pub fn saveEmployeePin(fx: *Effects, key: u64, employee_id: i64, hash: []const u8) void {
-    var params: [2]native_sdk.EffectDbValue = .{
+/// the new one is written, which is what a reset means. The kind goes
+/// with it, because a surface that does not match the secret behind it
+/// is a locked door.
+pub fn saveEmployeeCredential(fx: *Effects, key: u64, employee_id: i64, hash: []const u8, auth_kind: i64) void {
+    var params: [3]native_sdk.EffectDbValue = .{
         .{ .text = hash },
+        .{ .integer = auth_kind },
         .{ .integer = employee_id },
     };
     fx.dbExec(.{
         .key = key,
         .statements = &.{.{
-            .sql = "UPDATE employee SET pin_hash = ?1 WHERE id = ?2;",
+            .sql = "UPDATE employee SET pin_hash = ?1, auth_kind = ?2 WHERE id = ?3;",
             .params = &params,
         }},
         .on_result = Effects.dbMsg(.employee_saved),
@@ -1232,12 +1237,17 @@ pub fn decodeEmployees(model: *Model, bytes: []const u8) void {
     var values: [page.max_columns]page.Value = undefined;
     var index: usize = 0;
     while (index < count and reader.nextRow(&values)) : (index += 1) {
+        // A row from before the column existed means a PIN, which is
+        // what every one of them was.
+        const kind = enumFromInt(domain.CredentialKind, reader.intOf(&values, "auth_kind", 0));
         list[index] = .{
             .id = reader.intOf(&values, "id", 0),
             .name = model.employees_buf.dupe(reader.textOf(&values, "name")) orelse "",
             .role = reader.intOf(&values, "role", 0),
             .role_label = enumFromInt(domain.EmployeeRole, reader.intOf(&values, "role", 0)).label(),
             .active = reader.boolOf(&values, "active"),
+            .auth_kind = kind,
+            .credential_label = kind.label(),
         };
     }
     model.employees = list[0..index];
@@ -2173,13 +2183,14 @@ pub fn saveProduct(
     });
 }
 
-/// Save an employee. An employee of id zero is a new one.
-/// Rewrite an employee's PIN hash in the modern form.
+/// Rewrite an employee's credential hash in the modern form.
 ///
-/// The sign-in finds the employee by the hash it computes, so the row
-/// keeps the hash it was given - but an old SHA-256 digest is worth
-/// nothing to an attacker with the database, and this is the moment to
-/// replace it.
+/// The sign-in reads the row by id and verifies the secret against the
+/// hash it holds, so a row from before bcrypt still signs a person in -
+/// and a fast digest of a short code is the one thing an attacker with
+/// the database can actually work out. The sign-in that just succeeded
+/// is the moment to replace it: from then on the row carries a bcrypt
+/// string, and the old digest is worth nothing.
 pub fn savePinHash(fx: *Effects, key: u64, employee_id: i64, hash: []const u8) void {
     var params: [2]native_sdk.EffectDbValue = .{
         .{ .text = hash },
@@ -2191,10 +2202,11 @@ pub fn savePinHash(fx: *Effects, key: u64, employee_id: i64, hash: []const u8) v
             .sql = "UPDATE employee SET pin_hash = ?1 WHERE id = ?2;",
             .params = &params,
         }},
-        .on_result = Effects.dbMsg(.pin_rehashed),
+        .on_result = Effects.dbMsg(.credential_rehashed),
     });
 }
 
+/// Save an employee. An employee of id zero is a new one.
 pub fn saveEmployee(
     fx: *Effects,
     key: u64,
@@ -2408,15 +2420,17 @@ pub fn takePayment(
 /// restaurant that exists with no company, or a company with no
 /// operator, is worse than a setup that failed and can be retried.
 ///
-/// The salt is in the same transaction as the operator's PIN hash, and
-/// it is the salt that hash was computed with. A hash without its salt
-/// is a PIN that can never be verified, so the two must land together:
-/// either the whole installation is there, or none of it is.
+/// The salt is in the same transaction as the operator's credential
+/// hash. A bcrypt string carries its own salt and would verify with
+/// nothing else, but every hash the installation goes on making is
+/// derived from this one, and a device with an operator and no salt is a
+/// half-made installation: either the whole of it is there, or none.
 ///
 /// The salt is written with `DO UPDATE` here, unlike the boot-time
 /// writer: at this point the installation has no company and no
 /// employees, so there is no existing hash to invalidate, and the salt
-/// the operator's PIN was hashed with must be the salt that is stored.
+/// the operator's credential was hashed with must be the salt that is
+/// stored.
 pub fn setupCompany(
     fx: *Effects,
     key: u64,
@@ -2425,6 +2439,7 @@ pub fn setupCompany(
     currency_symbol: []const u8,
     admin_name: []const u8,
     pin_hash: []const u8,
+    auth_kind: i64,
     pin_salt: []const u8,
     currency_decimals: i64,
     address: []const u8,
@@ -2458,24 +2473,25 @@ pub fn setupCompany(
     };
     count += 1;
 
-    var employee_params: [6]native_sdk.EffectDbValue = .{
+    var employee_params: [7]native_sdk.EffectDbValue = .{
         .{ .integer = first_employee_id },
         .{ .text = admin_name },
         .{ .integer = 0 },
         .{ .text = pin_hash },
         .{ .integer = 1 },
         .{ .integer = at },
+        .{ .integer = auth_kind },
     };
     statements[count] = .{
         .sql =
-        \\INSERT INTO employee (id, name, role, pin_hash, active, created_at)
-        \\VALUES (?1, ?2, ?3, ?4, ?5, ?6);
+        \\INSERT INTO employee (id, name, role, pin_hash, active, created_at, auth_kind)
+        \\VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
         ,
         .params = &employee_params,
     };
     count += 1;
 
-    // The salt the operator's PIN was hashed with, in the same
+    // The salt the operator's credential was hashed with, in the same
     // transaction as the hash itself.
     var salt_params: [2]native_sdk.EffectDbValue = .{
         .{ .text = pin_salt },
@@ -4782,7 +4798,7 @@ const reference_snapshot_sql =
     \\    'employees', (SELECT json_group_array(json_object(
     \\      'id', id, 'name', name, 'role', role, 'pin_hash', pin_hash,
     \\      'phone', phone, 'email', email, 'active', active,
-    \\      'created_at', created_at)) FROM employee),
+    \\      'created_at', created_at, 'auth_kind', auth_kind)) FROM employee),
     \\    'products', (SELECT json_group_array(json_object(
     \\      'id', id, 'category_id', category_id, 'name', name,
     \\      'price_minor', price_minor, 'product_type', product_type,
@@ -4888,7 +4904,7 @@ pub fn applyReference(
     }
 
     for (snapshot.employees) |row| {
-        const params = allocator.alloc(native_sdk.EffectDbValue, 8) catch return false;
+        const params = allocator.alloc(native_sdk.EffectDbValue, 9) catch return false;
         params[0] = .{ .integer = row.id };
         params[1] = .{ .text = row.name };
         params[2] = .{ .integer = row.role };
@@ -4897,6 +4913,7 @@ pub fn applyReference(
         params[5] = .{ .text = row.email };
         params[6] = .{ .integer = row.active };
         params[7] = .{ .integer = row.created_at };
+        params[8] = .{ .integer = row.auth_kind };
         if (!appendReferenceStatement(&statements, &count, reference_employee_sql, params)) return false;
     }
 
@@ -4952,8 +4969,11 @@ pub fn applyReference(
         if (!appendReferenceStatement(&statements, &count, reference_station_sql, params)) return false;
     }
 
-    // The salt belongs to the hashes in the document: a PIN copied from
-    // the admin verifies on the peer because both use this one.
+    // The salt travels with the hashes it belongs to. A bcrypt row
+    // verifies on the peer from that row alone, because the string
+    // carries its own salt; the installation salt is what a digest from
+    // before bcrypt needs, so a person whose row has not been rewritten
+    // yet can still sign in on this device.
     if (snapshot.pin_salt) |salt| {
         const params = allocator.alloc(native_sdk.EffectDbValue, 2) catch return false;
         params[0] = .{ .text = salt };
@@ -5010,10 +5030,11 @@ const reference_tax_slab_sql =
 ;
 
 const reference_employee_sql =
-    \\INSERT INTO employee (id, name, role, pin_hash, phone, email, active, created_at)
-    \\VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    \\INSERT INTO employee (id, name, role, pin_hash, phone, email, active,
+    \\  created_at, auth_kind)
+    \\VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
     \\ON CONFLICT(id) DO UPDATE SET name = ?2, role = ?3, pin_hash = ?4,
-    \\  phone = ?5, email = ?6, active = ?7;
+    \\  phone = ?5, email = ?6, active = ?7, auth_kind = ?9;
 ;
 
 const reference_product_sql =
