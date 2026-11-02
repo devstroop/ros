@@ -165,16 +165,21 @@ box_text() {
 # leaves no screen behind to read: the host answers a stale id with
 # "delivered", drops the command, and the walk-through continues with an
 # empty field that every later step assumes is filled.
+# Read only after a pause. The snapshot is what the screen has painted,
+# so a field read the moment after the keystroke is usually still empty
+# even though the app took it. Waiting costs one poll, not a type: the
+# buffer keeps whatever already landed, so typing again on a false
+# negative appends the value a second time.
 type_into() {
   local name="$1" value="$2" id attempt
   for attempt in 1 2 3 4 5; do
     id="$(widget_id textbox "$name")"
     [ -n "$id" ] || fail "no textbox named \"$name\" on screen"
     automate widget-action main-canvas "$id" set_text "$value" >/dev/null 2>&1 || true
+    sleep 0.25
     if [ "$(box_text "$id")" = "$value" ]; then
       return 0
     fi
-    sleep 0.25
   done
   fail "typing \"$value\" into \"$name\" never landed - the field reads \"$(box_text "${id:-}")\""
 }
@@ -196,10 +201,10 @@ type_secret() {
     id="$(widget_id textbox "$name")"
     [ -n "$id" ] || fail "no textbox named \"$name\" on screen"
     automate widget-action main-canvas "$id" set_text "$value" >/dev/null 2>&1 || true
+    sleep 0.25
     if [ "$(box_text "$id")" = "$bullets" ]; then
       return 0
     fi
-    sleep 0.25
   done
   fail "typing \"$value\" into \"$name\" never drew $bullets - the field reads \"$(box_text "${id:-}")\""
 }
