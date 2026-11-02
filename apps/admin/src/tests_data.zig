@@ -4616,15 +4616,27 @@ test "the kitchen board filters by station" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     try testing.expectEqual(@as(usize, 2), harness.model.kitchen_tickets(arena).len);
+    // The badge's number is the list's length at every filter. A count
+    // that ignored the station told a cook there was work on a board
+    // showing none of it (#146).
+    try testing.expectEqual(harness.model.kitchen_tickets(arena).len, harness.model.ticket_count());
 
     // The grill sees one, the bar sees one.
     harness.model.station_filter_field = 1;
     try testing.expectEqual(@as(usize, 1), harness.model.kitchen_tickets(arena).len);
     try testing.expectEqual(@as(i64, 1), harness.model.kitchen_tickets(arena)[0].id);
+    try testing.expectEqual(harness.model.kitchen_tickets(arena).len, harness.model.ticket_count());
 
     harness.model.station_filter_field = 2;
     try testing.expectEqual(@as(usize, 1), harness.model.kitchen_tickets(arena).len);
     try testing.expectEqual(@as(i64, 2), harness.model.kitchen_tickets(arena)[0].id);
+    try testing.expectEqual(harness.model.kitchen_tickets(arena).len, harness.model.ticket_count());
+
+    // A station with nothing on it reports nothing, which is the reading
+    // the board's empty state binds.
+    harness.model.station_filter_field = 3;
+    try testing.expectEqual(@as(usize, 0), harness.model.kitchen_tickets(arena).len);
+    try testing.expectEqual(@as(usize, 0), harness.model.ticket_count());
 }
 
 test "the company details are saved and read back" {

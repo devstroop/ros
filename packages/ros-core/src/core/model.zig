@@ -2610,13 +2610,21 @@ pub const Model = struct {
     }
 
     /// How many tickets are on the kitchen board.
+    ///
+    /// This is the length of the list beside it and nothing else, so the
+    /// station the cook picked applies to both. A badge that counted
+    /// every open ticket while the board showed one station's is the
+    /// orders badge's old mistake (#146).
     pub fn ticket_count(model: *const Model) usize {
         var count: usize = 0;
         for (model.orders) |order| {
             switch (order.status) {
-                .pending, .preparing, .ready => count += 1,
-                .served, .completed, .voided => {},
+                .pending, .preparing, .ready => {
+                    if (!orderOnStation(model, order.id, model.station_filter_field)) continue;
+                },
+                .served, .completed, .voided => continue,
             }
+            count += 1;
         }
         return count;
     }
