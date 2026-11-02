@@ -3726,6 +3726,24 @@ test "a tax slab is saved, and the rate the owner typed is the rate stored" {
         try testing.expect(slab.inclusive);
     }
     try testing.expect(inclusive);
+
+    // A rate with one fraction digit is twelve and a half, and that
+    // digit was once scaled twice: seventeen percent used to be stored
+    // where the owner typed twelve and a half.
+    harness.model.form_tax_slab_name_buf.set("GST 12.5%");
+    harness.model.form_tax_slab_rate_buf.set("12.5");
+    harness.model.form_tax_slab_inclusive = false;
+    harness.send(Msg{ .save_tax_slab = {} });
+
+    repos.loadTaxSlabs(&harness.model, harness.fx);
+    harness.drain();
+    var half = false;
+    for (harness.model.tax_slabs_list) |slab| {
+        if (!std.mem.eql(u8, slab.name, "GST 12.5%")) continue;
+        half = true;
+        try testing.expectEqual(@as(i64, 1250), slab.rate_bps);
+    }
+    try testing.expect(half);
 }
 
 test "a tax slab needs a name and a rate that is a number" {
@@ -3926,7 +3944,7 @@ test "an unreadable cash tender is refused" {
     try testing.expect(harness.model.cash_tender_invalid());
 
     harness.send(Msg{ .take_payment = {} });
-    try testing.expectEqualStrings("The cash received is not an amount", harness.model.payment_error_text());
+    try testing.expectEqualStrings("The cash received is not an amount this currency can say", harness.model.payment_error_text());
     try testing.expectEqual(
         @as(i64, 0),
         try countRows(&harness, "SELECT COUNT(*) AS n FROM payment WHERE order_id = ?1;", &.{.{ .integer = order_id }}),
@@ -4737,6 +4755,50 @@ test "a price that is not a number is refused" {
 
     harness.model.form_product_name_buf.set("Something");
     harness.model.form_product_price_buf.set("sixty");
+    harness.model.form_product_category_id = 1;
+    harness.send(Msg{ .save_product = {} });
+    try testing.expect(harness.model.error_text_text().len > 0);
+}
+
+test "a price is read in the currency the till actually trades in" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // A yen restaurant has no fraction at all: sixty yen is sixty, and
+    // the display divides by one. Read at a hard-wired hundred, this
+    // price would have become six thousand yen.
+    harness.model.currency_decimals = 0;
+    harness.send(Msg{ .new_product = {} });
+    harness.model.form_product_name_buf.set("Ramen");
+    harness.model.form_product_price_buf.set("60");
+    harness.model.form_product_category_id = 1;
+    harness.send(Msg{ .save_product = {} });
+    try testing.expectEqualStrings("", harness.model.error_text_text());
+    const ramen = findProductNamed(&harness.model, "Ramen") orelse return error.ProductNotFound;
+    try testing.expectEqual(@as(i64, 60), ramen.price_minor);
+
+    // A fraction a yen cannot say is refused, not rounded to a price.
+    harness.send(Msg{ .new_product = {} });
+    harness.model.form_product_name_buf.set("Half Yen");
+    harness.model.form_product_price_buf.set("60.5");
+    harness.model.form_product_category_id = 1;
+    harness.send(Msg{ .save_product = {} });
+    try testing.expect(harness.model.error_text_text().len > 0);
+
+    // A dinar has three decimals, keeps the third, and refuses a fourth.
+    harness.model.currency_decimals = 3;
+    harness.send(Msg{ .new_product = {} });
+    harness.model.form_product_name_buf.set("Kabsa");
+    harness.model.form_product_price_buf.set("10.555");
+    harness.model.form_product_category_id = 1;
+    harness.send(Msg{ .save_product = {} });
+    try testing.expectEqualStrings("", harness.model.error_text_text());
+    const kabsa = findProductNamed(&harness.model, "Kabsa") orelse return error.ProductNotFound;
+    try testing.expectEqual(@as(i64, 10555), kabsa.price_minor);
+
+    harness.send(Msg{ .new_product = {} });
+    harness.model.form_product_name_buf.set("Too Fine");
+    harness.model.form_product_price_buf.set("10.5555");
     harness.model.form_product_category_id = 1;
     harness.send(Msg{ .save_product = {} });
     try testing.expect(harness.model.error_text_text().len > 0);

@@ -266,7 +266,7 @@
           <text foreground="destructive">Not enough cash for this bill</text>
         </if>
         <if test="{cash_tender_invalid}">
-          <text foreground="destructive">The cash received is not an amount</text>
+          <text foreground="destructive">The cash received is not an amount this currency can say</text>
         </if>
       </if>
       <row gap="8">

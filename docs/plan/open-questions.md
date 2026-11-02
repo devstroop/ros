@@ -81,7 +81,7 @@ date before that phase starts.
 | B12 | What is the v1 order-number format customers expect? | Invoices, receipts, staff habits | v1 code + interviews | Product | Open |
 | B13 | Can order numbers repeat across devices or days? | Uniqueness and legal numbering | Accounting/legal | Product | Open |
 | B14 | Does the engine enable `PRAGMA foreign_keys`? | The order write stores `0` for nullable FKs; with FKs on it fails (B-005) | Probe the engine with a temporary table; document it | Eng | Open |
-| B15 | Which currency exponents must ship? | The UI hard-codes two decimals (B-013) | Target-market review; load `currency.minor_units` | Product/Eng | Open |
+| B15 | Which currency exponents must ship? | The company carries `currency_decimals` and both the display and the amount parser read it, but a code the table does not know is guessed at two, and a wrong guess silently moves every price by a factor | Target-market review; load `currency.minor_units` | Product/Eng | Open |
 | B16 | Does `dbExec` complete synchronously, and when is a result drainable? | The in-progress DB harness sees seed writes before reads; the answer decides the test loop (G-016) | Probe test around `dbExec`/`takeMsg`; document the contract | Eng | Open |
 
 ## C. Security, privacy and compliance

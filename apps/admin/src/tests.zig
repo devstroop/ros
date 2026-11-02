@@ -1337,6 +1337,47 @@ test "a currency's decimals are its own" {
     try testing.expectEqual(@as(i64, 1000), model.currency_divisor());
 }
 
+test "an amount means what its currency says it means" {
+    // Two decimals is the common case, and the old reading of it: the
+    // last digit is the hundredths, and a missing one is not a gap.
+    try testing.expectEqual(@as(?i64, 2450), core.parseAmount("24.50", 2));
+    try testing.expectEqual(@as(?i64, 2450), core.parseAmount("24.5", 2));
+    try testing.expectEqual(@as(?i64, 2400), core.parseAmount("24", 2));
+    try testing.expectEqual(@as(?i64, 1050), core.parseAmount("10.5", 2));
+
+    // A yen restaurant has no fraction at all: "24" is twenty-four yen,
+    // not two hundred and forty, and a fraction is a mistake.
+    try testing.expectEqual(@as(?i64, 24), core.parseAmount("24", 0));
+    try testing.expectEqual(@as(?i64, null), core.parseAmount("24.5", 0));
+
+    // A dinar has three. The third digit is kept, and a fourth is
+    // refused rather than dropped - a mistyped price must not quietly
+    // become a different price.
+    try testing.expectEqual(@as(?i64, 10555), core.parseAmount("10.555", 3));
+    try testing.expectEqual(@as(?i64, 10500), core.parseAmount("10.5", 3));
+    try testing.expectEqual(@as(?i64, null), core.parseAmount("10.5555", 3));
+
+    // Nothing typed, and nothing that is not an amount, is nothing.
+    for ([_][]const u8{ "", "   ", "1.2.3", "abc", "-5", "1e3", "12%" }) |text| {
+        try testing.expectEqual(@as(?i64, null), core.parseAmount(text, 2));
+    }
+
+    // A decimals figure the database should never have held would run
+    // the divisor away; the parser refuses it instead.
+    try testing.expectEqual(@as(?i64, null), core.parseAmount("24", -1));
+    try testing.expectEqual(@as(?i64, null), core.parseAmount("24", 9));
+
+    // A rate is not money: the hundred belongs to the percent, so a
+    // percentage and a tax rate read the same in a yen or a dinar till.
+    // The lone fraction digit is the tens, once - "12.5" is twelve and a
+    // half percent, and was 17% before the two parsers were one.
+    try testing.expectEqual(@as(?i64, 2450), core.parsePrice("24.5"));
+    try testing.expectEqual(@as(?i64, 1250), core.parsePrice("12.5"));
+    try testing.expectEqual(@as(?i64, 550), core.parsePrice("5.5"));
+    // A rate finer than a hundredth of a percent is refused, not cut.
+    try testing.expectEqual(@as(?i64, null), core.parsePrice("12.755"));
+}
+
 test "a failed salt write does not make the salt look confirmed" {
     var fx = try fakeFx();
     defer fx.deinit();

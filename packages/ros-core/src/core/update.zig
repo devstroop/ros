@@ -349,8 +349,8 @@ fn saveDiscount(model: *Model, fx: *Effects) void {
     const amount = if (model.form_discount_amount_buf.text().len == 0)
         0
     else
-        parsePrice(model.form_discount_amount_buf.text()) orelse {
-            model.error_text = "The amount must be a number";
+        parseAmount(model.form_discount_amount_buf.text(), model.currency_decimal_count()) orelse {
+            model.error_text = "The amount must be a number this currency can say";
             return;
         };
     if (percent > 10000) {
@@ -399,8 +399,8 @@ fn saveProduct(model: *Model, fx: *Effects) void {
         model.error_text = "The product needs a name";
         return;
     }
-    const price = parsePrice(model.form_product_price_buf.text()) orelse {
-        model.error_text = "The price is not a number";
+    const price = parseAmount(model.form_product_price_buf.text(), model.currency_decimal_count()) orelse {
+        model.error_text = "The price is not a number this currency can say";
         return;
     };
     if (model.form_product_category_id == 0) {
@@ -435,11 +435,12 @@ fn saveEmployee(model: *Model, fx: *Effects) void {
     repos.saveEmployee(fx, repos.key_save_employee, id, name, model.form_employee_role_id, fx.wallMs());
 }
 
-/// The price as typed, in minor units. A price is a decimal amount, and
-/// a decimal amount is never a float in this app.
-/// The money parser lives with the model: the discount, the product
-/// price and the cash tender all read a typed amount the same way.
+/// The two readers a typed figure goes through. Money takes the
+/// currency's decimals, so the price, the discount and the cash tender
+/// cannot disagree about what an amount means; a rate keeps the hundred
+/// that belongs to a percent and takes the fixed two decimals instead.
 const parsePrice = model_mod.parsePrice;
+const parseAmount = model_mod.parseAmount;
 
 /// Save the company. The name is the one field that must not be empty:
 /// it is on every receipt.
@@ -509,8 +510,8 @@ fn takePayment(model: *Model, fx: *Effects) void {
     if (mode == .cash) {
         const tendered_text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (tendered_text.len > 0) {
-            const tendered = model_mod.parsePrice(tendered_text) orelse {
-                model.payment_error = "The cash received is not an amount";
+            const tendered = parseAmount(tendered_text, model.currency_decimal_count()) orelse {
+                model.payment_error = "The cash received is not an amount this currency can say";
                 return;
             };
             if (tendered < order.total_minor) {

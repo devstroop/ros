@@ -349,7 +349,7 @@ executor: opening the stream, a line pulling the peer's ops, the
 pending-pull race, a failed stream counting and reopening, and a clean
 close not counting. The real SDK `.stream` fetch test reads the chunked
 NDJSON from a live `ros-core` server, so the wire and the line message
-are proven together. `scripts/verify-all.sh` is green: admin 211/211,
+are proven together. `scripts/verify-all.sh` is green: admin 213/213,
 kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43.
 
 **Done when:** an order placed on the service app appears on the kiosk

@@ -316,19 +316,43 @@ fn taxOn(price_minor: i64, rate_bps: i64, inclusive: bool) i64 {
     return @divTrunc(price_minor * rate_bps + 5000, 10000);
 }
 
-/// A money amount typed by a person, in minor units.
+/// A rate typed by a person, scaled by a hundred.
 ///
-/// "24.50" is 2450, "24.5" is 2450 and "24" is 2400. The parser is the
-/// one place the text becomes money: the product price, the discount
-/// and the cash tender all use it, so they cannot disagree about what
-/// "10.5" means.
+/// "24.50" is 2450, "24.5" is 2450 and "24" is 2400. This is the parser
+/// for a percentage or a basis-point rate, where the hundred belongs to
+/// the number itself; money goes through `parseAmount`, which uses the
+/// currency's own precision instead of assuming two decimals. It is the
+/// same reader with two decimals written down, because a rate that was
+/// read by its own copy once turned "24.5" into 2900: the lone fraction
+/// digit was placed in the tens and then scaled again.
 pub fn parsePrice(text: []const u8) ?i64 {
+    return parseAmount(text, 2);
+}
+
+/// A money amount typed by a person, in the currency's own minor units.
+///
+/// The reader every typed amount goes through. The company
+/// carries `currency_decimals`, the display divides by it
+/// (`Model.currency_divisor`), and an amount read at a fixed two decimals
+/// would mean something else: a yen restaurant prices "24" as 2400,
+/// and a Kuwaiti one loses the third digit of every amount. So money goes
+/// through here, with the currency's precision as an argument, and a
+/// fraction finer than the currency can hold is refused rather than
+/// quietly rounded - a mistyped price must not become a different price.
+///
+/// A rate is not money. A discount percentage and a tax slab's rate are
+/// both written to two decimals whatever the till's currency is, because
+/// the hundred belongs to the percent and not to the company; they come
+/// through `parsePrice`, which is this reader with two written down.
+pub fn parseAmount(text: []const u8, decimals: i64) ?i64 {
+    if (decimals < 0 or decimals > max_amount_decimals) return null;
+    const digits_max: u8 = @intCast(decimals);
     const trimmed = std.mem.trim(u8, text, " ");
     if (trimmed.len == 0) return null;
     var whole: i64 = 0;
-    var cents: i64 = 0;
+    var fraction: i64 = 0;
     var after_dot = false;
-    var digits: usize = 0;
+    var digits: u8 = 0;
     for (trimmed) |char| {
         if (char == '.') {
             if (after_dot) return null;
@@ -337,16 +361,24 @@ pub fn parsePrice(text: []const u8) ?i64 {
         }
         if (!std.ascii.isDigit(char)) return null;
         if (after_dot) {
-            if (digits == 0) cents += (char - '0') * 10;
-            if (digits == 1) cents += (char - '0');
+            // Finer than the currency can say. Refused, not dropped.
+            if (digits == digits_max) return null;
             digits += 1;
+            fraction = fraction * 10 + (char - '0');
         } else {
             whole = whole * 10 + (char - '0');
         }
     }
-    if (digits == 1) cents *= 10;
-    return whole * 100 + cents;
+    var divisor: i64 = 1;
+    var i: i64 = 0;
+    while (i < decimals) : (i += 1) divisor *= 10;
+    while (digits < digits_max) : (digits += 1) fraction *= 10;
+    return whole * divisor + fraction;
 }
+
+/// How many fraction digits an amount may carry. Guards the divisor loop
+/// against a nonsense `currency_decimals` read out of a database.
+const max_amount_decimals = 8;
 
 pub const Model = struct {
     /// Fields the view never binds directly. Keep this list honest:
@@ -2026,7 +2058,7 @@ pub const Model = struct {
         if (total <= 0) return 0;
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return 0;
-        const tendered = parsePrice(text) orelse return 0;
+        const tendered = parseAmount(text, model.currency_decimal_count()) orelse return 0;
         if (tendered <= total) return 0;
         return tendered - total;
     }
@@ -2037,7 +2069,7 @@ pub const Model = struct {
         if (total <= 0) return false;
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return false;
-        const tendered = parsePrice(text) orelse return false;
+        const tendered = parseAmount(text, model.currency_decimal_count()) orelse return false;
         return tendered < total;
     }
 
@@ -2045,7 +2077,7 @@ pub const Model = struct {
     pub fn cash_tender_invalid(model: *const Model) bool {
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return false;
-        return parsePrice(text) == null;
+        return parseAmount(text, model.currency_decimal_count()) == null;
     }
 
     /// Why the last payment failed, or empty.

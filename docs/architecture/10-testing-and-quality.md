@@ -1,7 +1,7 @@
 # Testing and quality
 
 > **Status:** Healthy — `scripts/verify-all.sh` is green: admin
-> **211/211** (66 handwritten rules, 144 against a migrated database, and
+> **213/213** (67 handwritten rules, 145 against a migrated database, and
 > one test block that imports both), service **10/10**, kiosk **8/8**,
 > `ros-core` **43/43**, net-spike **13/13**. CI adds a headless paint
 > check per app and the sale walkthrough. Still uncovered: the clock
@@ -31,8 +31,8 @@ A rule that lives only in a comment is a rule that breaks. The tests in
 
 ## Current tests
 
-`native test apps/admin` reports **211** for the admin target - 66 in
-`tests.zig`, 144 in `tests_data.zig`, one generated - and the service and
+`native test apps/admin` reports **213** for the admin target - 67 in
+`tests.zig`, 145 in `tests_data.zig`, one generated - and the service and
 kiosk targets add 10 and 8 of their own. The table below is the subset
 this page names, not the whole list.
 
@@ -57,6 +57,8 @@ this page names, not the whole list.
 | 17 | The pad taps a PIN one digit at a time | The numeric surface, its length guard |
 | 18 | The database, not an old list, decides which surface the till offers | The kind is the row's, and a mismatch costs nothing |
 | 19 | A wrong try is counted once | The lockout arithmetic, against a query's terminal result |
+| 20 | A price is read in the currency the till actually trades in | Money decimals come from the company; a finer fraction is refused, not rounded |
+| 21 | A tax slab is saved, and the rate the owner typed is the rate stored | A rate keeps the hundred of the percent, one fraction digit included |
 
 How they run:
 
@@ -92,7 +94,7 @@ does) or bind an in-memory store.
 | Pure update | `native test` | Model transitions, RBAC, cart, status machine, the sign-in | Covered |
 | Markup build | `native test` | Every screen builds for its fixture and stays inside the widget budget | Covered |
 | Page decoder | `native test` | The page dialect and every repository load | Covered |
-| Relational integration | `native test` + `openMemoryMigrated` | Migrate, insert fixtures, run repo SQL, assert rows | Covered — 144 tests |
+| Relational integration | `native test` + `openMemoryMigrated` | Migrate, insert fixtures, run repo SQL, assert rows | Covered — 145 tests |
 | Business calculations | `native test` | Tax, discounts, cash tenders and change | Covered |
 | Split payment | — | One bill paid by more than one tender | Not a feature yet |
 | Live automation | `native automate` | Role picker → sign-in → sale → KDS advance, node budget, non-blank GPU | In CI (`smoke`, `sale-smoke`) |
