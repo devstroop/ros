@@ -607,6 +607,29 @@ test "the pad taps a PIN one digit at a time" {
     }
     main.update(&model, .{ .credential_digit = 7 }, &fx);
     try testing.expectEqual(auth.max_pin_len, model.credential.text().len);
+
+    // While the till is waiting out a lockout the surface is inert, and
+    // inert means every way in: a pad that went on taking digits after
+    // the fifth refusal told the person nothing was wrong, and the only
+    // answer arrived when they pressed Sign in again.
+    model.now_ms = 1_000_000;
+    model.login_locked_until = model.now_ms + 60_000;
+    try testing.expect(model.login_locked());
+    try testing.expect(!model.credential_surface_open());
+    try testing.expectEqual(@as(i64, 60), model.login_locked_seconds());
+    main.update(&model, .{ .credential_digit = 3 }, &fx);
+    main.update(&model, .{ .credential_back = {} }, &fx);
+    main.update(&model, .{ .credential_clear = {} }, &fx);
+    try testing.expectEqual(auth.max_pin_len, model.credential.text().len);
+
+    // The wait ends by itself, and the pad takes the next digit.
+    model.now_ms += 60_000;
+    try testing.expect(!model.login_locked());
+    try testing.expect(model.credential_surface_open());
+    main.update(&model, .{ .credential_clear = {} }, &fx);
+    try testing.expectEqual(@as(usize, 0), model.credential.text().len);
+    main.update(&model, .{ .credential_digit = 3 }, &fx);
+    try testing.expectEqualStrings("3", model.credential.text());
 }
 
 test "a person whose role is not this app's is refused" {
@@ -2015,6 +2038,20 @@ test "every session screen renders, inside the widget budget" {
             std.debug.print("the session screen {s} built {d} widgets, over the {d} budget\n", .{ entry.template, nodes, max_view_widgets });
             return error.ScreenOverBudget;
         }
+    }
+
+    // The locked login screen is a different tree - the pad is behind a
+    // gate and a countdown stands in its place - and a branch nobody
+    // renders is a branch nobody measured against the budget.
+    model.signed_in = false;
+    model.now_ms = 1_000_000;
+    model.login_locked_until = model.now_ms + 60_000;
+    model.screen_index = nav.Screen.login.index();
+    const locked_tree = try buildTree(arena, &model);
+    const locked_nodes = countWidgets(locked_tree.root);
+    if (locked_nodes > max_view_widgets) {
+        std.debug.print("the locked login screen built {d} widgets, over the {d} budget\n", .{ locked_nodes, max_view_widgets });
+        return error.ScreenOverBudget;
     }
 }
 

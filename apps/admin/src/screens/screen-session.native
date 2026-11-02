@@ -169,44 +169,55 @@
 
     <card padding="16" width="320">
       <column gap="8">
-        <if test="{sign_in_by_pin}">
-          <column gap="8">
-            <column gap="4">
-              <text size="sm" foreground="text_muted">Your PIN</text>
-              <text size="heading">{credential_display}</text>
-            </column>
-            <grid columns="3" gap="6">
-              <for each="pin_digits" key="id" as="digit">
-                <button label="{digit.label}" on-press="credential_digit:{digit.id}">{digit.label}</button>
-              </for>
-              <button variant="ghost" on-press="credential_clear">Clear</button>
-              <button variant="ghost" on-press="credential_back">Back</button>
-            </grid>
+        <if test="{login_locked}">
+          <column gap="4">
+            <text size="sm" foreground="text_muted">Resting after too many wrong tries</text>
+            <text size="heading">Try again in {login_locked_seconds} seconds</text>
           </column>
         </if>
 
-        <if test="{sign_in_by_password}">
-          <row gap="8" cross="end">
-            <column gap="4" grow="1">
-              <text size="sm" foreground="text_muted">Password</text>
-              <text-field
-                grow="1"
-                text="{credential_display}"
-                placeholder="Your password"
-                label="Password"
-                on-input="credential_edit"
-                on-submit="submit_login"
-                autofocus="true"
-              />
-            </column>
-            <button size="sm" variant="ghost" icon="eye" label="{reveal_label}" on-press="toggle_reveal">{reveal_label}</button>
-          </row>
+        <if test="{credential_surface_open}">
+          <column gap="8">
+            <if test="{sign_in_by_pin}">
+              <column gap="8">
+                <column gap="4">
+                  <text size="sm" foreground="text_muted">Your PIN</text>
+                  <text size="heading">{credential_display}</text>
+                </column>
+                <grid columns="3" gap="6">
+                  <for each="pin_digits" key="id" as="digit">
+                    <button label="{digit.label}" on-press="credential_digit:{digit.id}">{digit.label}</button>
+                  </for>
+                  <button variant="ghost" on-press="credential_clear">Clear</button>
+                  <button variant="ghost" on-press="credential_back">Back</button>
+                </grid>
+              </column>
+            </if>
+
+            <if test="{sign_in_by_password}">
+              <row gap="8" cross="end">
+                <column gap="4" grow="1">
+                  <text size="sm" foreground="text_muted">Password</text>
+                  <text-field
+                    grow="1"
+                    text="{credential_display}"
+                    placeholder="Your password"
+                    label="Password"
+                    on-input="credential_edit"
+                    on-submit="submit_login"
+                    autofocus="true"
+                  />
+                </column>
+                <button size="sm" variant="ghost" icon="eye" label="{reveal_label}" on-press="toggle_reveal">{reveal_label}</button>
+              </row>
+            </if>
+          </column>
         </if>
 
         <if test="{login_failed}">
           <text foreground="destructive">{login_error}</text>
         </if>
-        <button variant="primary" on-press="submit_login">Sign in</button>
+        <button variant="primary" disabled="{login_locked}" on-press="submit_login">Sign in</button>
         <button variant="ghost" on-press="pick_role_again">Change person</button>
       </column>
     </card>

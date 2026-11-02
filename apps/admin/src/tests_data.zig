@@ -1005,6 +1005,11 @@ test "the till stops taking PINs after too many wrong ones" {
     // And now the till has stopped taking them.
     try testing.expect(harness.model.login_locked());
     try testing.expect(harness.model.login_locked_seconds() > 0);
+    try testing.expect(!harness.model.credential_surface_open());
+    // The guess that tripped the wait is not left on the pad: when the
+    // countdown ends, the person types a fresh secret rather than
+    // pressing Sign in under a wrong one they did not mean.
+    try testing.expectEqual(@as(usize, 0), harness.model.credential.text().len);
 
     // Even the RIGHT PIN is refused while the till is locked: the
     // point is to stop the guessing, not to annoy the cashier.
@@ -1012,6 +1017,11 @@ test "the till stops taking PINs after too many wrong ones" {
     harness.send(Msg{ .submit_login = {} });
     try testing.expect(!harness.model.signed_in);
     try testing.expect(harness.model.login_locked());
+
+    // And the wait ends on the clock's own word, not on a tap.
+    harness.model.now_ms += core.login_lockout_ms;
+    try testing.expect(!harness.model.login_locked());
+    try testing.expect(harness.model.credential_surface_open());
 }
 
 test "an order does not close without the money" {

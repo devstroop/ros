@@ -2247,6 +2247,16 @@ pub const Model = struct {
         return @divTrunc(model.login_locked_until - model.now_ms, 1000);
     }
 
+    /// True when the pad or the field may take a credential.
+    ///
+    /// The markup gates the whole surface on this, because a pad that
+    /// goes on taking digits while the till is locked tells the person
+    /// nothing is wrong - the refusal only ever arrived on the attempt.
+    /// The countdown next to it is `login_locked_seconds`.
+    pub fn credential_surface_open(model: *const Model) bool {
+        return !model.login_locked();
+    }
+
     /// True when the last sign-in attempt failed.
     pub fn login_failed(model: *const Model) bool {
         return model.login_error.len > 0;

@@ -760,12 +760,16 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
         },
 
-        .credential_edit => |event| applySecretEdit(&model.credential, event),
+        .credential_edit => |event| {
+            if (model.login_locked()) return;
+            applySecretEdit(&model.credential, event);
+        },
 
         .credential_digit => |digit| {
             // The pad: one key, one digit. A PIN is tapped rather than
             // typed because a till has a screen in front of a queue, and
             // a keyboard would be a keyboard.
+            if (model.login_locked()) return;
             if (model.credential.text().len >= auth.max_pin_len) return;
             var next: [auth.max_secret_len]u8 = undefined;
             const held = model.credential.text();
@@ -774,9 +778,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.credential.set(next[0 .. held.len + 1]);
         },
 
-        .credential_clear => model.credential.clear(),
+        .credential_clear => {
+            if (model.login_locked()) return;
+            model.credential.clear();
+        },
 
         .credential_back => {
+            if (model.login_locked()) return;
             const held = model.credential.text();
             if (held.len == 0) return;
             model.credential.set(held[0 .. held.len - 1]);
@@ -2735,6 +2743,10 @@ fn noteLoginFailure(model: *Model) void {
     model.login_failures = 0;
     model.login_locked_until = model.now_ms + model_mod.login_lockout_ms;
     model.login_error = "Too many wrong tries - try again in a moment";
+    // The guess that triggered the wait is not left in the pad. An
+    // operator who comes back after the countdown types a fresh one,
+    // rather than pressing Sign in on a secret they did not mean.
+    model.credential.clear();
 }
 
 /// Turn the cart into an order and write it.
