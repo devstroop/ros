@@ -10,6 +10,8 @@
      that is already on it. The order of the cards is the order of the
      tables, not of the service. -->
 
+<import src="parts.native"/>
+
 <template name="screen-waiter-tables">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
@@ -128,7 +130,7 @@
         <for each="open_orders" key="id" as="order">
           <row background="surface" radius="md" padding="10" gap="10" cross="center">
             <text grow="1">{order.order_no}</text>
-            <badge>{order.status_label}</badge>
+            <use template="status-badge" code="{order.status_code}" label="{order.status_label}"/>
             <text>{currency_symbol}{fixed(order.total_minor / currency_divisor, currency_decimal_count)}</text>
           </row>
         </for>

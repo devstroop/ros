@@ -67,7 +67,7 @@ A headless test or an automation run can:
 
 - start at the role picker;
 - choose each role;
-- sign in (PIN or device);
+- sign in (a credential, or the device);
 - reach a rendered home screen;
 - open every section in that role's rail and land on something visible.
 

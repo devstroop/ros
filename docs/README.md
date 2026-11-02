@@ -53,6 +53,12 @@ If you are new to the codebase, read in this order:
 5. [`plan/status.md`](plan/status.md) — what is actually built, screen by screen.
 6. [`plan/open-questions.md`](plan/open-questions.md) — what we do not know yet.
 
+If you are changing what an operator reads, read
+[`glossary.md`](glossary.md) first. The names the product uses for its own
+destinations are pinned by a test, so a screen that reaches for a retired
+word fails the suite rather than quietly shipping a second name for one
+thing.
+
 If you are changing a screen, also read
 [`architecture/06-ui-markup-and-theming.md`](architecture/06-ui-markup-and-theming.md)
 and the "add a screen" checklist in it.
@@ -111,10 +117,12 @@ template. The short version:
   session-scoped navigation (ADR-0015), what a PIN is (ADR-0016), three
   apps over TCP/IP (ADR-0017), the PIN hash is the employee's
   (ADR-0018), cross-device order identity (ADR-0019), late join and
-  compaction (ADR-0020), the counter POS is the service app (ADR-0021).
+  compaction (ADR-0020), the counter POS is the service app (ADR-0021),
+  a person chooses how they sign in (ADR-0022).
 - Superseded: one binary with four roles (ADR-0004, by ADR-0017);
   clock-based order IDs (ADR-0013, by ADR-0014); salted SHA-256 PIN
-  hashing (ADR-0007, by ADR-0016).
+  hashing (ADR-0007, by ADR-0016); ADR-0016's installation-wide salt
+  (by ADR-0018) and its six-digits-only rule (in part, by ADR-0022).
 - Proposed (need an owner): printing sidecar, desktop-first, CSV-first
   interchange.
 

@@ -2,8 +2,8 @@
 
 The `kiosk` app: the kitchen board and the customer display on one
 device. It boots as the **kitchen board**, and the picker offers the two
-board modes — the choice is the device's, and nobody types a PIN into a
-board.
+board modes — the choice is the device's, and nobody types a credential
+into a board.
 
 The app is a shell over `packages/ros-core`; the shared code and the
 app-model rules are described in [`apps/admin/README.md`](../admin/README.md)

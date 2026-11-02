@@ -24,8 +24,8 @@ It is the target, not the as-built. The as-built picture is
 
 | App | Role | Sign-in | Home | Screens |
 |---|---|---|---|---|
-| `admin` | `admin` | PIN | `admin_dashboard` | 50 |
-| `service` | `waiter` | PIN | `waiter_tables` | 12 |
+| `admin` | `admin` | PIN or password | `admin_dashboard` | 50 |
+| `service` | `waiter` | PIN or password | `waiter_tables` | 12 |
 | `kiosk` | `kds` or `display`, chosen at install | device | `kds_board` or `display_board` | 3 per mode |
 
 Each app is a separate Native SDK app: its own `app.json`, its own id
@@ -40,7 +40,8 @@ the per-app update cadence.
 
 The split follows the permission matrix in `src/core/rbac.zig` exactly.
 `Role.needs_sign_in()` is already the boundary: `admin` and `waiter`
-sign in with a PIN, `kds` and `display` sign in by device.
+sign in with a credential - a PIN or a password, per person - and `kds`
+and `display` sign in by device.
 
 The counts are read off the enum and the matrix, not estimated. The
 `admin` app mounts the 50 screens the admin role may open, less the
@@ -106,22 +107,25 @@ mounted in all three apps** - which is a change from the first draft of
 this page, and the change is a correction.
 
 Under [ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)
-the sign-in names the *person* and the PIN says they are that person.
-So the picker is no longer a choice between four roles: it is a list of
-the people who work here, each with the mode they work in, and it is
-the way in to the PIN. `admin` and `service` both sign in with a PIN,
-so both need it. In `kiosk` it carries the two device modes as well -
-the kitchen board and the customer display are not people, and nobody
-types a PIN into them - and the choice is stored in the device's
-configuration.
+the sign-in names the *person* and the credential says they are that
+person. So the picker is no longer a choice between four roles: it is a
+list of the people who work here, each with the mode they work in and a
+badge saying whether they sign in with a PIN or a password
+([ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)),
+and it is the way in to the credential. `admin` and `service` both sign
+in by person, so both need it. In `kiosk` it carries the two device
+modes instead - the kitchen board and the customer display are not
+people, and nobody types a credential into them - and the choice is
+stored in the device's configuration.
 
 The first draft of this page said the picker survived only in `kiosk`.
 That was written against the salt being settled but not implemented, and
 it does not match the code: `pick_employee` in `core/update.zig` is the
-entry to the PIN, and the login screen refuses a sign-in with "Choose
-who you are first" when it has not been sent. The enum's name stays -
-the enum is append-only - but the screen behind it is the **person
-picker** now, and it is mounted wherever a person signs in.
+entry to the credential, it takes both the mode and the kind of secret
+from that person's row, and the login screen refuses a sign-in with
+"Choose who you are first" when it has not been sent. The enum's name
+stays - the enum is append-only - but the screen behind it is the
+**person picker** now, and it is mounted wherever a person signs in.
 
 The `Screen` enum stays append-only. Nothing is renumbered and no
 ordinal moves: the markup's contract is the enum's order, and the
@@ -545,7 +549,7 @@ impossible, and only accepted where it cannot.
 | Entity | Writer | How it reaches other devices | Merge |
 |---|---|---|---|
 | Company, settings, tax slabs, printers | `admin` | `GET /v1/reference` | The admin's row wins; a peer accepts only a newer version |
-| Employees and PINs | `admin` | `GET /v1/reference` | Same - but see [The sign-in problem](#the-sign-in-problem) before trusting this row |
+| Employees, their hashes and their `auth_kind` | `admin` | `GET /v1/reference` | Self-verifying on arrival - see [The sign-in problem](#the-sign-in-problem-and-how-it-was-settled) |
 | Product categories, products, modifier groups | `admin` | `GET /v1/reference` | Same |
 | Dining tables, table categories | `admin` | `GET /v1/reference` | Same |
 | Customers | the device that created the row | ops | Last writer - on the **vector** clock and then the device id, because two devices' scalar clocks are not comparable |
@@ -574,92 +578,70 @@ What is left is the genuinely hard case, and it is already an open
 question in the plan: two waiters editing the same table's order at the
 same time ([`open-questions.md` A20](../plan/open-questions.md)).
 
-## The sign-in problem
+## The sign-in problem, and how it was settled
 
-**This is a blocker, and it is not solved by the protocol.** It is
-recorded here because the three apps cannot work without settling it,
-and because a reader who takes the ownership table at face value will
-build the service app and then find that no waiter can sign in.
+The three apps cannot work without this, and the first version of this
+page recorded it as a blocker.
 
-The mechanism, as it stands:
+The mechanism, as it stood:
 
-- `data/auth.zig` `hashPin` derives the bcrypt salt from the
-  **installation salt** (`deriveSalt`), so a hash is a function of
-  (installation salt, PIN) and of nothing else.
-- `data/repos.zig` `login_sql` finds the employee by **matching the
+- `data/auth.zig` derived the bcrypt salt from the **installation salt**
+  alone, so a hash was a function of (installation salt, credential) and
+  of nothing else.
+- `data/repos.zig` `login_sql` found the employee by **matching the
   computed hash for equality**:
   `WHERE (pin_hash = ?1 OR pin_hash = ?2) AND role = ?3 AND active = 1`.
-- `data/auth.zig` says why it is written that way: a random
-  per-employee salt "would mean trying every employee in turn, and a
-  slow hash for each of them".
-- The installation salt is generated once per **installation**
-  (`main.zig` calls `auth.makeSalt`) and stored in `app_config.pin_salt`
-  by `repos.saveSalt`, which is `ON CONFLICT DO NOTHING` - written once
-  and never replaced.
+- The installation salt was generated once per **installation**
+  (`main.zig` calls `auth.makeSalt`) and stored in `app_config` under
+  `pin_salt` by `repos.saveSalt`, which is `ON CONFLICT DO NOTHING` -
+  written once and never replaced.
 
 Each app has its own database in its own data directory, so **each app
 has its own installation salt**. The employee hashes were computed
-against the admin app's salt. The service app computes
-`hashPin(service_salt, "123456")`, which is a different bcrypt string
-from the stored one, the equality match misses, and **the waiter cannot
-sign in** - including in exactly the case the design is built for: the
-admin app is closed.
+against the admin app's salt. The service app hashed the same PIN against
+its own, which is a different bcrypt string from the stored one, the
+equality match missed, and **the waiter could not sign in** - including
+in exactly the case the design is built for: the admin app is closed.
 
-There are two ways out.
+There were two ways out, and the second is what shipped.
 
-### Option A - replicate the installation salt
+**Replicating the salt** - making it reference data owned by the admin
+app, like the employee rows - needed no schema change, no migration and
+no UX change, and the existing sign-in worked unchanged. Its cost was
+that a **shared secret crossed the wire in plain HTTP**, and a stolen
+service device's database became as crackable as the admin's. Once a
+secret has crossed a wire in plaintext, it has crossed it.
 
-The salt becomes reference data owned by the admin app, exactly like the
-employee rows. The service app stores it and the existing sign-in path
-works unchanged: no schema change, no migration, no UX change.
+**Making the hash the employee's** is what
+[ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md) decided,
+by [#95](https://github.com/devstroop/ros/issues/95):
 
-The cost is that a **shared secret crosses the wire in plain HTTP**,
-and a stolen service device's database becomes as crackable as the
-admin's is today. It also contradicts the security claim below.
+- `hashCredential` derives the bcrypt salt from the installation salt
+  **and the employee's id**, so two employees with the same secret do not
+  share a hash, and the derivation is reproducible - which matters,
+  because `update` is pure and has no randomness to draw from.
+- The **picker names the person** before anything is checked, so the
+  sign-in fetches their row by id instead of searching for a hash. That
+  is what made the per-employee salt affordable: one slow hash per
+  sign-in, not one per candidate.
+- A bcrypt crypt string embeds its own salt, so the replicated row is
+  **self-verifying**: any device holding it checks a credential with one
+  `bcrypt.strVerify` and needs nothing else. Nothing but employee data
+  crosses the wire.
 
-### Option B - the salt becomes per employee
+A legacy digest is the one thing that still needs the installation salt,
+because it was computed from it. Such a row waits for the database to
+confirm the salt, and the first sign-in that verifies rewrites it in the
+bcrypt form; after that the row travels on its own.
 
-`employee` grows a per-employee random salt. A bcrypt crypt string
-already embeds its own salt, so the row becomes **self-verifying**: any
-device holding the row can verify the PIN with one `bcrypt.strVerify`
-and needs nothing else.
-
-The sign-in then has to identify the employee before it hashes - which
-is exactly the follow-up ADR-0016 already records: *"The per-employee
-salt, when the sign-in can identify the employee before it hashes: an
-employee picker makes the salt per employee and the login one hash."*
-The alternatives are an employee picker (one hash) or trying the
-active employees of that role in turn (one hash each, a few hundred
-milliseconds at cost 2^10).
-
-The cost is a schema migration and a sign-in flow change, which is a
-product decision.
-
-### The recommendation
-
-**Option B.** It is the one that keeps the wire free of a shared
-secret, it is the recorded follow-up of an accepted decision, and it
-makes a replicated employee row self-verifying - which is the property
-the whole three-app design needs. Option A is cheaper to build and
-weakens the threat model in a way that is awkward to undo later, because
-once a secret has crossed a wire in plaintext it has crossed it.
-
-The question belongs to the product as much as to engineering, so it is
-[open question D19](../plan/open-questions.md) and it must be answered
-before the protocol is frozen - not during the implementation of it.
-
-**It is answered: the salt becomes per-employee**, by
-[#95](https://github.com/devstroop/ros/issues/95) - the sign-in
-identifies the employee before it hashes, so the row is self-verifying
-and no shared secret crosses the wire. That issue also plans the picker
-*in place of the role picker*, which the three-app split makes
-convenient: the `service` app signs in by picking an employee, and the
-role picker is only still needed by `kiosk`, for the choice between the
+The picker that makes this work replaced the role choice for the two
+apps that sign people in: `service` lets a waiter in by picking them,
+and the role picker survives only in `kiosk`, for the choice between the
 kitchen board and the customer display.
 
-Whichever way it goes, one thing is settled now: **the employee row
+What was settled before the answer, and still holds: **the employee row
 replicates as reference data, and the row must contain everything a
-device needs to verify a PIN offline.** A row that needs a second,
+device needs to verify a credential offline.** A row that needs a second,
 separately replicated secret is the thing to avoid.
 
 ## Failure modes
@@ -687,14 +669,15 @@ What that means concretely:
 
 - Every peer can read the reference data and the ops. A device that
   joins the LAN is a device in the restaurant.
-- **PINs are never sent.** The digits a cashier types never leave the
-  device. What crosses the wire is the **hash** - and, under the salt
-  as it stands today, the **installation salt** as well, because the
-  hash is computed from it. That is why
-  [the sign-in problem](#the-sign-in-problem) has to be settled before
-  this section can be called accurate: a peer must receive a row it can
-  verify a PIN against, and the salt question decides whether that row
-  is self-verifying or whether a shared secret has to travel with it.
+- **A credential is never sent.** What a person taps or types never
+  leaves the device. What crosses the wire is the employee **row**,
+  hash included - and the hash carries its own salt, so the row is
+  self-verifying and the installation salt does not travel. That is the
+  property [the sign-in problem](#the-sign-in-problem-and-how-it-was-settled)
+  was settled to obtain, and it is what makes this claim accurate: a
+  peer receives a row it can check a credential against with nothing
+  else. A stolen database is still bcrypt at cost 2^10 per guess, and a
+  stolen reference document is no better.
 - Money is never trusted from a peer: an order's total is recomputed
   from its lines by the device that owns the order.
 - The wire is plain HTTP on the LAN. It is readable by anyone on the
@@ -744,10 +727,13 @@ meaningful across the three databases.
 
 ## What is not decided here
 
-- **The PIN salt.** The sign-in problem above is a blocker: either the
-  installation salt replicates as reference data, or it becomes
-  per-employee. The second is the recommendation, and it is a product
-  decision as much as an engineering one.
+- ~~**The PIN salt.**~~ **Decided:** the bcrypt salt is derived per
+  employee and the sign-in identifies the person before it hashes, so a
+  replicated row verifies a credential with nothing else and no shared
+  secret crosses the wire
+  ([ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)).
+  Whether a person taps a PIN or types a password is decided by their row
+  ([ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)).
 - ~~Whether the counter POS is the `admin` app or the `service` app.~~
   **Decided:** the counter POS is the `service` app, and the `admin` app
   remains the wildcard superset
@@ -758,6 +744,5 @@ meaningful across the three databases.
   audit screens.
 - The port numbers, which are a proposal, not a reservation.
 
-The PIN salt and peer authentication are tracked as open questions;
-the counter POS is settled. The rest belong to the phase that needs
-them.
+Peer authentication is the remaining open question; the salt and the
+counter POS are settled. The rest belong to the phase that needs them.

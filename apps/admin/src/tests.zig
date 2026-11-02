@@ -48,7 +48,10 @@ const boot = core.boot_role;
 ///
 /// The app's markup imports its screen templates, so the test resolves
 /// the same import closure the runtime does before building.
-fn buildTree(arena: std.mem.Allocator, model: *const Model) !AppUi.Tree {
+///
+/// Public so `tests_data.zig`, which owns the database, can assert what
+/// a real sale renders and not only what it stores.
+pub fn buildTree(arena: std.mem.Allocator, model: *const Model) !AppUi.Tree {
     const sources = main.app_sources;
     var loader = canvas.ui_markup.SourceSetLoader{ .set = &sources };
     const root_source = main.app_markup;
@@ -78,6 +81,309 @@ fn findByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) 
     return null;
 }
 
+/// Resolve the app's import closure. The static rules below read the
+/// same source the runtime compiles, so a bare field cannot hide in a
+/// screen the tested model never mounts.
+fn resolveAppDocument(arena: std.mem.Allocator) !canvas.ui_markup.MarkupDocument {
+    var loader = canvas.ui_markup.SourceSetLoader{ .set = &main.app_sources };
+    var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
+    return canvas.ui_markup.resolveImports(arena, "app.native", main.app_markup, loader.loader(), &diagnostic) catch |err| {
+        std.debug.print("import resolution failed: {s} at {d}:{d}\n", .{ @errorName(err), diagnostic.line, diagnostic.column });
+        return err;
+    };
+}
+
+/// A text-entry control. `label=` names one for a screen reader; it
+/// draws nothing, so every one of these also needs a visible label.
+fn isTextField(name: []const u8) bool {
+    return std.mem.eql(u8, name, "text-field") or
+        std.mem.eql(u8, name, "search-field") or
+        std.mem.eql(u8, name, "textarea") or
+        std.mem.eql(u8, name, "combobox");
+}
+
+fn hasVisibleLabelText(node: canvas.ui_markup.MarkupNode) bool {
+    if (node.kind != .element or !std.mem.eql(u8, node.name, "text")) return false;
+    for (node.children) |child| {
+        if (child.kind == .text and std.mem.trim(u8, child.text, " \t\r\n").len > 0) return true;
+    }
+    return false;
+}
+
+fn expectVisibleLabels(node: canvas.ui_markup.MarkupNode) !void {
+    for (node.children, 0..) |child, index| {
+        if (child.kind == .element and isTextField(child.name)) {
+            const labelled = index > 0 and hasVisibleLabelText(node.children[index - 1]);
+            if (!labelled) {
+                std.debug.print(
+                    "{s}:{d}:{d}: <{s}> has no visible label; put a <text> label immediately before it\n",
+                    .{ child.src_path, child.line, child.column, child.name },
+                );
+                return error.UnlabeledTextField;
+            }
+        }
+        try expectVisibleLabels(child);
+    }
+}
+
+fn expectSymbolBinding(node: canvas.ui_markup.MarkupNode) !void {
+    if (node.kind == .element and
+        std.mem.eql(u8, node.name, "text-field") and
+        std.mem.eql(u8, node.attr("text") orelse "", "{setup_symbol_text}"))
+    {
+        const on_input = node.attr("on-input") orelse "";
+        if (!std.mem.eql(u8, on_input, "setup_symbol_edit")) {
+            std.debug.print(
+                "{s}:{d}:{d}: the Symbol field writes {s}; it must write setup_symbol_edit\n",
+                .{ node.src_path, node.line, node.column, on_input },
+            );
+            return error.SymbolFieldWritesTheWrongBuffer;
+        }
+    }
+    for (node.children) |child| try expectSymbolBinding(child);
+}
+
+test "every text entry draws a visible label" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    for (document.templates) |template| try expectVisibleLabels(template);
+}
+
+test "the setup Symbol field writes the symbol, not the code" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    for (document.templates) |template| try expectSymbolBinding(template);
+}
+
+fn findButtonByPress(node: canvas.ui_markup.MarkupNode, on_press: []const u8) ?canvas.ui_markup.MarkupNode {
+    if (node.kind == .element and
+        std.mem.eql(u8, node.name, "button") and
+        std.mem.eql(u8, node.attr("on-press") orelse "", on_press)) return node;
+    for (node.children) |child| {
+        if (findButtonByPress(child, on_press)) |found| return found;
+    }
+    return null;
+}
+
+test "the theme control's glyph is the theme the tap brings" {
+    // The button used to read "Theme": the noun it changes, and no word
+    // about the move. A glyph says more in the same space, but only if
+    // it changes with the palette - a picture stuck to one theme is
+    // decoration, and the SDK needs a `label=` on it either way.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    const root = document.root orelse return error.NoViewRoot;
+    const button = findButtonByPress(root, "toggle_theme") orelse {
+        std.debug.print("the title bar has no toggle_theme button\n", .{});
+        return error.ThemeControlMissing;
+    };
+    try testing.expectEqualStrings("{theme_icon}", button.attr("icon") orelse "");
+    try testing.expectEqualStrings("Switch theme", button.attr("label") orelse "");
+
+    // The glyph promises the other half of the day, so on every register
+    // it has to name the palette the tap actually brings.
+    var model = main.initialModel();
+    model.theme_palette = .light;
+    try testing.expectEqualStrings("moon", model.theme_icon());
+    model.theme_palette = .warm;
+    try testing.expectEqualStrings("moon", model.theme_icon());
+    model.theme_palette = .dark;
+    try testing.expectEqualStrings("sun", model.theme_icon());
+    model.theme_palette = .night;
+    try testing.expectEqualStrings("sun", model.theme_icon());
+}
+
+/// The `<for>` whose rows come from one model list.
+fn findForBlock(node: canvas.ui_markup.MarkupNode, source: []const u8) ?canvas.ui_markup.MarkupNode {
+    if (node.kind == .for_block and std.mem.eql(u8, node.attr("each") orelse "", source)) return node;
+    for (node.children) |child| {
+        if (findForBlock(child, source)) |found| return found;
+    }
+    return null;
+}
+
+fn findToggleByToggle(node: canvas.ui_markup.MarkupNode, on_toggle: []const u8) ?canvas.ui_markup.MarkupNode {
+    if (node.kind == .element and
+        std.mem.eql(u8, node.name, "toggle-button") and
+        std.mem.eql(u8, node.attr("on-toggle") orelse "", on_toggle)) return node;
+    for (node.children) |child| {
+        if (findToggleByToggle(child, on_toggle)) |found| return found;
+    }
+    return null;
+}
+
+test "Settings offers every palette, and the contrast beside them" {
+    // Four registers is a decision the model makes; the markup repeats it
+    // rather than restating it. A register the enum gained and Settings
+    // never offered is a palette no operator can choose, and the only way
+    // to catch that is to compare the buttons against the enum itself.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    const template = findTemplate(document, "screen-settings") orelse {
+        std.debug.print("no screen-settings template - Appearance lives in the settings hub\n", .{});
+        return error.SettingsScreenMissing;
+    };
+
+    const loop = findForBlock(template, "palettes") orelse {
+        std.debug.print("the settings hub draws no palette buttons\n", .{});
+        return error.PaletteListUnbound;
+    };
+    try testing.expectEqualStrings("palette", loop.attr("as") orelse "");
+    try testing.expectEqual(@as(usize, 1), loop.children.len);
+
+    const toggle = loop.children[0];
+    try testing.expectEqualStrings("toggle-button", toggle.name);
+    try testing.expectEqualStrings("{palette.id == palette_code}", toggle.attr("selected") orelse "");
+    try testing.expectEqualStrings("set_palette:{palette.id}", toggle.attr("on-toggle") orelse "");
+
+    const contrast = findToggleByToggle(template, "toggle_contrast") orelse {
+        std.debug.print("no button sends toggle_contrast - high contrast is unreachable\n", .{});
+        return error.ContrastControlMissing;
+    };
+    try testing.expectEqualStrings("{contrast_high}", contrast.attr("selected") orelse "");
+
+    // The rows the loop draws are one per palette, named as the enum
+    // names it, and no palette is offered twice.
+    var model = main.initialModel();
+    const options = model.palettes();
+    try testing.expectEqual(@as(usize, std.meta.fields(core.Palette).len), options.len);
+    inline for (std.meta.fields(core.Palette)) |field| {
+        const which = @field(core.Palette, field.name);
+        var hits: usize = 0;
+        for (options) |option| {
+            if (option.id == @intFromEnum(which)) {
+                hits += 1;
+                try testing.expectEqualStrings(which.label(), option.label);
+            }
+        }
+        try testing.expectEqual(@as(usize, 1), hits);
+    }
+}
+
+test "the palette and the contrast the theme reads are the model's" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    main.update(&model, .{ .set_palette = @intFromEnum(core.Palette.warm) }, &fx);
+    try testing.expectEqual(core.Palette.warm, model.theme_palette);
+    try testing.expectEqual(@as(i64, @intFromEnum(core.Palette.warm)), model.palette_code());
+
+    // The paint moves with the field. A setting that changes the model and
+    // not the tokens is a button that lies.
+    const warm_ground = theme.tokens(&model).colors.background;
+    try testing.expect(!std.meta.eql(warm_ground, theme.light().colors.background));
+
+    main.update(&model, .toggle_contrast, &fx);
+    try testing.expect(model.contrast_high());
+    try testing.expectEqualStrings("moon", model.theme_icon());
+    // A light register's high-contrast ink is black, and it comes from the
+    // derivation rather than the register - the palette is still Warm.
+    try testing.expect(std.meta.eql(theme.tokens(&model).colors.text, canvas.Color.rgb8(0, 0, 0)));
+
+    // The title bar's glyph hops to the other half of the day and leaves
+    // the contrast alone: how much separation a person needs is not a
+    // property of the palette they are looking at.
+    main.update(&model, .toggle_theme, &fx);
+    try testing.expectEqual(core.Palette.dark, model.theme_palette);
+    try testing.expect(model.theme_contrast_high);
+    try testing.expect(std.meta.eql(theme.tokens(&model).colors.text, canvas.Color.rgb8(255, 255, 255)));
+    try testing.expectEqualStrings("sun", model.theme_icon());
+
+    // An ordinal this app never offered is not a palette. The default is
+    // the safe answer: neither a panic nor a half-read enum.
+    main.update(&model, .{ .set_palette = 99 }, &fx);
+    try testing.expectEqual(core.Palette.light, model.theme_palette);
+}
+
+/// A word the product used for a destination or a ticket state and
+/// stopped using. `docs/glossary.md` is the list; this is the enforcement.
+/// "Advance" named the machine instead of the move, the state words are
+/// what the workflow engine called them, and "Theme" was the noun on the
+/// title bar's palette control - a button that draws a glyph and names
+/// neither the move nor the theme it brings.
+const retired_words = [_][]const u8{
+    "Sell",      "Floor",     "People",         "Catalog", "Catalogue", "System",
+    "Overview",  "Employees", "Control center", "Advance", "Pending",   "Preparing",
+    "Completed", "Theme",
+};
+
+fn expectNoRetiredWords(node: canvas.ui_markup.MarkupNode) !void {
+    if (node.kind == .text) {
+        const word = std.mem.trim(u8, node.text, " \t\r\n");
+        for (retired_words) |retired| {
+            if (std.mem.eql(u8, word, retired)) {
+                std.debug.print(
+                    "{s}:{d}:{d}: \"{s}\" is retired - docs/glossary.md says what to call it\n",
+                    .{ node.src_path, node.line, node.column, retired },
+                );
+                return error.RetiredWord;
+            }
+        }
+    }
+    for (node.children) |child| try expectNoRetiredWords(child);
+}
+
+test "the rail, the title bar and the markup say the same thing" {
+    // The operator reads the rail, the status bar and the screen's own
+    // heading at the same moment. A rename that reaches one of the three
+    // leaves the product describing one destination two ways, and the
+    // only way to catch that is to pin all three against one list.
+    const vocabulary = [_]struct { section: nav.NavSection, label: []const u8, title: []const u8 }{
+        .{ .section = .overview, .label = "Dashboard", .title = "Dashboard" },
+        .{ .section = .sell, .label = "POS", .title = "Point of sale" },
+        .{ .section = .orders, .label = "Orders", .title = "Orders" },
+        .{ .section = .floor, .label = "Dining", .title = "Dining" },
+        .{ .section = .catalog, .label = "Menu", .title = "Menu" },
+        .{ .section = .people, .label = "Team", .title = "Team" },
+        .{ .section = .system, .label = "Settings", .title = "Settings" },
+    };
+
+    for (vocabulary) |word| {
+        try testing.expectEqualStrings(word.label, word.section.label());
+        try testing.expectEqualStrings(word.title, rbac.section_screen(word.section).title());
+    }
+
+    // The rail the admin sees is exactly that list, in that order: the
+    // labels are not retyped in `rbac.zig`, they come from here.
+    const rail = rbac.nav_sections(.admin);
+    try testing.expectEqual(vocabulary.len, rail.len);
+    for (rail, 0..) |row, index| {
+        try testing.expectEqualStrings(vocabulary[index].label, row.label);
+    }
+
+    for ([_]struct { role: nav.Role, label: []const u8 }{
+        .{ .role = .waiter, .label = "Service" },
+        .{ .role = .kds, .label = "Kitchen" },
+        .{ .role = .display, .label = "Display" },
+    }) |single| {
+        const role_rail = rbac.nav_sections(single.role);
+        try testing.expectEqual(@as(usize, 1), role_rail.len);
+        try testing.expectEqualStrings(single.label, role_rail[0].label);
+    }
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const document = try resolveAppDocument(arena_state.allocator());
+    for (document.templates) |template| try expectNoRetiredWords(template);
+    // The shell's own words count too: the title bar is where a
+    // destination's name is most likely to be spelled the old way, and
+    // it is not a template.
+    if (document.root) |root| try expectNoRetiredWords(root);
+}
+
 /// How many widgets of `kind` carry exactly `text`. A view that must
 /// not offer a control uses this to tell "hidden" from "one row still
 /// shows it".
@@ -87,7 +393,7 @@ fn countByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8)
     return count;
 }
 
-fn expectByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) !canvas.Widget {
+pub fn expectByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) !canvas.Widget {
     return findByText(widget, kind, text) orelse {
         std.debug.print("no {t} with text \"{s}\" in the view - if you changed app.native, update this test to match\n", .{ kind, text });
         return error.WidgetNotFound;
@@ -172,7 +478,7 @@ test "the picker lists the people who work here" {
     _ = try expectByText(tree.root, .text, "Waiter");
 }
 
-test "picking a person lands on the PIN screen, in the mode they work in" {
+test "picking a person opens the sign-in surface that is theirs" {
     // The kiosk shows the device modes, not people.
     if (app == .kiosk) return;
 
@@ -186,6 +492,17 @@ test "picking a person lands on the PIN screen, in the mode they work in" {
     var model = main.initialModel();
     model.employees = &.{
         .{ .id = 7, .name = "Sam", .role = @intFromEnum(rbac.employee_role(boot)), .role_label = boot.label(), .active = true },
+        .{
+            .id = 8,
+            .name = "Ravi",
+            .role = @intFromEnum(rbac.employee_role(boot)),
+            .role_label = boot.label(),
+            .active = true,
+            // A manager who types rather than taps. The kind is the
+            // person's, so it comes off the row and nowhere else.
+            .auth_kind = .password,
+            .credential_label = domain.CredentialKind.password.label(),
+        },
     };
     main.update(&model, .{ .pick_employee = 7 }, &fx);
 
@@ -202,6 +519,117 @@ test "picking a person lands on the PIN screen, in the mode they work in" {
     const tree = try buildTree(arena, &model);
     _ = try expectByText(tree.root, .text, "Sign in");
     _ = try expectByText(tree.root, .text, "Sam - enter your PIN");
+
+    // A PIN is tapped, so the pad is on the screen and no keyboard
+    // field is: one of the two surfaces is built at a time, never both.
+    try testing.expect(model.sign_in_by_pin());
+    _ = try expectByText(tree.root, .button, "Clear");
+    _ = try expectByText(tree.root, .button, "Back");
+
+    // The other person is asked for the other thing, in the other
+    // shape. Choosing a person resets the session, so this is the same
+    // screen rebuilt rather than a second screen.
+    main.update(&model, .{ .pick_employee = 8 }, &fx);
+    try testing.expect(model.sign_in_by_password());
+    const other = try buildTree(arena, &model);
+    _ = try expectByText(other.root, .text, "Ravi - enter your password");
+    _ = try expectByText(other.root, .text, "Password");
+    _ = try expectByText(other.root, .button, "Show");
+    try testing.expect(findByText(other.root, .button, "Clear") == null);
+}
+
+test "the secret shows as bullets, and the eye opens it" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    model.credential.set("s3cret");
+
+    // Six keys pressed, six dots shown, and none of them the ones
+    // that were pressed. A queue can see how far along the cashier is
+    // and nothing else.
+    const masked = model.credential_display();
+    try testing.expectEqual(@as(usize, 6 * 3), masked.len);
+    try testing.expect(std.mem.indexOf(u8, masked, "s3cret") == null);
+
+    // The eye changes the face only. The buffer keeps what it holds,
+    // because that is what gets hashed.
+    main.update(&model, .{ .toggle_reveal = {} }, &fx);
+    try testing.expectEqualStrings("s3cret", model.credential_display());
+    try testing.expectEqualStrings("Hide", model.reveal_label());
+
+    main.update(&model, .{ .toggle_reveal = {} }, &fx);
+    try testing.expectEqualStrings("Show", model.reveal_label());
+    try testing.expectEqualStrings(masked, model.credential_display());
+
+    // A character is a character and not a byte: a password with an
+    // accented key in it shows one dot for each key, not one for each
+    // byte of it.
+    model.credential.set("café-pass");
+    try testing.expectEqual(@as(usize, 9 * 3), model.credential_display().len);
+}
+
+test "the pad taps a PIN one digit at a time" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+
+    // The order a keypad has always laid them out: 1 at the top left,
+    // 0 last. The pad draws this table; it is not ten buttons typed
+    // out in markup, so a missing key cannot go unnoticed.
+    const digits = model.pin_digits();
+    try testing.expectEqual(@as(usize, 10), digits.len);
+    try testing.expectEqualStrings("1", digits[0].label);
+    try testing.expectEqual(@as(usize, 1), digits[0].id);
+    try testing.expectEqualStrings("0", digits[9].label);
+    try testing.expectEqual(@as(usize, 0), digits[9].id);
+
+    for ([_]usize{ 4, 8, 2, 1, 5, 5 }) |digit| {
+        main.update(&model, .{ .credential_digit = @intCast(digit) }, &fx);
+    }
+    try testing.expectEqualStrings("482155", model.credential.text());
+    try testing.expectEqual(@as(usize, 6 * 3), model.credential_display().len);
+
+    // Back gives one digit up; Clear starts over. Both are pad keys,
+    // because a tapped code has no caret and no keyboard to edit it.
+    main.update(&model, .{ .credential_back = {} }, &fx);
+    try testing.expectEqualStrings("48215", model.credential.text());
+    main.update(&model, .{ .credential_clear = {} }, &fx);
+    try testing.expectEqual(@as(usize, 0), model.credential.text().len);
+    main.update(&model, .{ .credential_back = {} }, &fx);
+    try testing.expectEqual(@as(usize, 0), model.credential.text().len);
+
+    // And the pad stops taking digits at the length a PIN is allowed
+    // to reach, so a stuck key cannot grow the buffer forever.
+    for (0..auth.max_pin_len) |_| {
+        main.update(&model, .{ .credential_digit = 7 }, &fx);
+    }
+    main.update(&model, .{ .credential_digit = 7 }, &fx);
+    try testing.expectEqual(auth.max_pin_len, model.credential.text().len);
+
+    // While the till is waiting out a lockout the surface is inert, and
+    // inert means every way in: a pad that went on taking digits after
+    // the fifth refusal told the person nothing was wrong, and the only
+    // answer arrived when they pressed Sign in again.
+    model.now_ms = 1_000_000;
+    model.login_locked_until = model.now_ms + 60_000;
+    try testing.expect(model.login_locked());
+    try testing.expect(!model.credential_surface_open());
+    try testing.expectEqual(@as(i64, 60), model.login_locked_seconds());
+    main.update(&model, .{ .credential_digit = 3 }, &fx);
+    main.update(&model, .{ .credential_back = {} }, &fx);
+    main.update(&model, .{ .credential_clear = {} }, &fx);
+    try testing.expectEqual(auth.max_pin_len, model.credential.text().len);
+
+    // The wait ends by itself, and the pad takes the next digit.
+    model.now_ms += 60_000;
+    try testing.expect(!model.login_locked());
+    try testing.expect(model.credential_surface_open());
+    main.update(&model, .{ .credential_clear = {} }, &fx);
+    try testing.expectEqual(@as(usize, 0), model.credential.text().len);
+    main.update(&model, .{ .credential_digit = 3 }, &fx);
+    try testing.expectEqualStrings("3", model.credential.text());
 }
 
 test "a person whose role is not this app's is refused" {
@@ -354,42 +782,309 @@ test "pressing the current destination does not grow the history" {
     try testing.expectEqual(nav.Screen.kds_board, model.screen());
 }
 
-test "every text pair in the light and dark palettes clears WCAG AA" {
-    const palettes = [_]struct { name: []const u8, tokens: canvas.DesignTokens }{
-        .{ .name = "light", .tokens = theme.light() },
-        .{ .name = "dark", .tokens = theme.dark() },
-    };
+/// Every palette the runtime can hand the renderer: the four registers,
+/// and each one's high-contrast derivation. They are read through
+/// `theme.tokens` - the call the app itself makes - so a combination no
+/// test reaches is a combination nobody has looked at.
+const palette_cases = [_]struct {
+    name: []const u8,
+    palette: core.Palette,
+    high: bool,
+}{
+    .{ .name = "light", .palette = .light, .high = false },
+    .{ .name = "light high contrast", .palette = .light, .high = true },
+    .{ .name = "dark", .palette = .dark, .high = false },
+    .{ .name = "dark high contrast", .palette = .dark, .high = true },
+    .{ .name = "warm", .palette = .warm, .high = false },
+    .{ .name = "warm high contrast", .palette = .warm, .high = true },
+    .{ .name = "night", .palette = .night, .high = false },
+    .{ .name = "night high contrast", .palette = .night, .high = true },
+};
 
-    for (palettes) |palette| {
-        const c = palette.tokens.colors;
-        const pairs = [_]struct { name: []const u8, foreground: canvas.Color, background: canvas.Color, minimum: f32 }{
-            .{ .name = "text on background", .foreground = c.text, .background = c.background, .minimum = 4.5 },
-            .{ .name = "text on surface", .foreground = c.text, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "muted text on background", .foreground = c.text_muted, .background = c.background, .minimum = 4.5 },
-            .{ .name = "muted text on surface", .foreground = c.text_muted, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "accent label on accent", .foreground = c.accent_text, .background = c.accent, .minimum = 4.5 },
-            .{ .name = "accent as text on background", .foreground = c.accent, .background = c.background, .minimum = 4.5 },
-            .{ .name = "accent as text on surface", .foreground = c.accent, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "destructive label on destructive", .foreground = c.destructive_text, .background = c.destructive, .minimum = 4.5 },
-            .{ .name = "destructive as text on background", .foreground = c.destructive, .background = c.background, .minimum = 4.5 },
-            .{ .name = "destructive as text on surface", .foreground = c.destructive, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "success label on success", .foreground = c.success_text, .background = c.success, .minimum = 4.5 },
-            .{ .name = "success as text on background", .foreground = c.success, .background = c.background, .minimum = 4.5 },
-            .{ .name = "success as text on surface", .foreground = c.success, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "warning label on warning", .foreground = c.warning_text, .background = c.warning, .minimum = 4.5 },
-            .{ .name = "warning as text on background", .foreground = c.warning, .background = c.background, .minimum = 4.5 },
-            .{ .name = "warning as text on surface", .foreground = c.warning, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "info label on info", .foreground = c.info_text, .background = c.info, .minimum = 4.5 },
-            .{ .name = "info as text on background", .foreground = c.info, .background = c.background, .minimum = 4.5 },
-            .{ .name = "info as text on surface", .foreground = c.info, .background = c.surface, .minimum = 4.5 },
-            .{ .name = "focus ring on background", .foreground = c.focus_ring, .background = c.background, .minimum = 3.0 },
-            .{ .name = "focus ring on surface", .foreground = c.focus_ring, .background = c.surface, .minimum = 3.0 },
+fn paletteColors(case: @TypeOf(palette_cases[0])) canvas.ColorTokens {
+    var model = main.initialModel();
+    model.theme_palette = case.palette;
+    model.theme_contrast_high = case.high;
+    return theme.tokens(&model).colors;
+}
+
+/// A colour token's value, read by the name the markup writes. Walking
+/// the struct's fields means a token the theme gains needs no change here.
+fn tokenColor(colors: canvas.ColorTokens, name: []const u8) ?canvas.Color {
+    inline for (std.meta.fields(canvas.ColorTokens)) |field| {
+        if (std.mem.eql(u8, field.name, name)) return @field(colors, field.name);
+    }
+    return null;
+}
+
+test "every text pair in every register clears WCAG, both contrasts" {
+    for (palette_cases) |case| {
+        const colors = paletteColors(case);
+
+        // Ink carries the AAA promise: high contrast exists precisely
+        // because someone cannot read this screen at AA. A brand hue used
+        // as running text keeps its AA duty instead - pushing cyan to
+        // 7:1 against a light ground is not a colour, it is a smudge.
+        const ink: f32 = if (case.high) 7.0 else 4.5;
+        const pairs = [_]struct { name: []const u8, foreground: []const u8, background: []const u8, minimum: f32 }{
+            .{ .name = "text on background", .foreground = "text", .background = "background", .minimum = ink },
+            .{ .name = "text on surface", .foreground = "text", .background = "surface", .minimum = ink },
+            .{ .name = "text on a pressed row", .foreground = "text", .background = "surface_pressed", .minimum = ink },
+            .{ .name = "muted text on background", .foreground = "text_muted", .background = "background", .minimum = ink },
+            .{ .name = "muted text on surface", .foreground = "text_muted", .background = "surface", .minimum = ink },
+            .{ .name = "muted text on a closed chip", .foreground = "text_muted", .background = "surface_subtle", .minimum = ink },
+            .{ .name = "accent label on accent", .foreground = "accent_text", .background = "accent", .minimum = ink },
+            .{ .name = "accent as text on background", .foreground = "accent", .background = "background", .minimum = 4.5 },
+            .{ .name = "accent as text on surface", .foreground = "accent", .background = "surface", .minimum = 4.5 },
+            .{ .name = "destructive label on destructive", .foreground = "destructive_text", .background = "destructive", .minimum = ink },
+            .{ .name = "destructive as text on background", .foreground = "destructive", .background = "background", .minimum = 4.5 },
+            .{ .name = "destructive as text on surface", .foreground = "destructive", .background = "surface", .minimum = 4.5 },
+            .{ .name = "success label on success", .foreground = "success_text", .background = "success", .minimum = ink },
+            .{ .name = "success as text on background", .foreground = "success", .background = "background", .minimum = 4.5 },
+            .{ .name = "success as text on surface", .foreground = "success", .background = "surface", .minimum = 4.5 },
+            .{ .name = "warning label on warning", .foreground = "warning_text", .background = "warning", .minimum = ink },
+            .{ .name = "warning as text on background", .foreground = "warning", .background = "background", .minimum = 4.5 },
+            .{ .name = "warning as text on surface", .foreground = "warning", .background = "surface", .minimum = 4.5 },
+            .{ .name = "info label on info", .foreground = "info_text", .background = "info", .minimum = ink },
+            .{ .name = "info as text on background", .foreground = "info", .background = "background", .minimum = 4.5 },
+            .{ .name = "info as text on surface", .foreground = "info", .background = "surface", .minimum = 4.5 },
+            .{ .name = "focus ring on background", .foreground = "focus_ring", .background = "background", .minimum = 3.0 },
+            .{ .name = "focus ring on surface", .foreground = "focus_ring", .background = "surface", .minimum = 3.0 },
         };
 
         for (pairs) |pair| {
-            try expectContrast(palette.name, pair.name, pair.foreground, pair.background, pair.minimum);
+            const foreground = tokenColor(colors, pair.foreground) orelse {
+                std.debug.print("{s} is not a colour token\n", .{pair.foreground});
+                return error.UnknownColorToken;
+            };
+            const background = tokenColor(colors, pair.background) orelse {
+                std.debug.print("{s} is not a colour token\n", .{pair.background});
+                return error.UnknownColorToken;
+            };
+            try expectContrast(case.name, pair.name, foreground, background, pair.minimum);
         }
     }
+}
+
+test "a brand colour is a hash and six digits" {
+    // The shape the form promises, in one place: the typing is refused
+    // here and the theme reads the same function, so neither can be
+    // sure about a colour the other one cannot draw.
+    try testing.expectEqual(@as(?u24, 0x1F7A8C), core.parseBrand("#1F7A8C"));
+    try testing.expectEqual(@as(?u24, 0x1F7A8C), core.parseBrand("#1f7a8c"));
+    try testing.expect(core.parseBrand("") == null); // no colour chosen
+    try testing.expect(core.parseBrand("#1F7A") == null); // mid-typing
+    try testing.expect(core.parseBrand("1F7A8C") == null); // the hash is part of it
+    try testing.expect(core.parseBrand("#1F7A8CG") == null); // too long
+    try testing.expect(core.parseBrand("#1F7A8G") == null); // not hex
+}
+
+/// The colours an owner can type into the company form. A brand is data
+/// rather than a palette, so it arrives from the database and can be
+/// anything: the derivation has to answer for a readable teal and for
+/// pure white with the same code.
+const brand_cases = [_]struct { name: []const u8, text: []const u8 }{
+    .{ .name = "nothing typed", .text = "" },
+    .{ .name = "a deep teal", .text = "#0B5C75" },
+    .{ .name = "a bright yellow", .text = "#FFD54F" },
+    .{ .name = "a mid purple", .text = "#7A1F8C" },
+    .{ .name = "pure white", .text = "#FFFFFF" },
+    .{ .name = "pure black", .text = "#000000" },
+};
+
+/// The tokens for one register wearing one brand: the same call the
+/// renderer makes, with the company row's text in it.
+fn brandColors(palette: core.Palette, high: bool, brand_text: []const u8) canvas.ColorTokens {
+    var model = main.initialModel();
+    model.theme_palette = palette;
+    model.theme_contrast_high = high;
+    model.company_brand_field = brand_text;
+    return theme.tokens(&model).colors;
+}
+
+test "a brand colour keeps every pair it lands on, in every register" {
+    for (palette_cases) |palette_case| {
+        for (brand_cases) |brand_case| {
+            const colors = brandColors(palette_case.palette, palette_case.high, brand_case.text);
+            var which_buf: [80]u8 = undefined;
+            const which = std.fmt.bufPrint(&which_buf, "{s} wearing {s}", .{ palette_case.name, brand_case.name }) catch "a brand";
+            // The accent's two jobs, both asserted: the label it carries,
+            // and the ink the markup paints prices and links with. High
+            // contrast keeps its AAA promise for the label because the
+            // brand is applied before the derivation, not after it.
+            const ink: f32 = if (palette_case.high) 7.0 else 4.5;
+            try expectContrast(which, "accent label on accent", colors.accent_text, colors.accent, ink);
+            try expectContrast(which, "accent as text on background", colors.accent, colors.background, 4.5);
+            try expectContrast(which, "accent as text on surface", colors.accent, colors.surface, 4.5);
+            try expectContrast(which, "focus ring on background", colors.focus_ring, colors.background, 3.0);
+            try expectContrast(which, "focus ring on surface", colors.focus_ring, colors.surface, 3.0);
+        }
+    }
+}
+
+test "a brand the register can already carry is used exactly as it was typed" {
+    const colors = brandColors(.light, false, "#0B5C75");
+    try testing.expect(std.meta.eql(colors.accent, canvas.Color.rgb8(0x0B, 0x5C, 0x75)));
+    try testing.expect(std.meta.eql(colors.focus_ring, colors.accent));
+    // The label is the extreme the colour reads better against: white on
+    // a dark teal, never a grey nobody chose.
+    try testing.expect(std.meta.eql(colors.accent_text, canvas.Color.rgb8(255, 255, 255)));
+}
+
+test "a brand the register cannot carry is pushed, not replaced" {
+    const typed = canvas.Color.rgb8(0xFF, 0xD5, 0x4F);
+    const colors = brandColors(.light, false, "#FFD54F");
+
+    // Logo yellow is unreadable as ink on a light screen, so it is not
+    // used as typed.
+    try testing.expect(!std.meta.eql(colors.accent, typed));
+    // It is darkened rather than changed: the order of the channels is
+    // the hue, and mixing toward black leaves the order alone. A darker
+    // yellow is still the colour on the awning.
+    try testing.expect(colors.accent.r >= colors.accent.g);
+    try testing.expect(colors.accent.g >= colors.accent.b);
+    try testing.expect(colors.accent.r < typed.r);
+}
+
+/// One state's chip, as `parts.native` must paint it and as
+/// `domain.OrderStatus` must name it.
+///
+/// A colour cannot travel as data - the SDK takes colour token names as
+/// literals only - so the pairing between a state and its colours exists
+/// in exactly two places: the markup's `<if>` chain, and here. Nothing
+/// but this test stops them drifting apart, and a chip that reads the
+/// wrong colour tells the operator the wrong thing about a live ticket.
+const status_chips = [_]struct {
+    code: i64,
+    label: []const u8,
+    background: []const u8,
+    foreground: []const u8,
+}{
+    .{ .code = 0, .label = "New", .background = "info", .foreground = "info_text" },
+    .{ .code = 1, .label = "Cooking", .background = "warning", .foreground = "warning_text" },
+    .{ .code = 2, .label = "Ready", .background = "success", .foreground = "success_text" },
+    .{ .code = 3, .label = "Served", .background = "accent", .foreground = "accent_text" },
+    .{ .code = 4, .label = "Closed", .background = "surface_subtle", .foreground = "text_muted" },
+    .{ .code = 5, .label = "Voided", .background = "destructive", .foreground = "destructive_text" },
+};
+
+fn findTemplate(document: canvas.ui_markup.MarkupDocument, name: []const u8) ?canvas.ui_markup.MarkupNode {
+    for (document.templates) |template| {
+        if (std.mem.eql(u8, template.attr("name") orelse "", name)) return template;
+    }
+    return null;
+}
+
+/// The first `attr=` anywhere below the node, which for a chip branch is
+/// the chip's own colour: the branch is a row filled with a token and the
+/// text inside it drawn with another.
+fn firstAttr(node: canvas.ui_markup.MarkupNode, name: []const u8) ?[]const u8 {
+    if (node.kind == .element) {
+        if (node.attr(name)) |value| return value;
+    }
+    for (node.children) |child| {
+        if (firstAttr(child, name)) |value| return value;
+    }
+    return null;
+}
+
+/// The ordinal a branch tests. `{code == 2}` reads as 2.
+fn conditionCode(condition: []const u8) ?i64 {
+    var index: usize = 0;
+    while (index < condition.len) : (index += 1) {
+        if (std.ascii.isDigit(condition[index])) break;
+    } else return null;
+    var value: i64 = 0;
+    while (index < condition.len and std.ascii.isDigit(condition[index])) : (index += 1) {
+        value = value * 10 + @as(i64, condition[index] - '0');
+    }
+    return value;
+}
+
+test "a ticket's chip colours the state it names, in every palette" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    const template = findTemplate(document, "status-badge") orelse {
+        std.debug.print("no status-badge template - the boards colour tickets with it\n", .{});
+        return error.StatusBadgeMissing;
+    };
+
+    for (status_chips) |chip| {
+        // The state word is the enum's, so a rename cannot leave the
+        // colour table describing a state that is no longer called that.
+        const status = domain.OrderStatus.fromCode(chip.code);
+        try testing.expectEqualStrings(chip.label, status.label());
+
+        const branch = findChipBranch(template, chip.code) orelse {
+            std.debug.print("status-badge has no branch for code {d} ({s})\n", .{ chip.code, chip.label });
+            return error.StatusChipUnmapped;
+        };
+
+        try testing.expectEqualStrings(chip.background, firstAttr(branch, "background") orelse "");
+        try testing.expectEqualStrings(chip.foreground, firstAttr(branch, "foreground") orelse "");
+
+        for (palette_cases) |palette| {
+            const colors = paletteColors(palette);
+            const background = tokenColor(colors, chip.background) orelse {
+                std.debug.print("{s} is not a colour token\n", .{chip.background});
+                return error.UnknownColorToken;
+            };
+            const foreground = tokenColor(colors, chip.foreground) orelse {
+                std.debug.print("{s} is not a colour token\n", .{chip.foreground});
+                return error.UnknownColorToken;
+            };
+            try expectContrast(
+                palette.name,
+                chip.label,
+                foreground,
+                background,
+                if (palette.high) 7.0 else 4.5,
+            );
+        }
+    }
+}
+
+/// The chip branch of `status-badge` that fires for one ordinal.
+fn findChipBranch(node: canvas.ui_markup.MarkupNode, code: i64) ?canvas.ui_markup.MarkupNode {
+    if (node.kind == .if_block) {
+        const condition = node.attr("test") orelse "";
+        if (conditionCode(condition)) |tested| {
+            if (tested == code and firstAttr(node, "background") != null) return node;
+        }
+    }
+    for (node.children) |child| {
+        if (findChipBranch(child, code)) |found| return found;
+    }
+    return null;
+}
+
+test "no badge is given a colour it will ignore" {
+    // `<badge>` takes its fill and text from the theme's badge table, so
+    // a `background=` on one parses, passes every check, and paints
+    // nothing. A coloured state is a row holding a coloured text; putting
+    // one on a badge would look right and be a silent no-op.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try resolveAppDocument(arena);
+    for (document.templates) |template| try expectNoColoredBadge(template);
+}
+
+fn expectNoColoredBadge(node: canvas.ui_markup.MarkupNode) !void {
+    if (node.kind == .element and std.mem.eql(u8, node.name, "badge")) {
+        if (node.attr("background") != null or node.attr("foreground") != null) {
+            std.debug.print(
+                "{s}:{d}:{d}: a badge ignores background= and foreground=; colour a state with a row and a text\n",
+                .{ node.src_path, node.line, node.column },
+            );
+            return error.BadgeCarriesIgnoredColor;
+        }
+    }
+    for (node.children) |child| try expectNoColoredBadge(child);
 }
 
 test "changing the board ends the previous operator's session" {
@@ -443,6 +1138,11 @@ test "signing out clears the cart, the filters and the operator" {
     model.selected_category = 1;
     model.employee_id = 7;
     model.employee_name = "Anita";
+    // The gate a sign-out lands on asks the person who just left, so
+    // the session has to be somebody the staff list knows.
+    model.employees = &.{
+        .{ .id = 7, .name = "Anita", .role = @intFromEnum(rbac.employee_role(boot)), .role_label = boot.label(), .active = true },
+    };
     model.error_text = "Something went wrong";
 
     main.update(&model, .{ .sign_out = {} }, &fx);
@@ -456,6 +1156,12 @@ test "signing out clears the cart, the filters and the operator" {
     try testing.expectEqual(gate, model.screen());
     try testing.expectEqual(@as(i64, 0), model.employee_id);
     try testing.expectEqualStrings("", model.employee_name);
+    // The gate keeps the person, because a gate that names nobody is a
+    // gate a secret gets typed at no one.
+    if (gate == .login) {
+        try testing.expectEqual(@as(i64, 7), model.sign_in_employee_id);
+        try testing.expectEqualStrings("Anita", model.sign_in_employee_name());
+    }
     try testing.expectEqual(@as(usize, 0), model.cart_count());
     try testing.expectEqual(@as(usize, 0), model.search.text().len);
     try testing.expectEqual(@as(i64, 0), model.selected_category);
@@ -537,9 +1243,9 @@ test "a PIN is hashed, never stored" {
     var hash_b: [auth.hash_length]u8 = undefined;
     var hash_c: [auth.hash_length]u8 = undefined;
 
-    const a = auth.hashPin(salt, 1, "123456", &hash_a) orelse return error.NoHash;
-    const b = auth.hashPin(salt, 1, "123456", &hash_b) orelse return error.NoHash;
-    const c = auth.hashPin("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 1, "123456", &hash_c) orelse return error.NoHash;
+    const a = auth.hashCredential(salt, 1, "123456", &hash_a) orelse return error.NoHash;
+    const b = auth.hashCredential(salt, 1, "123456", &hash_b) orelse return error.NoHash;
+    const c = auth.hashCredential("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 1, "123456", &hash_c) orelse return error.NoHash;
 
     // The same PIN, the same salt and the same employee give the same
     // hash: the hash is made from what the app knows.
@@ -559,14 +1265,14 @@ test "a PIN is hashed, never stored" {
 test "a PIN verifies against its own hash and nothing else" {
     const salt = "0123456789abcdef0123456789abcdef";
     var hash: [auth.hash_length]u8 = undefined;
-    const stored = auth.hashPin(salt, 1, "123456", &hash) orelse return error.NoHash;
+    const stored = auth.hashCredential(salt, 1, "123456", &hash) orelse return error.NoHash;
 
-    try testing.expect(auth.verifyPin(salt, "123456", stored));
-    try testing.expect(!auth.verifyPin(salt, "123457", stored));
+    try testing.expect(auth.verifyCredential(salt, "123456", stored));
+    try testing.expect(!auth.verifyCredential(salt, "123457", stored));
     // The hash carries the salt it was made with, so it verifies on
     // its own terms: the installation is what scopes the LOOKUP, not
     // the check.
-    try testing.expect(auth.verifyPin("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "123456", stored));
+    try testing.expect(auth.verifyCredential("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "123456", stored));
 }
 
 test "the old hash still verifies, so a running restaurant still works" {
@@ -576,29 +1282,30 @@ test "the old hash still verifies, so a running restaurant still works" {
 
     // The old digest is recognised as old, and it verifies.
     try testing.expect(auth.isLegacy(stored));
-    try testing.expect(auth.verifyPin(salt, "123456", stored));
-    try testing.expect(!auth.verifyPin(salt, "123457", stored));
+    try testing.expect(auth.verifyCredential(salt, "123456", stored));
+    try testing.expect(!auth.verifyCredential(salt, "123457", stored));
     // A bcrypt string is not an old one.
     var modern: [auth.hash_length]u8 = undefined;
-    const bcrypt_hash = auth.hashPin(salt, 1, "123456", &modern) orelse return error.NoHash;
+    const bcrypt_hash = auth.hashCredential(salt, 1, "123456", &modern) orelse return error.NoHash;
     try testing.expect(!auth.isLegacy(bcrypt_hash));
 }
 
 test "two employees with the same PIN have different hashes" {
-    // The salt is the installation's AND the employee's, so a database
-    // that is cracked gives up one PIN rather than every PIN.
+    // The salt is the installation's AND the employee's, so two rows
+    // that hold the same code hold different hashes, and a hash says
+    // nothing about its neighbour.
     const salt = "0123456789abcdef0123456789abcdef";
     var first: [auth.hash_length]u8 = undefined;
     var second: [auth.hash_length]u8 = undefined;
 
-    const a = auth.hashPin(salt, 1, "123456", &first) orelse return error.NoHash;
-    const b = auth.hashPin(salt, 2, "123456", &second) orelse return error.NoHash;
+    const a = auth.hashCredential(salt, 1, "123456", &first) orelse return error.NoHash;
+    const b = auth.hashCredential(salt, 2, "123456", &second) orelse return error.NoHash;
 
     // Neither hash is the other's.
     try testing.expect(!std.mem.eql(u8, a, b));
     // And both still check their own PIN.
-    try testing.expect(auth.verifyPin(salt, "123456", a));
-    try testing.expect(auth.verifyPin(salt, "123456", b));
+    try testing.expect(auth.verifyCredential(salt, "123456", a));
+    try testing.expect(auth.verifyCredential(salt, "123456", b));
 }
 
 test "the tax is rounded half up, and an inclusive price keeps it inside" {
@@ -651,6 +1358,47 @@ test "a currency's decimals are its own" {
     try testing.expectEqual(@as(i64, 100), model.currency_divisor());
     model.currency_decimals = 3;
     try testing.expectEqual(@as(i64, 1000), model.currency_divisor());
+}
+
+test "an amount means what its currency says it means" {
+    // Two decimals is the common case, and the old reading of it: the
+    // last digit is the hundredths, and a missing one is not a gap.
+    try testing.expectEqual(@as(?i64, 2450), core.parseAmount("24.50", 2));
+    try testing.expectEqual(@as(?i64, 2450), core.parseAmount("24.5", 2));
+    try testing.expectEqual(@as(?i64, 2400), core.parseAmount("24", 2));
+    try testing.expectEqual(@as(?i64, 1050), core.parseAmount("10.5", 2));
+
+    // A yen restaurant has no fraction at all: "24" is twenty-four yen,
+    // not two hundred and forty, and a fraction is a mistake.
+    try testing.expectEqual(@as(?i64, 24), core.parseAmount("24", 0));
+    try testing.expectEqual(@as(?i64, null), core.parseAmount("24.5", 0));
+
+    // A dinar has three. The third digit is kept, and a fourth is
+    // refused rather than dropped - a mistyped price must not quietly
+    // become a different price.
+    try testing.expectEqual(@as(?i64, 10555), core.parseAmount("10.555", 3));
+    try testing.expectEqual(@as(?i64, 10500), core.parseAmount("10.5", 3));
+    try testing.expectEqual(@as(?i64, null), core.parseAmount("10.5555", 3));
+
+    // Nothing typed, and nothing that is not an amount, is nothing.
+    for ([_][]const u8{ "", "   ", "1.2.3", "abc", "-5", "1e3", "12%" }) |text| {
+        try testing.expectEqual(@as(?i64, null), core.parseAmount(text, 2));
+    }
+
+    // A decimals figure the database should never have held would run
+    // the divisor away; the parser refuses it instead.
+    try testing.expectEqual(@as(?i64, null), core.parseAmount("24", -1));
+    try testing.expectEqual(@as(?i64, null), core.parseAmount("24", 9));
+
+    // A rate is not money: the hundred belongs to the percent, so a
+    // percentage and a tax rate read the same in a yen or a dinar till.
+    // The lone fraction digit is the tens, once - "12.5" is twelve and a
+    // half percent, and was 17% before the two parsers were one.
+    try testing.expectEqual(@as(?i64, 2450), core.parsePrice("24.5"));
+    try testing.expectEqual(@as(?i64, 1250), core.parsePrice("12.5"));
+    try testing.expectEqual(@as(?i64, 550), core.parsePrice("5.5"));
+    // A rate finer than a hundredth of a percent is refused, not cut.
+    try testing.expectEqual(@as(?i64, null), core.parsePrice("12.755"));
 }
 
 test "a failed salt write does not make the salt look confirmed" {
@@ -707,7 +1455,7 @@ test "a second tap while the ticket is moving does not move it twice" {
 
     var model = main.initialModel();
     model.orders = &.{
-        .{ .id = 1, .order_no = "000001", .order_type = .dine_in, .status = .pending, .status_label = "Pending", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 1, .order_no = "000001", .order_type = .dine_in, .status = .pending, .status_code = @intFromEnum(domain.OrderStatus.pending), .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
     };
 
     // The kitchen advances the ticket. The write is in flight: the
@@ -814,11 +1562,11 @@ test "a decoded company does not point at the page bytes" {
     var bytes: std.ArrayList(u8) = .empty;
     defer bytes.deinit(testing.allocator);
 
-    try appendInt(&bytes, 9); // column count
+    try appendInt(&bytes, 10); // column count
     try appendInt(&bytes, 1); // row count
     for ([_][]const u8{
         "id",      "name",  "currency_code", "currency_symbol",   "tax_inclusive",
-        "address", "phone", "tax_number",    "currency_decimals",
+        "address", "phone", "tax_number",    "currency_decimals", "brand_color",
     }) |name| {
         try appendBytes(&bytes, name);
     }
@@ -834,6 +1582,7 @@ test "a decoded company does not point at the page bytes" {
     try appendText(&bytes, "29ABCDE1234F1Z5");
     try appendTag(&bytes, 1);
     try appendI64(&bytes, 2);
+    try appendText(&bytes, "#1F7A8C");
 
     var model = main.initialModel();
     repos.decodeCompany(&model, bytes.items);
@@ -849,13 +1598,16 @@ test "a decoded company does not point at the page bytes" {
     try testing.expectEqualStrings("29ABCDE1234F1Z5", model.company_tax_field);
     try testing.expectEqualStrings("USD", model.currency_code);
     try testing.expectEqualStrings("$", model.currency_symbol);
+    // The brand is the theme's, so a brand that dangles is a till that
+    // draws with garbage.
+    try testing.expectEqualStrings("#1F7A8C", model.company_brand_field);
 }
 
 test "the model reports its own numbers instead of storing them" {
     var model = main.initialModel();
     model.orders = &.{
-        .{ .id = 1, .order_no = "1", .order_type = .dine_in, .status = .pending, .status_label = "Pending", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
-        .{ .id = 2, .order_no = "2", .order_type = .dine_in, .status = .completed, .status_label = "Completed", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 1, .order_no = "1", .order_type = .dine_in, .status = .pending, .status_code = @intFromEnum(domain.OrderStatus.pending), .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
+        .{ .id = 2, .order_no = "2", .order_type = .dine_in, .status = .completed, .status_code = @intFromEnum(domain.OrderStatus.completed), .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 0, .tax_minor = 0, .discount_minor = 0, .total_minor = 0, .placed_at = 0, .notes = "" },
     };
     try testing.expectEqual(@as(usize, 2), model.order_count());
     try testing.expectEqual(@as(usize, 1), model.open_order_count());
@@ -879,8 +1631,11 @@ test "the orders board counts open tickets and stops offering a paid one" {
     model.signed_in = true;
     model.screen_index = nav.Screen.orders.index();
     model.orders = &.{
-        .{ .id = 1, .order_no = "A-1", .order_type = .dine_in, .status = .pending, .status_label = "Pending", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 1000, .tax_minor = 0, .discount_minor = 0, .total_minor = 1000, .placed_at = 0, .notes = "" },
-        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_label = "Completed", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
+        .{ .id = 1, .order_no = "A-1", .order_type = .dine_in, .status = .pending, .status_code = @intFromEnum(domain.OrderStatus.pending), .status_label = domain.OrderStatus.pending.label(), .advance_label = domain.OrderStatus.pending.actionLabel(), .advanceable = true, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 1000, .tax_minor = 0, .discount_minor = 0, .total_minor = 1000, .placed_at = 0, .notes = "" },
+        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_code = @intFromEnum(domain.OrderStatus.completed), .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
+        // Closed on another device before its payment row arrived. The
+        // money is still owed, but there is no state left to move to.
+        .{ .id = 3, .order_no = "A-3", .order_type = .dine_in, .status = .completed, .status_code = @intFromEnum(domain.OrderStatus.completed), .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 3000, .tax_minor = 0, .discount_minor = 0, .total_minor = 3000, .placed_at = 0, .notes = "" },
     };
 
     const tree = try buildTree(arena, &model);
@@ -889,10 +1644,12 @@ test "the orders board counts open tickets and stops offering a paid one" {
     _ = try expectByText(tree.root, .badge, "1 open");
     _ = try expectByText(tree.root, .badge, "Paid");
 
-    // One open order, so exactly one row may offer each action. The
-    // paid row must not offer either one.
-    try testing.expectEqual(@as(usize, 1), countByText(tree.root, .button, "Advance"));
-    try testing.expectEqual(@as(usize, 1), countByText(tree.root, .button, "Pay"));
+    // The button names the move rather than the machine, and only the
+    // one open row may offer it. A closed row still owes money, so it
+    // keeps its Pay button and shows no blank one where a move was.
+    try testing.expectEqual(@as(usize, 1), countByText(tree.root, .button, "Start cooking"));
+    try testing.expectEqual(@as(usize, 0), countByText(tree.root, .button, "Advance"));
+    try testing.expectEqual(@as(usize, 2), countByText(tree.root, .button, "Pay"));
 }
 
 test "a paid ticket's detail screen offers no payment" {
@@ -906,7 +1663,7 @@ test "a paid ticket's detail screen offers no payment" {
     model.screen_index = nav.Screen.order_detail.index();
     model.selected_order_id = 2;
     model.orders = &.{
-        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_label = "Completed", .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
+        .{ .id = 2, .order_no = "A-2", .order_type = .dine_in, .status = .completed, .status_code = @intFromEnum(domain.OrderStatus.completed), .status_label = domain.OrderStatus.completed.label(), .advance_label = domain.OrderStatus.completed.actionLabel(), .advanceable = false, .type_label = "Dine in", .dining_table_id = 0, .customer_id = 0, .employee_id = 0, .subtotal_minor = 2000, .tax_minor = 0, .discount_minor = 0, .total_minor = 2000, .placed_at = 0, .notes = "", .paid = true },
     };
 
     const tree = try buildTree(arena, &model);
@@ -999,6 +1756,18 @@ test "the setup screen renders on a fresh installation" {
     const tree = try buildTree(arena, &model);
     _ = try expectByText(tree.root, .text, "Set up your restaurant");
     _ = try expectByText(tree.root, .button, "Create the restaurant");
+    // The accessible name alone draws nothing. Every field the
+    // operator types into also says what it is.
+    _ = try expectByText(tree.root, .text, "Restaurant name");
+    _ = try expectByText(tree.root, .text, "Your name");
+    _ = try expectByText(tree.root, .text, "Currency code");
+    _ = try expectByText(tree.root, .text, "Symbol");
+    // The kind is chosen here too, and the two fields name it: a form
+    // that asks for a "Confirm PIN" while the owner chose a password is
+    // a form that was written for one answer.
+    _ = try expectByText(tree.root, .text, "Sign in with");
+    _ = try expectByText(tree.root, .text, "PIN");
+    _ = try expectByText(tree.root, .text, "Confirm PIN");
 }
 
 test "a fresh installation shows the walk-through, not the quick setup" {
@@ -1013,6 +1782,12 @@ test "a fresh installation shows the walk-through, not the quick setup" {
     // The walk-through is on the pane...
     const tree = try buildTree(arena, &model);
     _ = try expectByText(tree.root, .text, "Step one of two. You can change any of it later.");
+    _ = try expectByText(tree.root, .text, "Restaurant name");
+    _ = try expectByText(tree.root, .text, "Address");
+    _ = try expectByText(tree.root, .text, "Phone");
+    _ = try expectByText(tree.root, .text, "Tax number");
+    _ = try expectByText(tree.root, .text, "Currency code");
+    _ = try expectByText(tree.root, .text, "Symbol");
     // ...and the quick setup is not. Its own line is the one only it
     // has; the heading the two share is the point of the screen.
     try testing.expect(findByText(tree.root, .text, "This takes a minute. Everything here can be changed later.") == null);
@@ -1067,7 +1842,7 @@ const screen_landmarks = [_]struct { template: []const u8, text: []const u8 }{
     .{ .template = "screen-dashboard", .text = "Dashboard" },
     .{ .template = "screen-pos", .text = "Cart" },
     .{ .template = "screen-pos-cart", .text = "Back to the menu" },
-    .{ .template = "screen-catalogue-list", .text = "Catalogue" },
+    .{ .template = "screen-catalogue-list", .text = "Menu" },
     .{ .template = "screen-product-form", .text = "Category" },
     .{ .template = "screen-orders", .text = "Orders" },
     .{ .template = "screen-payments", .text = "No payments yet." },
@@ -1081,7 +1856,7 @@ const screen_landmarks = [_]struct { template: []const u8, text: []const u8 }{
     .{ .template = "screen-customer-form", .text = "Customer" },
     .{ .template = "screen-order-detail", .text = "Total" },
     .{ .template = "screen-order-confirmation", .text = "Items" },
-    .{ .template = "screen-tables", .text = "Dining tables" },
+    .{ .template = "screen-tables", .text = "Dining" },
     .{ .template = "screen-table-categories", .text = "Table categories" },
     .{ .template = "screen-table-category-form", .text = "Table category" },
     .{ .template = "screen-floor-plan", .text = "Floor plan" },
@@ -1093,7 +1868,7 @@ const screen_landmarks = [_]struct { template: []const u8, text: []const u8 }{
     .{ .template = "screen-waiter-menu", .text = "Tables" },
     .{ .template = "screen-waiter-cart", .text = "Nothing on this table yet." },
     .{ .template = "screen-waiter-orders", .text = "Open orders" },
-    .{ .template = "screen-employees-list", .text = "Employees" },
+    .{ .template = "screen-employees-list", .text = "Team" },
     .{ .template = "screen-employee-form", .text = "Role" },
     .{ .template = "screen-suppliers", .text = "Suppliers" },
     .{ .template = "screen-purchase-orders", .text = "Purchase orders" },
@@ -1113,7 +1888,7 @@ const screen_landmarks = [_]struct { template: []const u8, text: []const u8 }{
     .{ .template = "screen-create-company", .text = "Step one of two. You can change any of it later." },
     .{ .template = "screen-upgrade", .text = "This database is newer than Restaurant OS" },
     .{ .template = "screen-landing", .text = "A restaurant operating system: point of sale, kitchen display, customer display and back office." },
-    .{ .template = "screen-reset-pin", .text = "The old PIN stops working the moment this is written." },
+    .{ .template = "screen-reset-credential", .text = "Their old sign-in stops working the moment this is written." },
 };
 
 /// The widgets in a tree, the tree itself included.
@@ -1264,6 +2039,20 @@ test "every session screen renders, inside the widget budget" {
             return error.ScreenOverBudget;
         }
     }
+
+    // The locked login screen is a different tree - the pad is behind a
+    // gate and a countdown stands in its place - and a branch nobody
+    // renders is a branch nobody measured against the budget.
+    model.signed_in = false;
+    model.now_ms = 1_000_000;
+    model.login_locked_until = model.now_ms + 60_000;
+    model.screen_index = nav.Screen.login.index();
+    const locked_tree = try buildTree(arena, &model);
+    const locked_nodes = countWidgets(locked_tree.root);
+    if (locked_nodes > max_view_widgets) {
+        std.debug.print("the locked login screen built {d} widgets, over the {d} budget\n", .{ locked_nodes, max_view_widgets });
+        return error.ScreenOverBudget;
+    }
 }
 
 test "every screen shows a landmark of its own" {
@@ -1367,7 +2156,7 @@ fn screen_index_of(template: []const u8) usize {
         .{ .template = "screen-create-company", .screen = .create_company },
         .{ .template = "screen-upgrade", .screen = .upgrade },
         .{ .template = "screen-landing", .screen = .landing },
-        .{ .template = "screen-reset-pin", .screen = .reset_pin },
+        .{ .template = "screen-reset-credential", .screen = .reset_credential },
     };
     for (names) |entry| {
         if (std.mem.eql(u8, entry.template, template)) return entry.screen.index();

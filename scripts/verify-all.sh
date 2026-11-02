@@ -17,8 +17,9 @@ if ! command -v native >/dev/null 2>&1; then
   exit 1
 fi
 
-# The apps that carry copies of the shared screens and schema must agree
-# before either is built: a drifted copy is a bug the tests cannot see.
+# The apps that carry copies of the shared screens, schema and shell
+# chrome must agree before either is built: a drifted copy is a bug the
+# tests cannot see.
 if ! bash scripts/check-copies.sh; then
   exit 1
 fi

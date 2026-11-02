@@ -5,11 +5,13 @@
      than that. A file may hold several templates, so a screen that
      shares a file with its neighbours costs nothing. -->
 
+<import src="parts.native"/>
+
 <!-- The kitchen board. One card per ticket the kitchen is working
-     through, oldest first, with a one-tap "next" that walks the order
-     along its lifecycle. The ticket rows are a derived binding: the
-     model decides which orders belong on the board and how each one is
-     summarised. -->
+     through, oldest first, with a one-tap button that names the move it
+     makes: start cooking, mark ready, hand off. The ticket rows are a
+     derived binding: the model decides which orders belong on the board
+     and how each one is summarised. -->
 
 <template name="screen-kitchen">
   <column grow="1" gap="12" padding="16" background="background">
@@ -38,11 +40,11 @@
             <column gap="6">
               <row gap="8" cross="center">
                 <text size="lg" grow="1">{ticket.order_no}</text>
-                <badge>{ticket.status_label}</badge>
+                <use template="status-badge" code="{ticket.status_code}" label="{ticket.status_label}"/>
               </row>
               <text wrap="true">{ticket.summary}</text>
               <row gap="8">
-                <button size="sm" variant="primary" disabled="{advancing}" on-press="advance_order:{ticket.id}">Next</button>
+                <button size="sm" variant="primary" disabled="{advancing}" on-press="advance_order:{ticket.id}">{ticket.advance_label}</button>
                 <text size="sm" foreground="text_muted">{ticket.waiting_label}</text>
               </row>
             </column>
@@ -79,7 +81,7 @@
             <column gap="8">
               <text size="display">{card.label}</text>
               <row gap="8" cross="center">
-                <badge>{card.status_label}</badge>
+                <use template="status-badge" code="{card.status_code}" label="{card.status_label}"/>
                 <text size="sm" foreground="text_muted">{card.type_label}</text>
               </row>
             </column>

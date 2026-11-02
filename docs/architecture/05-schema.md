@@ -1,9 +1,9 @@
 # Schema
 
-> **Status:** Scaffolded — 46 tables across 17 migrations; only the core
+> **Status:** Scaffolded — 46 tables across 20 migrations; only the core
 > subset is used by repositories or UI.
-> **Last verified:** 2026-10-24, by source review and the migration lock.
-> **Source:** `src/schema/0001_core.sql` … `0017_sync_snapshot.sql`,
+> **Last verified:** 2026-10-31, by source review and the migration lock.
+> **Source:** `src/schema/0001_core.sql` … `0020_employee_credential.sql`,
 > `src/schema/migrations.lock.json`.
 
 ## Conventions
@@ -21,12 +21,12 @@ partly by review.
 | Machine-readable text is `TEXT` | Order numbers, hashes, codes, JSON snapshots. |
 | Monetary columns are non-negative unless they are a delta | `price_minor >= 0`; `stock_adjustment.delta` may be negative. |
 | Foreign keys are explicit | `REFERENCES ... ON DELETE ...`; the engine runs with `foreign_keys=ON`. |
-| Append-only migrations | Never edit a shipped migration; add the next number and regenerate the lock. |
+| Append-only migrations | Never edit a shipped migration; add the next number and regenerate the lock. The SDK checks every published file against `migrations.lock.json` (`NS1406`), so even a **comment** in `0001_core.sql` is frozen history — where the file says "salted SHA-256" it means "what this column held then". This page is where the current truth is written. |
 
 ## Migration policy
 
 - Files are numbered `NNNN_name.sql` in `src/schema/`.
-- `migrations.lock.json` is the authority: version 17 and seventeen hashes.
+- `migrations.lock.json` is the authority: version 20 and twenty hashes.
 - `native db new-migration <name>` is the intended authoring path.
 - The engine opens the database **already migrated** at boot; the app
   never runs migration code.
@@ -43,10 +43,10 @@ The SQL file is authoritative for columns. This table is the map.
 
 | Table | Purpose | Used today |
 |---|---|---|
-| `company` | The one company: name, currency, tax-inclusive flag, address/contact/tax number | Read |
+| `company` | The one company: name, currency, tax-inclusive flag, address/contact/tax number, brand colour | Read/write |
 | `currency` | Supported currencies with symbol and minor-unit count | No |
-| `employee` | Staff; `role` 0–3; `pin_hash` salted SHA-256 | Login read |
-| `app_config` | Key/value settings: PIN salt, schema version, device role, shift | Read/write (salt) |
+| `employee` | Staff; `role` 0–3; `pin_hash` the credential's bcrypt hash (0001 wrote "salted SHA-256"; see the append-only rule above) | Login read |
+| `app_config` | Key/value settings: the credential salt (the key is still `pin_salt`), this device's palette and contrast, schema version, device role, shift | Read/write (salt, look) |
 
 ### 0002 — Catalog (7 tables)
 
@@ -159,6 +159,58 @@ deleted range is recorded per device in `sync_state('op_floor')`; a
 peer below it is sent to `/v1/snapshot`. See
 [ADR-0020](../decisions/0020-late-join-and-compaction.md).
 
+### 0018 — Order line stock (1 column)
+
+| Column | Purpose | Used today |
+|---|---|---|
+| `order_line.stock_taken` | Whether this database's shelf figure has a plate in it: 1 means a later void must put it back | Yes |
+
+A line takes its product off the shelf where the sale is written, and a
+void puts it back. A device that bootstraps from a compacted snapshot
+never replays the sale — its stock already reflects it — so the line has
+to remember whether there is anything to restore. A line on an open order
+keeps 1 even when it arrives in a snapshot, because the snapshot's count
+was taken with that plate already sold.
+
+### 0019 — Company brand colour (1 column)
+
+| Column | Purpose | Used today |
+|---|---|---|
+| `company.brand_color` | `#rrggbb` the restaurant draws with; `''` means the register's own accent | Yes |
+
+The colour belongs to the company rather than to the device: the owner
+types it once and every till, board and kiosk on the network draws with
+it, including one that was set up before the column existed. It is
+therefore part of the reference document, not of `app_config`, and the
+default keeps an old database upgrading in place with no data migration.
+The app never stores a colour it cannot read — the form refuses a string
+that is not `#rrggbb`, and the theme parses the same shape.
+
+### 0020 — Employee credential kind (1 column)
+
+| Column | Purpose | Used today |
+|---|---|---|
+| `employee.auth_kind` | How this person proves who they are: 0 a PIN, 1 a password | Yes |
+
+The kind is a fact about the person, not about the device and not about
+the role. A device changes hands, and a role says what a person may open
+rather than what they type. It decides the surface the till offers — a
+numeric pad for a PIN, a masked text field with an eye for a password —
+and the policy the form applies when the secret is written.
+
+`NOT NULL DEFAULT 0` means a database written before the column exists
+upgrades in place and everybody on it signs in exactly as before: the
+digest in `pin_hash` was made from digits, so zero is the truth about it.
+The `CHECK` an enumeration usually carries is not available to a column
+added after the table — SQLite refuses it — so
+`CredentialKind.fromInt` is what decides that a number nobody wrote is
+not a kind, and falls back to the PIN.
+
+The kind is part of the reference document, so a second device offers the
+right surface for a person it has never met, and the sign-in takes the
+kind from the row it is about to check rather than from a list it loaded
+earlier. See [ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md).
+
 ## Indexes
 
 Indexes exist where the current queries need them:
@@ -233,8 +285,10 @@ the table but only reads/writes `pin_salt` today.
 10. **One company.** Enforced by query, not by a constraint. A second row
     would be silently ignored by `LIMIT 1`.
 11. **No seed data.** A fresh install has no company, no employee and no
-    products. Login cannot succeed until setup exists. Setup is planned,
-    not built.
+    products. The walk-through and the setup wizard build the first two,
+    and the owner chooses there whether they sign in with a PIN or a
+    password. Products come from the reference document or the catalog
+    form, not from a seed.
 12. **Deletion and referential actions.** `ON DELETE SET NULL` on order
     lines means deleting a product does not destroy history, but it does
     lose the link. That is intentional; document it per table when the

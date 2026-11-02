@@ -163,10 +163,11 @@ pub const company_buffer = 1024;
 /// The most lines one cart may carry.
 pub const max_cart_lines = 50;
 
-/// How many wrong PINs the till takes before it stops taking them.
+/// How many wrong credentials the till takes before it stops taking
+/// them.
 pub const max_login_failures = 5;
 
-/// How long the till stops taking PINs for, in milliseconds.
+/// How long the till stops taking credentials for, in milliseconds.
 pub const login_lockout_ms = 60_000;
 
 /// The decimals of a currency code, for the currencies a restaurant is
@@ -212,12 +213,13 @@ fn tenTo(exponent: i64) i64 {
 
 /// Where the installation salt stands.
 ///
-/// The salt is the one piece of state a PIN hash cannot be checked
-/// without, and there is exactly one right answer to "which salt?" - the
-/// one in the database. These four states say how sure the app is about
-/// that, because the difference between "the database has no salt" and
-/// "the database has not answered yet" is the difference between
-/// installing a salt and guessing one.
+/// The salt is the one piece of state a hash from before bcrypt cannot
+/// be checked without - a bcrypt string carries its own salt and needs
+/// nothing else. There is exactly one right answer to "which salt?" -
+/// the one in the database. These four states say how sure the app is
+/// about that, because the difference between "the database has no
+/// salt" and "the database has not answered yet" is the difference
+/// between installing a salt and guessing one.
 pub const SaltState = enum {
     /// The database has not answered yet. The salt in the model is a
     /// guess: nothing may be hashed with it.
@@ -232,6 +234,69 @@ pub const SaltState = enum {
     /// The database holds this salt. A sign-in may hash with it.
     confirmed,
 };
+
+/// The palette the operator chose, in the order Settings offers them.
+///
+/// The ordinal is stored in `app_config` as soon as the choice is made,
+/// so it is a contract with rows already on disk: add a palette at the
+/// end, and never renumber one that has been written.
+pub const Palette = enum(u8) {
+    light = 0,
+    dark = 1,
+    warm = 2,
+    night = 3,
+
+    /// The word the Settings button reads.
+    pub fn label(self: Palette) []const u8 {
+        return switch (self) {
+            .light => "Light",
+            .dark => "Dark",
+            .warm => "Warm",
+            .night => "Night",
+        };
+    }
+
+    /// True for the palettes drawn on a dark ground. The title bar's
+    /// glyph turns on this and nothing else: it is the half of the day
+    /// the tap is about to bring.
+    pub fn is_dark(self: Palette) bool {
+        return self == .dark or self == .night;
+    }
+
+    /// Where the title bar's one button lands from here: the dark
+    /// palette from a light ground, the light palette from a dark one.
+    /// Warm and Night are the Settings screen's business, but the glyph
+    /// still has to promise the move it makes.
+    pub fn otherHalf(self: Palette) Palette {
+        return if (self.is_dark()) .light else .dark;
+    }
+
+    /// The palette a stored ordinal names. An ordinal this build does
+    /// not know reads as the house light one - never a black screen.
+    pub fn fromCode(code: i64) Palette {
+        const info = @typeInfo(Palette).@"enum";
+        const narrowed = std.math.cast(info.tag_type, code) orelse return .light;
+        return std.enums.fromInt(Palette, narrowed) orelse .light;
+    }
+};
+
+/// The restaurant's own colour, read from the text the form holds.
+///
+/// `#rrggbb` and nothing else: six hex digits after the hash, either
+/// case. Anything else is not a colour but a typo, and the answer is
+/// null so the caller can choose - the form refuses the typing, the
+/// theme falls back to the register's own accent. A brand is a choice
+/// the owner makes once and can take back by emptying the field, which
+/// is why "no colour set" and "colour unreadable" are the same answer.
+pub fn parseBrand(text: []const u8) ?u24 {
+    if (text.len != 7 or text[0] != '#') return null;
+    var value: u24 = 0;
+    for (text[1..]) |char| {
+        const digit = std.fmt.charToDigit(char, 16) catch return null;
+        value = value * 16 + digit;
+    }
+    return value;
+}
 
 /// The tax on a price, in minor units.
 ///
@@ -251,19 +316,43 @@ fn taxOn(price_minor: i64, rate_bps: i64, inclusive: bool) i64 {
     return @divTrunc(price_minor * rate_bps + 5000, 10000);
 }
 
-/// A money amount typed by a person, in minor units.
+/// A rate typed by a person, scaled by a hundred.
 ///
-/// "24.50" is 2450, "24.5" is 2450 and "24" is 2400. The parser is the
-/// one place the text becomes money: the product price, the discount
-/// and the cash tender all use it, so they cannot disagree about what
-/// "10.5" means.
+/// "24.50" is 2450, "24.5" is 2450 and "24" is 2400. This is the parser
+/// for a percentage or a basis-point rate, where the hundred belongs to
+/// the number itself; money goes through `parseAmount`, which uses the
+/// currency's own precision instead of assuming two decimals. It is the
+/// same reader with two decimals written down, because a rate that was
+/// read by its own copy once turned "24.5" into 2900: the lone fraction
+/// digit was placed in the tens and then scaled again.
 pub fn parsePrice(text: []const u8) ?i64 {
+    return parseAmount(text, 2);
+}
+
+/// A money amount typed by a person, in the currency's own minor units.
+///
+/// The reader every typed amount goes through. The company
+/// carries `currency_decimals`, the display divides by it
+/// (`Model.currency_divisor`), and an amount read at a fixed two decimals
+/// would mean something else: a yen restaurant prices "24" as 2400,
+/// and a Kuwaiti one loses the third digit of every amount. So money goes
+/// through here, with the currency's precision as an argument, and a
+/// fraction finer than the currency can hold is refused rather than
+/// quietly rounded - a mistyped price must not become a different price.
+///
+/// A rate is not money. A discount percentage and a tax slab's rate are
+/// both written to two decimals whatever the till's currency is, because
+/// the hundred belongs to the percent and not to the company; they come
+/// through `parsePrice`, which is this reader with two written down.
+pub fn parseAmount(text: []const u8, decimals: i64) ?i64 {
+    if (decimals < 0 or decimals > max_amount_decimals) return null;
+    const digits_max: u8 = @intCast(decimals);
     const trimmed = std.mem.trim(u8, text, " ");
     if (trimmed.len == 0) return null;
     var whole: i64 = 0;
-    var cents: i64 = 0;
+    var fraction: i64 = 0;
     var after_dot = false;
-    var digits: usize = 0;
+    var digits: u8 = 0;
     for (trimmed) |char| {
         if (char == '.') {
             if (after_dot) return null;
@@ -272,16 +361,24 @@ pub fn parsePrice(text: []const u8) ?i64 {
         }
         if (!std.ascii.isDigit(char)) return null;
         if (after_dot) {
-            if (digits == 0) cents += (char - '0') * 10;
-            if (digits == 1) cents += (char - '0');
+            // Finer than the currency can say. Refused, not dropped.
+            if (digits == digits_max) return null;
             digits += 1;
+            fraction = fraction * 10 + (char - '0');
         } else {
             whole = whole * 10 + (char - '0');
         }
     }
-    if (digits == 1) cents *= 10;
-    return whole * 100 + cents;
+    var divisor: i64 = 1;
+    var i: i64 = 0;
+    while (i < decimals) : (i += 1) divisor *= 10;
+    while (digits < digits_max) : (digits += 1) fraction *= 10;
+    return whole * divisor + fraction;
 }
+
+/// How many fraction digits an amount may carry. Guards the divisor loop
+/// against a nonsense `currency_decimals` read out of a database.
+const max_amount_decimals = 8;
 
 pub const Model = struct {
     /// Fields the view never binds directly. Keep this list honest:
@@ -295,7 +392,9 @@ pub const Model = struct {
         "db_ready",
         "busy",
         "company_id",
-        "theme_dark",
+        "theme_palette",
+        "theme_contrast_high",
+        "theme_chosen",
         "salt_state",
         "last_issued_order_id",
         "advance_order_id",
@@ -305,6 +404,21 @@ pub const Model = struct {
         "login_hash",
         "login_hash_len",
         "login_legacy_hash",
+        "salt_buf",
+        "salt_len",
+        // A credential is the one value the view must never be able to
+        // read whole. Every field here is either the secret itself or
+        // the choice that decides how the secret is typed; the view
+        // sees the masked method and the label instead.
+        "credential",
+        "credential_kind",
+        "credential_revealed",
+        "setup_credential",
+        "setup_credential2",
+        "setup_credential_kind",
+        "form_reset_credential_buf",
+        "form_reset_credential2_buf",
+        "form_reset_credential_kind",
         "net_host_buf",
         "net_host_len",
         "net_port",
@@ -331,15 +445,17 @@ pub const Model = struct {
     /// the operator's: `admin` and `service` run one role, and only the
     /// kiosk can be moved between its two board modes.
     role: Role = boot_role,
-    /// False until a role is chosen at the role picker.
+    /// False until the picker has been answered - by a person, or by a
+    /// board on a kiosk.
     role_chosen: bool = false,
     /// True once a sign-in succeeded (kiosk roles sign in by device).
     signed_in: bool = false,
-    /// The signed-in employee. The PIN hash never lives here.
+    /// The signed-in employee. Neither the secret nor its hash lives
+    /// here.
     employee_id: i64 = 0,
     /// The employee the sign-in screen is asking about, before
-    /// anybody has signed in. The picker chooses the person; the PIN
-    /// proves they are that person.
+    /// anybody has signed in. The picker chooses the person; their
+    /// credential proves they are that person.
     sign_in_employee_id: i64 = 0,
     /// The name of the person the sign-in screen is asking about.
     sign_in_employee_name_buf: [64]u8 = undefined,
@@ -466,6 +582,9 @@ pub const Model = struct {
     company_address_field: []const u8 = "",
     company_phone_field: []const u8 = "",
     company_tax_field: []const u8 = "",
+    /// The colour the restaurant trades under, as `#rrggbb`. Empty means
+    /// the register's own accent: a new company has no opinion yet.
+    company_brand_field: []const u8 = "",
     currency_code: []const u8 = "USD",
     currency_symbol: []const u8 = "$",
     /// True when the menu's prices already include tax.
@@ -519,8 +638,12 @@ pub const Model = struct {
     /// The forms the settings and the catalogue edit.
     form_currency_code_buf: canvas.TextBuffer(8) = .{},
     form_currency_symbol_buf: canvas.TextBuffer(8) = .{},
-    form_reset_pin_buf: canvas.TextBuffer(8) = .{},
-    form_reset_pin2_buf: canvas.TextBuffer(8) = .{},
+    form_reset_credential_buf: canvas.TextBuffer(auth.max_secret_len) = .{},
+    form_reset_credential2_buf: canvas.TextBuffer(auth.max_secret_len) = .{},
+    /// The kind the owner is setting. Writing a new credential always
+    /// writes its kind with it, so nobody can be left with a password
+    /// they never chose or a PIN they cannot type.
+    form_reset_credential_kind: domain.CredentialKind = .pin,
     form_reset_employee_id: i64 = 0,
     form_reset_employee_name: []const u8 = "",
     form_category_name_buf: canvas.TextBuffer(64) = .{},
@@ -595,6 +718,10 @@ pub const Model = struct {
     form_address_buf: canvas.TextBuffer(128) = .{},
     form_phone_buf: canvas.TextBuffer(32) = .{},
     form_tax_buf: canvas.TextBuffer(32) = .{},
+    /// `#rrggbb` and no more: the field cannot take a tenth character,
+    /// so a brand that is too long cannot be typed, only mistyped
+    /// inside the seven.
+    form_brand_buf: canvas.TextBuffer(7) = .{},
 
     // ------------------------------------------------------ the kitchen
 
@@ -722,8 +849,12 @@ pub const Model = struct {
     /// The setup form's fields.
     setup_company_name: canvas.TextBuffer(64) = .{},
     setup_admin_name: canvas.TextBuffer(64) = .{},
-    setup_pin: canvas.TextBuffer(8) = .{},
-    setup_pin2: canvas.TextBuffer(8) = .{},
+    /// The owner's own credential, typed twice so a slip of a key is
+    /// caught before it locks them out, and of whichever kind they
+    /// chose below.
+    setup_credential: canvas.TextBuffer(auth.max_secret_len) = .{},
+    setup_credential2: canvas.TextBuffer(auth.max_secret_len) = .{},
+    setup_credential_kind: domain.CredentialKind = .pin,
     /// The company's record, the parts the quick setup does not ask
     /// for: where the restaurant is, how to reach it, and its tax
     /// number.
@@ -737,12 +868,20 @@ pub const Model = struct {
 
     // ---------------------------------------------------------- sign-in
 
-    /// The PIN being typed. The view binds a derived method, never the
-    /// buffer itself.
-    pin: canvas.TextBuffer(8) = .{},
-    /// The installation salt, hex. Empty until the database answers.
-    pin_salt_buf: [64]u8 = undefined,
-    pin_salt_len: usize = 0,
+    /// The secret being typed, whichever kind it is. The view binds a
+    /// derived method, never the buffer.
+    credential: canvas.TextBuffer(auth.max_secret_len) = .{},
+    /// How the person signing in proves who they are. It is theirs -
+    /// the picker sets it from their row - and not the device's.
+    credential_kind: domain.CredentialKind = .pin,
+    /// True when a secret field is showing the secret in the clear. The
+    /// eye turns it and nothing else does; the default is covered.
+    credential_revealed: bool = false,
+    /// The installation salt, hex. Empty until the database answers. It
+    /// salts every credential hash this installation makes, and it is
+    /// stored under the key the first version chose.
+    salt_buf: [64]u8 = undefined,
+    salt_len: usize = 0,
     /// Where the installation salt stands.
     salt_state: SaltState = .unknown,
     /// This installation's token, hex. It is a name, not a secret: it
@@ -756,24 +895,24 @@ pub const Model = struct {
     /// until the sale lands, so a retry is the same sale and not a
     /// second one.
     cart_attempt_id: i64 = 0,
-    /// The hash of the PIN being checked. Lives in the model so the
-    /// query parameter has a stable home.
+    /// The hash of the credential being checked. Lives in the model so
+    /// the query parameter has a stable home.
     login_hash: [auth.hash_length]u8 = undefined,
     /// The length of the hash in `login_hash`. The buffer is larger
     /// than the string, so the length is what says where it ends.
     login_hash_len: usize = 0,
-    /// The OLD hash of the same PIN - a SHA-256 digest. It is what the
-    /// sign-in looks up as well, so a restaurant whose employees signed
-    /// in before bcrypt can still sign in; the next sign-in rewrites
-    /// the row in the new form.
+    /// The OLD hash of the same credential - a SHA-256 digest. It is
+    /// what the sign-in looks up as well, so a restaurant whose
+    /// employees signed in before bcrypt can still sign in; the next
+    /// sign-in rewrites the row in the new form.
     login_legacy_hash: [auth.legacy_len]u8 = undefined,
     /// Storage for the signed-in operator's name.
     operator_buf: bump.Bump(1024) = .{},
     /// Why the last sign-in failed, or empty.
     login_error: []const u8 = "",
-    /// How many wrong PINs this session has seen.
+    /// How many wrong credentials this session has seen.
     login_failures: i64 = 0,
-    /// The moment the till stops accepting PINs, in epoch
+    /// The moment the till stops accepting credentials, in epoch
     /// milliseconds. Zero when it is not locked.
     login_locked_until: i64 = 0,
 
@@ -810,8 +949,15 @@ pub const Model = struct {
     failed_screen: nav.Screen = .admin_dashboard,
     /// The last error worth showing the operator, or empty.
     error_text: []const u8 = "",
-    /// Dark palette instead of the house light one.
-    theme_dark: bool = false,
+    /// The palette the operator chose, and whether it is pushed to its
+    /// high-contrast form. Both are chrome, not data: nothing else in
+    /// the model reads them.
+    theme_palette: Palette = .light,
+    theme_contrast_high: bool = false,
+    /// True once the operator has set either of them this session. The
+    /// stored choice is read at boot, and a read that lands late would
+    /// undo a tap that came first.
+    theme_chosen: bool = false,
 
     // ---------------------------------------------------- derived values
     //
@@ -1077,6 +1223,7 @@ pub const Model = struct {
             if (!orderIsOpen(order.status)) continue;
             out[index] = .{
                 .label = displayLabel(model, order.dining_table_id, order.order_no),
+                .status_code = order.status_code,
                 .status_label = order.status_label,
                 .type_label = order.type_label,
                 .order_no = order.order_no,
@@ -1266,6 +1413,10 @@ pub const Model = struct {
         return model.form_tax_buf.text();
     }
 
+    pub fn form_company_brand(model: *const Model) []const u8 {
+        return model.form_brand_buf.text();
+    }
+
     /// The settings menu. This method lives INSIDE the struct on
     /// purpose: the binding resolver only sees the declarations in the
     /// struct body, and a method at file scope is invisible to the
@@ -1290,17 +1441,32 @@ pub const Model = struct {
     }
 
     /// The product name in the product form.
-    /// The PIN being typed for the reset.
-    pub fn form_reset_pin(model: *const Model) []const u8 {
-        return model.form_reset_pin_buf.text();
+    /// The credential being typed for the reset, masked or not.
+    pub fn form_reset_credential(model: *const Model) []const u8 {
+        return model.masked(model.form_reset_credential_buf.text());
     }
 
-    /// The PIN being confirmed for the reset.
-    pub fn form_reset_pin2(model: *const Model) []const u8 {
-        return model.form_reset_pin2_buf.text();
+    /// The credential being confirmed for the reset, masked or not.
+    pub fn form_reset_credential2(model: *const Model) []const u8 {
+        return model.masked(model.form_reset_credential2_buf.text());
     }
 
-    /// Whose PIN is being reset.
+    /// The kind the reset form is setting, as the toggle row counts it.
+    pub fn form_reset_credential_kind_id(model: *const Model) i64 {
+        return @intFromEnum(model.form_reset_credential_kind);
+    }
+
+    /// What the reset form calls the kind it is setting.
+    pub fn form_reset_credential_label(model: *const Model) []const u8 {
+        return model.form_reset_credential_kind.label();
+    }
+
+    /// The reset form's own rule for the kind it is setting.
+    pub fn form_reset_credential_hint(model: *const Model) []const u8 {
+        return kindHint(model.form_reset_credential_kind);
+    }
+
+    /// Whose credential is being reset.
     pub fn form_reset_employee(model: *const Model) []const u8 {
         return model.form_reset_employee_name;
     }
@@ -1474,6 +1640,13 @@ pub const Model = struct {
     pub fn selected_order_status(model: *const Model) []const u8 {
         const order = model.selected_order() orelse return "";
         return order.status_label;
+    }
+
+    /// The same state as an ordinal, so the detail screen's chip is
+    /// coloured the way the list's is.
+    pub fn selected_order_status_code(model: *const Model) i64 {
+        const order = model.selected_order() orelse return -1;
+        return order.status_code;
     }
 
     /// The kind of sale the order being shown is.
@@ -1885,7 +2058,7 @@ pub const Model = struct {
         if (total <= 0) return 0;
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return 0;
-        const tendered = parsePrice(text) orelse return 0;
+        const tendered = parseAmount(text, model.currency_decimal_count()) orelse return 0;
         if (tendered <= total) return 0;
         return tendered - total;
     }
@@ -1896,7 +2069,7 @@ pub const Model = struct {
         if (total <= 0) return false;
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return false;
-        const tendered = parsePrice(text) orelse return false;
+        const tendered = parseAmount(text, model.currency_decimal_count()) orelse return false;
         return tendered < total;
     }
 
@@ -1904,7 +2077,7 @@ pub const Model = struct {
     pub fn cash_tender_invalid(model: *const Model) bool {
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return false;
-        return parsePrice(text) == null;
+        return parseAmount(text, model.currency_decimal_count()) == null;
     }
 
     /// Why the last payment failed, or empty.
@@ -1977,15 +2150,30 @@ pub const Model = struct {
         return model.setup_admin_name.text();
     }
 
-    /// The setup form's PIN. The buffer is the edit model; the view
-    /// binds the text.
-    pub fn setup_pin_text(model: *const Model) []const u8 {
-        return model.setup_pin.text();
+    /// The setup form's credential. The buffer is the edit model; the
+    /// view binds the text, masked or not.
+    pub fn setup_credential_text(model: *const Model) []const u8 {
+        return model.masked(model.setup_credential.text());
     }
 
-    /// The setup form's confirmation PIN.
-    pub fn setup_pin2_text(model: *const Model) []const u8 {
-        return model.setup_pin2.text();
+    /// The setup form's confirmation credential.
+    pub fn setup_credential2_text(model: *const Model) []const u8 {
+        return model.masked(model.setup_credential2.text());
+    }
+
+    /// The kind the setup form is choosing, as the toggle row counts it.
+    pub fn setup_credential_kind_id(model: *const Model) i64 {
+        return @intFromEnum(model.setup_credential_kind);
+    }
+
+    /// What the setup form calls the kind it is choosing.
+    pub fn setup_credential_label(model: *const Model) []const u8 {
+        return model.setup_credential_kind.label();
+    }
+
+    /// The setup form's own rule for the kind it is choosing.
+    pub fn setup_credential_hint(model: *const Model) []const u8 {
+        return kindHint(model.setup_credential_kind);
     }
 
     /// The setup form's currency code.
@@ -2008,8 +2196,6 @@ pub const Model = struct {
         return model.setup_error;
     }
 
-    /// Whether the setup form is complete enough to submit: a company
-    /// name, an operator name, a PIN, and the same PIN twice.
     /// True when the setup form is NOT ready to be submitted.
     ///
     /// The button binds this, so the operator cannot press a button
@@ -2018,31 +2204,39 @@ pub const Model = struct {
         return !model.setup_can_submit();
     }
 
+    /// Whether the setup form is complete enough to submit: a company
+    /// name, an operator name, a credential that suits the kind chosen
+    /// for it, and that credential twice.
     pub fn setup_can_submit(model: *const Model) bool {
         const name = std.mem.trim(u8, model.setup_company_name.text(), " ");
         const admin = std.mem.trim(u8, model.setup_admin_name.text(), " ");
-        const pin = model.setup_pin.text();
-        const pin2 = model.setup_pin2.text();
+        const secret = model.setup_credential.text();
+        const again = model.setup_credential2.text();
         if (name.len == 0 or admin.len == 0) return false;
-        if (!model.pin_is_acceptable(pin)) return false;
-        return std.mem.eql(u8, pin, pin2);
+        if (!model.credential_is_acceptable(model.setup_credential_kind, secret)) return false;
+        return std.mem.eql(u8, secret, again);
     }
 
-    /// True when a PIN is worth accepting.
+    /// True when a secret is worth accepting as the kind it is being
+    /// set to.
     ///
-    /// Six digits or more, and digits only. A four-digit PIN is ten
-    /// thousand guesses, and a stolen database is worth ten thousand
-    /// guesses: the hash can be slow, but it cannot be slow enough to
-    /// make a small space safe.
-    pub fn pin_is_acceptable(_: *const Model, pin: []const u8) bool {
-        if (pin.len < auth.min_pin_len) return false;
-        for (pin) |digit| {
-            if (digit < '0' or digit > '9') return false;
-        }
-        return true;
+    /// A PIN is six digits at least, and digits only. Four digits is ten
+    /// thousand guesses and six is a million; the hash is slow, but it
+    /// cannot be slow enough to make a small space safe, so the shape of
+    /// a PIN has to carry what the operator's care did not.
+    /// A password is eight characters at least and anything otherwise:
+    /// length is the whole of what a password buys.
+    pub fn credential_is_acceptable(_: *const Model, kind: domain.CredentialKind, secret: []const u8) bool {
+        if (secret.len > auth.max_secret_len) return false;
+        return switch (kind) {
+            .pin => secret.len >= auth.min_pin_len and
+                secret.len <= auth.max_pin_len and
+                digitsOnly(secret),
+            .password => secret.len >= auth.min_password_len,
+        };
     }
 
-    /// True when the till is refusing PINs for a while.
+    /// True when the till is refusing credentials for a while.
     pub fn login_locked(model: *const Model) bool {
         return model.login_locked_until > model.now_ms;
     }
@@ -2051,6 +2245,16 @@ pub const Model = struct {
     pub fn login_locked_seconds(model: *const Model) i64 {
         if (!model.login_locked()) return 0;
         return @divTrunc(model.login_locked_until - model.now_ms, 1000);
+    }
+
+    /// True when the pad or the field may take a credential.
+    ///
+    /// The markup gates the whole surface on this, because a pad that
+    /// goes on taking digits while the till is locked tells the person
+    /// nothing is wrong - the refusal only ever arrived on the attempt.
+    /// The countdown next to it is `login_locked_seconds`.
+    pub fn credential_surface_open(model: *const Model) bool {
+        return !model.login_locked();
     }
 
     /// True when the last sign-in attempt failed.
@@ -2078,8 +2282,9 @@ pub const Model = struct {
     }
 
     /// The picker's people half: the people who work here, each of whom
-    /// signs in with a PIN. The admin and service apps show it; the
-    /// kiosk does not, because nobody types a PIN into a board.
+    /// signs in with the credential their own row names. The admin and
+    /// service apps show it; the kiosk does not, because nobody types a
+    /// credential into a board.
     pub fn show_people(_: *const Model) bool {
         return app_kind != .kiosk;
     }
@@ -2167,9 +2372,33 @@ pub const Model = struct {
         return model.company_name_field;
     }
 
-    /// The installation salt, as a slice.
-    pub fn pin_salt(model: *const Model) []const u8 {
-        return model.pin_salt_buf[0..model.pin_salt_len];
+    /// The glyph the theme button wears: the theme the tap is about to
+    /// bring, so the control names the move rather than the state it
+    /// leaves. Both names are built-in icons - the markup binds an icon
+    /// name, and only a name.
+    pub fn theme_icon(model: *const Model) []const u8 {
+        return if (model.theme_palette.is_dark()) "sun" else "moon";
+    }
+
+    /// The palettes Settings offers, in that order.
+    pub fn palettes(_: *const Model) []const PaletteOption {
+        return &palette_options;
+    }
+
+    /// The chosen palette, as the ordinal the buttons compare against.
+    pub fn palette_code(model: *const Model) i64 {
+        return @intFromEnum(model.theme_palette);
+    }
+
+    /// Whether the chosen palette is in its high-contrast form.
+    pub fn contrast_high(model: *const Model) bool {
+        return model.theme_contrast_high;
+    }
+
+    /// The installation salt, as a slice. It is stored under the key the
+    /// first version chose, which named the only thing it salted.
+    pub fn salt(model: *const Model) []const u8 {
+        return model.salt_buf[0..model.salt_len];
     }
 
     /// The name of the person the sign-in screen is asking about.
@@ -2212,9 +2441,63 @@ pub const Model = struct {
         return model.cart_len == 0;
     }
 
-    /// The sign-in PIN as typed. The view binds this, never the buffer.
-    pub fn pin_text(model: *const Model) []const u8 {
-        return model.pin.text();
+    /// What the sign-in screen shows of the secret being typed: the
+    /// secret when the eye has opened it, and one bullet per character
+    /// when it has not. The view binds this, never the buffer.
+    pub fn credential_display(model: *const Model) []const u8 {
+        return model.masked(model.credential.text());
+    }
+
+    /// The masked face of a secret. The length is shown and the value
+    /// is not: an operator can see they have typed six characters, and
+    /// the person behind them cannot see what they were.
+    pub fn masked(model: *const Model, secret: []const u8) []const u8 {
+        if (model.credential_revealed) return secret;
+        var count: usize = 0;
+        for (secret) |byte| {
+            // A lead byte starts a character; a continuation byte does
+            // not. Counting leads is exact and cannot fail on a buffer
+            // that was clamped mid-sequence.
+            if (byte & 0xc0 != 0x80) count += 1;
+        }
+        return bullets[0 .. count * bullet_len];
+    }
+
+    /// True when the person signing in taps a code rather than types
+    /// one. The two are different surfaces and the model decides which.
+    pub fn sign_in_by_pin(model: *const Model) bool {
+        return model.credential_kind == .pin;
+    }
+
+    /// True when the person signing in types a password.
+    pub fn sign_in_by_password(model: *const Model) bool {
+        return model.credential_kind == .password;
+    }
+
+    /// The line under the sign-in heading, which says what it is asking
+    /// for in the words the person would use.
+    pub fn credential_prompt(model: *const Model) []const u8 {
+        return switch (model.credential_kind) {
+            .pin => "enter your PIN",
+            .password => "enter your password",
+        };
+    }
+
+    /// The eye's word: what pressing it would do.
+    pub fn reveal_label(model: *const Model) []const u8 {
+        if (model.credential_revealed) return "Hide";
+        return "Show";
+    }
+
+    /// The digits a PIN is tapped from, in the order a pad lays them
+    /// out. The pad draws these; it is not ten buttons written out.
+    pub fn pin_digits(_: *const Model) []const DigitOption {
+        return &pin_digit_options;
+    }
+
+    /// How a person can prove who they are, as the forms offer it.
+    pub fn credential_kinds(_: *const Model) []const CredentialKindOption {
+        return &credential_kind_options;
     }
 
     /// True when the cart is the screen being shown, rather than the
@@ -2315,7 +2598,9 @@ pub const Model = struct {
             out[index] = .{
                 .id = order.id,
                 .order_no = order.order_no,
+                .status_code = order.status_code,
                 .status_label = order.status_label,
+                .advance_label = order.advance_label,
                 .summary = summariseOrder(model, order, arena),
                 .waiting_label = waitingLabel(model, order, arena),
             };
@@ -2325,13 +2610,21 @@ pub const Model = struct {
     }
 
     /// How many tickets are on the kitchen board.
+    ///
+    /// This is the length of the list beside it and nothing else, so the
+    /// station the cook picked applies to both. A badge that counted
+    /// every open ticket while the board showed one station's is the
+    /// orders badge's old mistake (#146).
     pub fn ticket_count(model: *const Model) usize {
         var count: usize = 0;
         for (model.orders) |order| {
             switch (order.status) {
-                .pending, .preparing, .ready => count += 1,
-                .served, .completed, .voided => {},
+                .pending, .preparing, .ready => {
+                    if (!orderOnStation(model, order.id, model.station_filter_field)) continue;
+                },
+                .served, .completed, .voided => continue,
             }
+            count += 1;
         }
         return count;
     }
@@ -2395,6 +2688,19 @@ pub const KitchenDish = struct {
 pub const known_table_count: i64 = 46;
 
 /// One food marking, as the product form offers it.
+/// One palette, as the Settings screen offers it.
+pub const PaletteOption = struct {
+    id: usize,
+    label: []const u8,
+};
+
+const palette_options = [_]PaletteOption{
+    .{ .id = @intFromEnum(Palette.light), .label = Palette.light.label() },
+    .{ .id = @intFromEnum(Palette.dark), .label = Palette.dark.label() },
+    .{ .id = @intFromEnum(Palette.warm), .label = Palette.warm.label() },
+    .{ .id = @intFromEnum(Palette.night), .label = Palette.night.label() },
+};
+
 pub const FoodTypeOption = struct {
     id: usize,
     label: []const u8,
@@ -2419,6 +2725,65 @@ const employee_role_options = [_]RoleOption{
     .{ .id = @intFromEnum(domain.EmployeeRole.kitchen), .label = domain.EmployeeRole.kitchen.label() },
     .{ .id = @intFromEnum(domain.EmployeeRole.display), .label = domain.EmployeeRole.display.label() },
 };
+
+/// One key on the PIN pad. The id is the digit's own value, so the
+/// message a tap sends says which key was pressed and nothing else.
+pub const DigitOption = struct {
+    id: usize,
+    label: []const u8,
+};
+
+/// The pad's keys, in reading order: `1` at the top left, `0` last, the
+/// way a keypad has always laid them out.
+const pin_digit_options = [_]DigitOption{
+    .{ .id = 1, .label = "1" },
+    .{ .id = 2, .label = "2" },
+    .{ .id = 3, .label = "3" },
+    .{ .id = 4, .label = "4" },
+    .{ .id = 5, .label = "5" },
+    .{ .id = 6, .label = "6" },
+    .{ .id = 7, .label = "7" },
+    .{ .id = 8, .label = "8" },
+    .{ .id = 9, .label = "9" },
+    .{ .id = 0, .label = "0" },
+};
+
+/// One way of proving who you are, as a form offers it.
+pub const CredentialKindOption = struct {
+    id: usize,
+    label: []const u8,
+};
+
+const credential_kind_options = [_]CredentialKindOption{
+    .{ .id = @intFromEnum(domain.CredentialKind.pin), .label = domain.CredentialKind.pin.label() },
+    .{ .id = @intFromEnum(domain.CredentialKind.password), .label = domain.CredentialKind.password.label() },
+};
+
+/// What a kind costs to satisfy, said to whoever is typing it. The rule
+/// itself is `credential_is_acceptable`; this is the same rule in the
+/// form's own words, so the two cannot disagree by accident.
+fn kindHint(kind: domain.CredentialKind) []const u8 {
+    return switch (kind) {
+        .pin => "6 digits",
+        .password => "8 characters or more",
+    };
+}
+
+/// True when a secret holds nothing but digits, which is what a PIN is.
+/// Empty is not a PIN: it has no digits.
+fn digitsOnly(secret: []const u8) bool {
+    if (secret.len == 0) return false;
+    for (secret) |byte| {
+        if (byte < '0' or byte > '9') return false;
+    }
+    return true;
+}
+
+/// The mask a covered field wears. A bullet is three bytes of UTF-8, and
+/// there are as many of them as the longest secret has characters, so a
+/// masked field is a slice rather than a copy.
+const bullet_len = 3;
+const bullets = [bullet_len]u8{ 0xe2, 0x80, 0xa2 } ** auth.max_secret_len;
 
 /// One tile on the overview: a screen the owner can reach from the
 /// front page.
@@ -2448,7 +2813,7 @@ pub const SettingsItem = struct {
 };
 
 const settings_menu = [_]SettingsItem{
-    .{ .id = @intFromEnum(Screen.settings_company), .title = "Company", .detail = "Name, address, tax number" },
+    .{ .id = @intFromEnum(Screen.settings_company), .title = "Company", .detail = "Name, address, tax number, colour" },
     .{ .id = @intFromEnum(Screen.settings_printers), .title = "Printers", .detail = "Receipt and kitchen printers" },
     .{ .id = @intFromEnum(Screen.settings_tax), .title = "Tax slabs", .detail = "The rates and the slabs" },
     .{ .id = @intFromEnum(Screen.settings_currency), .title = "Currency", .detail = "Currency and region" },
@@ -2464,6 +2829,8 @@ pub const DisplayCard = struct {
     /// The table the order is on, or the order number when the order
     /// is not for a table.
     label: []const u8,
+    /// The order's own state ordinal, for `status-badge` to colour from.
+    status_code: i64,
     status_label: []const u8,
     type_label: []const u8,
     order_no: []const u8,
@@ -2491,7 +2858,13 @@ fn displayLabel(model: *const Model, table_id: i64, order_no: []const u8) []cons
 pub const Ticket = struct {
     id: i64,
     order_no: []const u8,
+    /// The order's own state ordinal, for `status-badge` to colour from.
+    status_code: i64,
     status_label: []const u8,
+    /// The move the board's button is about: "Start cooking", "Mark
+    /// ready", "Hand off". Only open tickets reach the board, so this is
+    /// never empty.
+    advance_label: []const u8,
     summary: []const u8,
     waiting_label: []const u8,
 };

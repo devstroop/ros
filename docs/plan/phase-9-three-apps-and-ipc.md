@@ -9,7 +9,7 @@
 > and compaction are [ADR-0020](../decisions/0020-late-join-and-compaction.md).
 > **Estimate:** 42 engineer-days
 > **Depends on:** Phase 3 (the POS slice), Phase 5 (the admin
-> surfaces), ADR-0017 accepted, **and the PIN salt settled**
+> surfaces), ADR-0017 accepted, **and how a person signs in settled**
 > **Supersedes:** [Phase 6](phase-6-sync-sidecar.md) — the op log and the
 > transport are the same work, and the sidecar is not being built
 > **Exit criterion:** three apps on three machines converge, the kitchen
@@ -197,7 +197,8 @@ there is still one app to fall back on.
    is the recorded follow-up of an *accepted* decision (ADR-0016 says
    the per-employee salt is the fix, "when the sign-in can identify the
    employee before it hashes"), it stands on its own as a security
-   property - a cracked database gives up one PIN, not every PIN - and
+   property - two rows that hold the same code hold different hashes,
+   so nothing in the database is shared between them - and
    it makes the sign-in better for the same product: a person picks
    their own name instead of a role. Landed on its own, it is a
    security fix; held until the three apps are decided, it is a
@@ -211,7 +212,7 @@ there is still one app to fall back on.
    person is on the picker with the mode they work in, and the two
    device modes sign in by being the device. It landed on `develop` on
    its own in [#117](https://github.com/devstroop/ros/pull/117). See
-   [`architecture/12`](../architecture/12-three-apps-and-ipc.md#the-sign-in-problem).
+   [`architecture/12`](../architecture/12-three-apps-and-ipc.md#the-sign-in-problem-and-how-it-was-settled).
 
 **Done when:** one app, one loop thread, one net thread, one request
 answered, one test per direction; and the salt landed on `develop` in
@@ -348,7 +349,7 @@ executor: opening the stream, a line pulling the peer's ops, the
 pending-pull race, a failed stream counting and reopening, and a clean
 close not counting. The real SDK `.stream` fetch test reads the chunked
 NDJSON from a live `ros-core` server, so the wire and the line message
-are proven together. `scripts/verify-all.sh` is green: admin 154/154,
+are proven together. `scripts/verify-all.sh` is green: admin 213/213,
 kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43.
 
 **Done when:** an order placed on the service app appears on the kiosk
@@ -496,10 +497,13 @@ credentials.
 
 ## Unknowns
 
-- **The PIN salt is decided**: per-employee, by
-  [#95](https://github.com/devstroop/ros/issues/95). It is the
-  first thing slice 9.0 implements, because the sign-in does not work
-  across the apps until it lands.
+- ~~Can a person sign in on a device that is not the admin's?~~ Yes,
+  and the protocol carries no secret to make it work. The salt is per
+  employee, so a replicated row verifies itself
+  ([#95](https://github.com/devstroop/ros/issues/95),
+  [ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)), and
+  the person chooses a PIN or a password with that row
+  ([ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)).
 - ~~Is the counter POS the `admin` app or the `service` app?~~ The
   service app; the waiter opens `pos`, `pos_cart` and `payments`
   ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
@@ -514,7 +518,7 @@ credentials.
 - What happens to a device that is removed from the restaurant?
 - Must the Flutter app interoperate during a mixed rollout?
 
-The PIN salt, peer authentication and the remaining operational
+Peer authentication and the remaining operational
 questions are tracked in
 [`open-questions.md`](open-questions.md). See also
 [`architecture/12`](../architecture/12-three-apps-and-ipc.md) and

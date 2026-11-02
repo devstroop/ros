@@ -48,30 +48,32 @@ screen that is not compiled in is a screen that does not exist.
 ```
 column
 ├── row            title bar: company, role badge, theme toggle
+├── separator        its edge - a row has no border code path
 ├── if has_error     error banner: message + Dismiss
 ├── if !role_chosen   → screen-role-picker
 ├── if role_chosen && !signed_in → screen-login
 ├── if signed_in
-│   └── split      rail (200px) | content
-│       ├── column  nav rail: sections
+│   └── split      rail | content, over a 2px divider band
+│       ├── column  nav rail: the sections, and the operator at the foot
 │       └── column  content: <if screen_index == N> gates
 └── status-bar     screen title | company | operator
 ```
 
+The rail's width is `model.rail_split`, a fraction of the window
+(0.18 by default), and `width="200"` on its column is only the floor the
+divider drags down to. `gap` on the `<split>` is the thickness of the
+divider band, whose default of 9px leaves the hairline floating in
+transparent space with the surface colour showing either side of it; the
+shell sets it to 2 so the line reads as the rail's own edge.
+
 Only the active screen is mounted. That is what keeps the 1024-node
 budget reachable.
 
-The content gates are hard-coded ordinals:
-
-| Index | Screen | Template |
-|---|---|---|
-| 8 | `admin_dashboard` | `screen-dashboard` |
-| 10 | `pos` | `screen-pos` |
-| 13 | `orders` | `screen-orders` |
-| 17 | `dining_tables` | `screen-tables` |
-| 41 | `kds_board` | `screen-kitchen` |
-
-The other 36 screens render an empty pane. See
+The content gates are hard-coded ordinals. Every screen a role may open
+is gated in that app's shell - the admin's 46 are pinned against the
+`Screen` enum by `gated_ordinals` in `apps/admin/src/tests.zig`, and the
+waiter's and the board's by the partition test in their own app - so the
+list to read is that table, not one here that rots. See
 [03-navigation-and-rbac](03-navigation-and-rbac.md).
 
 ## Markup vocabulary used
@@ -172,21 +174,25 @@ There is no else-if; each branch is its own `<if>`.
 `src/core/theme.zig` supplies `canvas.DesignTokens` on every rebuild:
 
 ```zig
-pub fn tokens(model: *const Model) canvas.DesignTokens {
-    return if (model.theme_dark) dark() else light();
+pub fn tokens(model: *const Model) DesignTokens {
+    const chosen = model.theme_palette;
+    if (!model.theme_contrast_high) return register(chosen);
+    return withColors(highContrast(register(chosen).colors, chosen.is_dark()));
 }
 ```
 
-`toggle_theme` flips `theme_dark`, so the theme is model state.
+`toggle_theme` hops between the halves of the day - Light for a dark
+register, Dark for a light one - and Settings' Appearance card sets
+`theme_palette` directly and `theme_contrast_high` beside it. Both are
+model state, so a theme change is a message, a field and a rebuild - and
+a write: `repos.saveTheme` keeps the pair in `app_config`, `loadTheme`
+reads it back at boot, and a device wakes in the look it was left in.
 
 ### Brand palette
 
 | Name | Value | Use |
 |---|---|---|
 | Primary | `#176B84` | Accent, focus ring |
-| Primary dark | `#12566A` | Reserved |
-| Secondary | `#4AC3A1` | Brand, success family |
-| Accent | `#705EE0` | Reserved |
 | Success | `#1B6E47` | Success text/status |
 | Warning | `#87520C` | Warning |
 | Danger | `#B32D22` | Destructive |
@@ -194,9 +200,39 @@ pub fn tokens(model: *const Model) canvas.DesignTokens {
 
 The light semantic fills are the darkest step of the v1 hues that clears
 WCAG AA with white text, and as text on the light background and surface
-(`tests.zig` asserts both palettes).
+(`tests.zig` asserts every text pair in all eight palettes - four
+registers, each standard and high contrast - and again with each of six
+brands worn).
+
+### The restaurant's own colour
+
+A brand is data, not a stylesheet. `company.brand_color` holds `#rrggbb`
+or nothing, the owner types it into Settings → Company, and the theme
+reads it through the same parser the form validates with
+(`core.parseBrand`), so the two can never disagree about what counts as
+a colour.
+
+The brand replaces exactly three tokens - `accent`, `accent_text` and
+`focus_ring` - because those are the three that mean "this restaurant".
+The danger red and the success green mean "this void is permanent" and
+"this ticket is ready", and a logo colour does not get to redefine them.
+
+A colour that already clears four and a half against the register's
+surfaces, and against the label it can carry, is used exactly as it was
+typed. One that does not is walked toward the extreme its register has
+room for - lighter on a dark ground, darker on a light one - which keeps
+the hue and moves only its strength. The accent has two jobs, so it is
+held to both: it is the ground a button's label sits on, and it is the
+ink the markup paints prices with.
+
+An empty field is the honest "this restaurant has no colour yet", and
+the register's own accent stands. The brand is applied *before* the
+high-contrast derivation, so the setting that is about the eyes pushes
+the brand the same way it pushes the house accent.
 
 ### Semantic tokens in use
+
+Light and Dark, the two registers the house hues drive:
 
 | Token | Light | Dark |
 |---|---|---|
@@ -212,6 +248,12 @@ WCAG AA with white text, and as text on the light background and surface
 | `success` | `#1B6E47` | `#45B886` |
 | `warning` | `#87520C` | `#E09A3C` |
 | `info` | `#2F5EC2` | `#5B8CE0` |
+
+Warm (a laminated-menu paper for a dining-room tablet) and Night (a
+kitchen display at 3am) carry their own hues, because a cyan that clears
+AA on white rarely clears it on a near-black ground. The full four-register
+value table and the high-contrast derivation are in
+[ui-components.md](ui-components.md).
 
 ### Type, spacing, radius
 
@@ -230,10 +272,17 @@ open question about brand fidelity.
 
 - There is no way to supply an arbitrary 40-colour palette. The runtime
   resolves semantic tokens and an accent override.
-- Markup cannot select a colour per row, so table status is shown as a
-  badge label, not a status-coloured tile.
-- The design system is defined twice (light and dark) rather than derived;
-  adding a token means editing both.
+- A colour cannot travel as data: `background=` and `foreground=` take
+  a token *name*, as a literal. A state that carries its own colour is
+  picked by an `<if>` chain over the ordinal the row already stores,
+  which is what `screens/parts.native` does for a ticket.
+- A `badge` ignores both attributes - its colours come from the theme's
+  badge table - so a count reads as a badge and a state as a chip.
+  The dining grid has no `<if>` chain yet and shows its table status as
+  a badge label.
+- The four registers are written out; only the high-contrast form is
+  derived. A new semantic token means editing four `colors` blocks, and
+  the contrast test is what catches the one that was missed.
 
 ## Layout patterns
 
@@ -255,10 +304,17 @@ There is no responsive variant yet. The shell assumes a desktop window
   interactive controls.
 - Text is real text, so the OS can read it; there is no canvas-drawn copy.
 - Focus order follows declaration order. The POS search field is not
-  autofocused; login's PIN field is.
-- Colour is not the only status signal: badges carry a text label.
-- Both palettes' text pairs are asserted against WCAG AA in
-  `src/tests.zig`; a keyboard-only pass and focus-visible checks remain.
+  autofocused; login's password field is. A PIN is tapped on a pad, so
+  that screen has nothing to focus.
+- A secret is masked by the model, not by the field: the markup binds
+  `credential_display()`, which is one bullet per character until the
+  eye is pressed. The buffer that holds the secret is in
+  `Model.view_unbound`, so no template can bind it.
+- Colour is never the only status signal: a chip or a badge carries the
+  word as well, and both are real text.
+- Every register's text pairs are asserted against WCAG AA in
+  `src/tests.zig`, including the six state chips; a keyboard-only pass
+  and focus-visible checks remain.
 
 ## Adding a screen: checklist
 
@@ -305,6 +361,8 @@ patterns are repeated inline.
    visible (empty states, headers, rows).
 4. **No responsive mode.** Window resize changes the split fraction only.
 5. **No motion.** There are no transitions or tweened values.
-6. **Contrast is tested only for the token pairs.** Both palettes' text
-   pairs are asserted, but non-text contrast and real screen composition
-   are not audited.
+6. **Contrast is tested for the token pairs, not the composition.** Every
+   register's text pairs are asserted, and so are the accent's two jobs -
+   as a label's ground and as ink - with each of six brands. What is not
+   audited is a real screen: two tokens touching each other, a chip on a
+   wash, a screenshot nobody has looked at.

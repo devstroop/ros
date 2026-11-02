@@ -7,8 +7,9 @@
 //! kitchen keeps cooking with the menu it has.
 //!
 //! The rows mirror the tables, not the model's display structs: a peer
-//! needs the columns the model does not show, such as the PIN hash and
-//! a product's description. The admin builds the document in SQLite
+//! needs the columns the model does not show, such as the hash a person
+//! signs in with, how they sign in, and a product's description. The
+//! admin builds the document in SQLite
 //! (`json_object`/`json_group_array`); this file is the receiving half
 //! and the shape both sides agree on.
 
@@ -26,8 +27,12 @@ pub const Snapshot = struct {
     table_categories: []const TableCategoryRow = &.{},
     tables: []const TableRow = &.{},
     stations: []const StationRow = &.{},
-    /// The salt the employee hashes were made with. The peer stores it
-    /// so a PIN copied from the admin still verifies.
+    /// The installation salt, kept under the `pin_salt` config key.
+    ///
+    /// A bcrypt hash carries its own salt, so a person's row verifies
+    /// on a device that never saw this. The peer stores it for the rows
+    /// that predate bcrypt: their digest was made from the installation
+    /// salt and nothing else, so it verifies only with it.
     pin_salt: ?[]const u8 = null,
 };
 
@@ -42,6 +47,10 @@ pub const CompanyRow = struct {
     phone: []const u8,
     email: []const u8,
     tax_number: []const u8,
+    /// The colour the till draws with. A document written before the
+    /// column existed simply has none, so the default is what an old
+    /// admin still sends.
+    brand_color: []const u8 = "",
     created_at: i64,
 };
 
@@ -69,6 +78,9 @@ pub const EmployeeRow = struct {
     email: []const u8,
     active: i64,
     created_at: i64,
+    /// How this person signs in. A document written before the field
+    /// existed means a PIN, which is what every row in it was.
+    auth_kind: i64 = 0,
 };
 
 pub const ProductRow = struct {
@@ -158,6 +170,9 @@ test "a snapshot reads the rows the tables carry" {
     try std.testing.expectEqual(@as(u64, 7), snapshot.version);
     try std.testing.expectEqualStrings("Cafe", snapshot.company.?.name);
     try std.testing.expectEqualStrings("INR", snapshot.company.?.currency_code);
+    // The document above predates the brand colour: the field is absent,
+    // and an absent one has to read as "no brand", not as a parse error.
+    try std.testing.expectEqualStrings("", snapshot.company.?.brand_color);
     try std.testing.expectEqual(@as(usize, 1), snapshot.categories.len);
     try std.testing.expectEqualStrings("Starters", snapshot.categories[0].name);
     try std.testing.expectEqual(@as(usize, 1), snapshot.employees.len);

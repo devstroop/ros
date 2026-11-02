@@ -1,10 +1,18 @@
-//! PIN hashing.
+//! Credential hashing.
 //!
-//! A PIN is a password, and Eatery v1 stored PINs where a curious
-//! operator could read them. Restaurant OS hashes them, and it hashes them with a
-//! deliberately SLOW key-derivation function: bcrypt. A stolen
-//! database is then expensive to turn back into PINs, which is the
-//! whole difference between a PIN and a name on a list.
+//! A PIN and a password are two different things to the person typing
+//! them and one thing to this module: a short string of bytes that must
+//! never be stored as it is. Eatery v1 stored PINs where a curious
+//! operator could read them. Restaurant OS hashes them, and it hashes
+//! them with a deliberately SLOW key-derivation function: bcrypt. A
+//! stolen database is then expensive to turn back into secrets, which is
+//! the whole difference between a PIN and a name on a list.
+//!
+//! What the two kinds differ in is the shape of the guess space, and
+//! that is a rule about typing rather than about hashing: six digits is
+//! a hundred thousand guesses, and a password of eight mixed characters
+//! is not a number anybody can state. The lengths below are therefore
+//! per kind, and the hash is not.
 //!
 //! The hash is a versioned string - bcrypt's own crypt format,
 //! "$2b$10$<salt>$<digest>" - and it carries the cost and the salt
@@ -55,7 +63,31 @@ const salt_bytes = 16;
 /// a restaurant's staff can still type one without writing it down.
 pub const min_pin_len = 6;
 
-/// Hash a PIN for storage.
+/// The longest PIN this app accepts.
+///
+/// A PIN is tapped on a pad at a till, so it has to stay short enough to
+/// tap and to fit the row of dots it turns into. Somebody who wants
+/// more than sixteen characters is asking for a password, and Team is
+/// where they get one.
+pub const max_pin_len = 16;
+
+/// The shortest password this app accepts.
+///
+/// Eight characters, whatever they are, is a space nobody walks with a
+/// keypad; six was chosen for digits and cannot be carried over to
+/// letters without pretending the alphabet was the same size.
+pub const min_password_len = 8;
+
+/// The longest secret this app can hash, in bytes.
+///
+/// bcrypt takes at most seventy-two and this app asks it not to truncate
+/// quietly, so a longer secret is refused rather than silently weakened
+/// into its own first seventy-two bytes. The buffers a credential is
+/// typed into are exactly this wide, so the field cannot hold something
+/// the hash would reject.
+pub const max_secret_len = 72;
+
+/// Hash a credential for storage.
 ///
 /// The bcrypt salt is derived from the installation salt and the
 /// employee's id, so the hash is that employee's and nobody else's.
@@ -64,28 +96,28 @@ pub const min_pin_len = 6;
 /// without knowing the installation salt at all, which is what lets a
 /// second device check a PIN it was never given the salt for. Null
 /// when the hash cannot be made.
-pub fn hashPin(salt: []const u8, employee_id: i64, pin: []const u8, out: *[hash_length]u8) ?[]const u8 {
+pub fn hashCredential(salt: []const u8, employee_id: i64, secret: []const u8, out: *[hash_length]u8) ?[]const u8 {
     const derived = deriveSalt(salt, employee_id) orelse return null;
     const options: bcrypt.HashOptions = .{
         .params = .{ .rounds_log = cost, .silently_truncate_password = false },
         .encoding = .crypt,
     };
-    const written = bcrypt.strHashWithSalt(pin, options, out, derived) catch return null;
+    const written = bcrypt.strHashWithSalt(secret, options, out, derived) catch return null;
     return written;
 }
 
-/// Verify a PIN against a stored hash.
+/// Verify a credential against a stored hash.
 ///
 /// The hash may be a bcrypt string or one of the old SHA-256 digests -
 /// a bare sixty-four hex characters - so a restaurant that has been
 /// running keeps working.
-pub fn verifyPin(salt: []const u8, pin: []const u8, stored: []const u8) bool {
+pub fn verifyCredential(salt: []const u8, secret: []const u8, stored: []const u8) bool {
     if (isLegacy(stored)) {
         var buffer: [legacy_len]u8 = undefined;
-        const computed = legacyHash(salt, pin, &buffer) orelse return false;
+        const computed = legacyHash(salt, secret, &buffer) orelse return false;
         return std.mem.eql(u8, computed, stored);
     }
-    bcrypt.strVerify(stored, pin, .{ .silently_truncate_password = false }) catch return false;
+    bcrypt.strVerify(stored, secret, .{ .silently_truncate_password = false }) catch return false;
     return true;
 }
 
@@ -97,17 +129,17 @@ pub fn isLegacy(stored: []const u8) bool {
     return stored.len == legacy_len and !std.mem.startsWith(u8, stored, "$");
 }
 
-/// The OLD hash: a SHA-256 digest of the salt and the PIN, hex
+/// The OLD hash: a SHA-256 digest of the salt and the credential, hex
 /// encoded.
 ///
 /// It is what the app stored before bcrypt, and what it looks up so a
 /// restaurant that has been running can still sign in. The next
 /// sign-in rewrites the row in the new form.
-pub fn legacyHash(salt: []const u8, pin: []const u8, out: *[legacy_len]u8) ?[]const u8 {
+pub fn legacyHash(salt: []const u8, secret: []const u8, out: *[legacy_len]u8) ?[]const u8 {
     var digest: [32]u8 = undefined;
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(salt);
-    hasher.update(pin);
+    hasher.update(secret);
     hasher.final(&digest);
 
     const alphabet = "0123456789abcdef";
@@ -127,11 +159,11 @@ pub fn legacyHash(salt: []const u8, pin: []const u8, out: *[legacy_len]u8) ?[]co
 /// salt over every hash it makes.
 ///
 /// The employee's id is mixed into it, so the salt is THEIRS: two
-/// employees with the same PIN get different hashes, and a database
-/// that is cracked gives up one PIN rather than every PIN. The id is
-/// not a secret either, but it is not in the hash string, so an
-/// attacker who has the database cannot line the two up without the
-/// installation salt.
+/// employees who share a code get different hashes, and nothing about
+/// one row tells an attacker what another one holds. The id is not a
+/// secret either, but it is not in the hash string, so an attacker who
+/// has the database cannot line the two up without the installation
+/// salt.
 fn deriveSalt(salt: []const u8, employee_id: i64) ?[salt_bytes]u8 {
     if (salt.len < salt_bytes * 2) return null;
     var out: [salt_bytes]u8 = undefined;
