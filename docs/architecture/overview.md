@@ -297,10 +297,10 @@ to be copied — into the model's bump buffers. That rule is the reason
 | `data/repos.zig` | The data layer: the effect keys, the SQL constants, the loader functions (`loadProducts`, `loadOrders`, `loadAll`, …), the decoders (`decodeProducts`, `decodeOrders`, …), the writers (`saveOrder`, `setOrderStatus`, `saveConfigValue`) and the defensive `enumFromInt` cast. |
 | `data/page.zig` | The reader for the engine's row format: `Reader.init`, `readHeader`, `nextRow`, `indexOf`, `intOf`, `boolOf`, `textOf`, and the `Value` union. |
 | `data/auth.zig` | Credential hashing: `hashCredential`, `verifyCredential`, `isLegacy`, `legacyHash`, `makeSalt`, and the per-kind length rules. bcrypt, salted per installation and per employee. Pure — no clock, no allocation, no effects; slow on purpose. |
-| `schema/0001..0020_*.sql` | The database: twenty migrations, 46 tables, every one `STRICT`. |
-| `schema/migrations.lock.json` | The migration authority: version 20, twenty per-file hashes, and a `schema_hash`. |
+| `schema/0001..0021_*.sql` | The database: twenty-one migrations, 46 tables, every one `STRICT`. |
+| `schema/migrations.lock.json` | The migration authority: version 21, twenty-one per-file hashes, and a `schema_hash`. |
 | `screens/*.native` | Ten screen files and `parts.native`, 53 templates: the walk-through and wizard, the picker of modes and of people, the pad and the password field, dashboard, POS, orders, confirmation, floor, kitchen, the people list and its forms, settings. |
-| `tests.zig` | The rules the app must not break. Twelve tests, written as rules. |
+| `tests.zig` | The rules the app must not break - 74 of them, written as rules rather than as coverage. `tests_data.zig` adds 155 against a migrated database. |
 | `app.json` (in `apps/admin/`) | The manifest: identity, permissions, capabilities (`sqlite` among them), the shell window and its GPU surface, and the navigation policy. |
 
 `src/components/` exists and is empty. It is the place for shared
@@ -674,7 +674,7 @@ print sidecar prototypes are not part of the three-app tree.
 | The model must be default-constructible. | It is built as `.{}`. It cannot own a heap allocator, so its size is a compile-time fact and it uses `Bump`. | `src/core/bump.zig`, `src/main.zig` |
 | A `.native` file not in `app_sources.zig` does not exist. | The import closure is embedded; a missing entry fails loudly at the import site. | `src/app_sources.zig` |
 | `native` is not on the PATH in this workspace; the installed Zig is 0.17.0. | The SDK pins Zig 0.16.0 and 0.17 does not parse it. The statuses in this document come from source review, not from a run. | `README.md` |
-| Counts drift between prose and the tree. | The schema holds 46 tables and the split suites hold 154 admin tests; the root README has been corrected to match, but any hand-written count will drift again. | `README.md`, `src/schema/`, `src/tests.zig`, `plan/status.md` |
+| Counts drift between prose and the tree. | The schema holds 46 tables across 21 migrations and the split suites hold 230 admin tests; the root README has been corrected to match, but any hand-written count will drift again. | `README.md`, `src/schema/`, `src/tests.zig`, `plan/status.md` |
 | The root `README.md` used to link `docs/architecture/sync.md`, `docs/plan/gaps-from-v1.md`, `docs/plan/roadmap.md`, `docs/plan/backlog.md` and `AGENTS.md`. | Those paths do not exist; the maintained pages are `08-sync.md`, `plan/README.md` and `plan/status.md`. The root README should point at them. | `README.md` |
 
 ---

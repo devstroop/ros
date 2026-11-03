@@ -1,13 +1,13 @@
 # Testing and quality
 
 > **Status:** Healthy — `scripts/verify-all.sh` is green: admin
-> **225/225** (74 handwritten rules, 150 against a migrated database, and
+> **230/230** (74 handwritten rules, 155 against a migrated database, and
 > one test block that imports both), service **10/10**, kiosk **8/8**,
 > `ros-core` **46/46**, net-spike **13/13**. CI adds a headless paint
 > check per app and the sale walkthrough. Still uncovered: the clock
 > tick's own arithmetic, a salt race between two first boots, resizes
 > below the minimum, and the Flutter interop.
-> **Last verified:** 2026-11-03, by running `scripts/verify-all.sh` on
+> **Last verified:** 2026-11-04, by running `scripts/verify-all.sh` on
 > Linux.
 > **Source:** `apps/*/src/tests*.zig`, `packages/ros-core/src`,
 > `scripts/verify-all.sh`, `scripts/smoke-sale.sh`,
@@ -31,8 +31,8 @@ A rule that lives only in a comment is a rule that breaks. The tests in
 
 ## Current tests
 
-`native test apps/admin` reports **225** for the admin target - 74 in
-`tests.zig`, 150 in `tests_data.zig`, one generated - and the service and
+`native test apps/admin` reports **230** for the admin target - 74 in
+`tests.zig`, 155 in `tests_data.zig`, one generated - and the service and
 kiosk targets add 10 and 8 of their own. The table below is the subset
 this page names, not the whole list.
 
@@ -94,7 +94,7 @@ does) or bind an in-memory store.
 | Pure update | `native test` | Model transitions, RBAC, cart, status machine, the sign-in | Covered |
 | Markup build | `native test` | Every screen builds for its fixture and stays inside the widget budget | Covered |
 | Page decoder | `native test` | The page dialect and every repository load | Covered |
-| Relational integration | `native test` + `openMemoryMigrated` | Migrate, insert fixtures, run repo SQL, assert rows | Covered — 150 tests |
+| Relational integration | `native test` + `openMemoryMigrated` | Migrate, insert fixtures, run repo SQL, assert rows | Covered — 155 tests |
 | Business calculations | `native test` | Tax, discounts, cash tenders and change | Covered |
 | Split payment | — | One bill paid by more than one tender | Not a feature yet |
 | Live automation | `native automate` | Role picker → sign-in → sale → KDS advance, node budget, non-blank GPU | In CI (`smoke`, `sale-smoke`) |
@@ -123,6 +123,14 @@ product the database does not carry, forces the line's foreign key to
 fail, and shows the order and the sequence stayed put. The retry tests
 add the harder case: a sale written twice is still one sale, and its
 stock is taken once.
+
+A migration that repairs rows is tested by opening a database that
+predates it: `Harness.startTo(count)` stops the migration list short, the
+test writes the bad row the old build could write, and the full list is
+applied again - the same call the runtime makes when an app opens a
+database at an older version. The file, not a copy of its SQL, is what
+runs. That is "a ticket that closed unpaid is reopened when the database
+opens".
 
 ### Automation smoke
 

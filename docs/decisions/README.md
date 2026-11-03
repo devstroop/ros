@@ -34,6 +34,7 @@ This project follows a lightweight MADR-style format.
 | [0021](0021-counter-pos-is-the-service-app.md) | The counter POS is the service app | Accepted |
 | [0022](0022-a-person-chooses-how-they-sign-in.md) | A person chooses how they sign in | Accepted |
 | [0023](0023-a-peer-presents-a-shared-device-token.md) | A peer presents a shared device token | Accepted |
+| [0024](0024-a-ticket-closes-with-its-money.md) | A ticket closes with its money | Accepted |
 
 ADR-0017 was accepted on 2026-10-24. It supersedes ADR-0004 (four
 roles in one binary) and revises ADR-0009 (the op-log sidecar); the op
@@ -50,6 +51,13 @@ on every request that carries the restaurant's data. It corrects the
 which described a handshake no client performs, and its claim that the
 installation salt does not travel, which the reference document has
 never honoured.
+
+ADR-0024 was accepted on 2026-11-04. It moves the rule that only money
+closes a ticket out of the reducer and into the statements that write a
+status - both the local one and the one that applies a peer's op - and
+reopens the tickets that closed unpaid before the rule was anywhere but
+in `update`. It supersedes no earlier record; it makes an assumption all
+of them shared enforceable.
 
 ## Drafts
 

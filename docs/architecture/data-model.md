@@ -234,7 +234,7 @@ migration. Once a release ships, that stops.
 
 ## 3. Table inventory
 
-46 tables across twenty migrations, every one `STRICT`. One line each.
+46 tables across twenty-one migrations, every one `STRICT`. One line each.
 
 ### 0001 — `core.sql` (4 tables)
 
@@ -394,6 +394,18 @@ than as table sections. `05-schema.md` carries each one's reasoning.
 | `0018_order_line_stock.sql` | `order_line.stock_taken` | Whether this database's shelf figure has a plate in it, so a later void knows to put it back. A snapshot-restored device never replays the sale. |
 | `0019_company_brand.sql` | `company.brand_color` | `#rrggbb` the restaurant draws with; `''` means the register's own accent. Company-wide, so it rides in the reference document, not in `app_config`. |
 | `0020_employee_credential.sql` | `employee.auth_kind` | 0 a PIN, 1 a password. The kind belongs to the person, and it decides the surface the till offers and the length rule the form applies. |
+
+### 0021 — no tables, no columns: a repair of rows
+
+`0021_unpaid_closures.sql` changes no shape at all. Two statements move
+every order that reads `completed` with no `payment` row behind it back
+to `served`, with a history row to match, so the till can take the money
+and close it the way it should have been closed. It is the first
+migration here that repairs data rather than the schema: the rows were
+written by a build the owner already runs, on a database that upgrades in
+place, and no amount of folding them into a baseline reaches them.
+`05-schema.md` carries the reasoning
+([ADR-0024](../decisions/0024-a-ticket-closes-with-its-money.md)).
 
 ### Indexes
 

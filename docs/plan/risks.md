@@ -1,7 +1,7 @@
 # Risk register
 
 > **Status:** Living.
-> **Last reviewed:** 2026-11-03, against the source and `plan/status.md`.
+> **Last reviewed:** 2026-11-04, against the source and `plan/status.md`.
 > **Legend:** L = likelihood, I = impact, both low / med / high.
 
 The register is ordered by current priority, not by ID. An item with no
@@ -32,6 +32,7 @@ owner is not being managed.
 | C3 | A fresh install cannot log in | certain / high | FIXED: the setup writes the company, the operator, the salt and a starter menu in one transaction |
 | C4 | Two effects shared an effect key | certain / high | FIXED: a second live effect with the same key is refused, so a write could silently never happen. Every key is used once, and a test says so |
 | SEC3 | Sync has no peer authentication | high / high | PARTLY CLOSED: one pairing token per restaurant, presented in `x-ros-token` on every request that carries the restaurant's data, refused with `401` and counted on the admin's Control centre ([ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md), [#134](https://github.com/devstroop/ros/issues/134)). What is left is SEC9 |
+| DAT7 | A ticket could be closed with nobody having paid for it | certain / high | FIXED: the rule is in the SQL and not only in the reducer - `setOrderStatus` and `applyOrderStatus` both refuse `completed` without a `payment` row behind the order, a refused move writes no op and burns no clock, and migration 0021 reopens the tickets that closed unpaid before the rule existed ([ADR-0024](../decisions/0024-a-ticket-closes-with-its-money.md), [#139](https://github.com/devstroop/ros/issues/139), #143, #144) |
 
 ## Delivery and environment
 

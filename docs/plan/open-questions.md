@@ -1,7 +1,7 @@
 # Open questions
 
 > **Status:** Living document. Expected to grow.
-> **Last reviewed:** 2026-11-03.
+> **Last reviewed:** 2026-11-04.
 > **Related:** [`risks.md`](risks.md), [`status.md`](status.md).
 
 This page exists because the most expensive mistakes in a rewrite are the
@@ -44,7 +44,7 @@ date before that phase starts.
 | A2 | How are discounts applied: line, order, percentage, fixed, coupon, happy hour? | Affects the order write and reporting | v1 code + product decision | Product | Open |
 | A3 | Are split payments, partial payments, tips, service charge or refunds in v1? | Payment schema and UI | v1 code + product | Product | Open |
 | A4 | What is the void/refund policy and who may do it? | Audit, compliance, RBAC | v1 code + legal | Product | Open |
-| A5 | What does "completed" mean: paid, served, or closed? | Status machine and reports | v1 code + interviews | Product | Open |
+| A5 | What does "completed" mean: paid, served, or closed? | Status machine and reports | v1 code + interviews | Product | Decided - [ADR-0024](../decisions/0024-a-ticket-closes-with-its-money.md), [#139](https://github.com/devstroop/ros/issues/139): completed means paid. `served` is the last step the kitchen owns and `completed` is money's, so a status move may not write it - the statement that advances an order and the statement that applies a peer's op both refuse it without a `payment` row behind the order, and migration 0021 reopens the tickets that closed unpaid before the rule was anywhere but in `update`. What it still does not answer is A3: how much of a bill a payment may be |
 | A6 | Can an order be edited after placement, and which fields? | Immutability rule vs reality | v1 code + interviews | Product | Open |
 | A7 | What are the waiter flows: transfer table, split bill, course timing, merge tables? | Waiter is one of four roles | v1 code + shadowing | Product | Open |
 | A8 | What does the customer display actually show: one order, a queue, a carousel? | Display board design | v1 code + store visit | Product | Open |

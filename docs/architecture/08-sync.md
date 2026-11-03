@@ -4,7 +4,7 @@
 > per-device Lamport clock and vector cursor are in the apps; the
 > sidecar and the LWW sections below record the original design and are
 > kept for context.
-> **Last verified:** 2026-11-03, by source review.
+> **Last verified:** 2026-11-04, by source review.
 > **Source:** `packages/ros-core/src/net/`,
 > `packages/ros-core/src/data/repos.zig`.
 > **Design:** [12-three-apps-and-ipc](12-three-apps-and-ipc.md) and
@@ -94,6 +94,23 @@ Last-writer-wins on `(logical_clock, device_id)`:
 This is simple and matches v1. It is also lossy: two edits to different
 fields of the same row cannot both survive. Whether that is acceptable is
 an open product question.
+
+Two refusals are not conflicts, and the receiving half applies them in
+SQL rather than trusting what sent them:
+
+- **A status move is monotonic.** `voided` may end an open ticket and
+  cannot undo a completed one.
+- **`completed` arrives with the money.** A status op that asks to close
+  an order with no `payment` row is refused; the op itself is still
+  recorded, so the peer is not asked to send it again, and the order
+  stays where the kitchen left it. The close is `applyPayment`'s, in the
+  same transaction as the row it carries
+  ([ADR-0024](../decisions/0024-a-ticket-closes-with-its-money.md)).
+
+An `order` row from a snapshot page is not refused for the same reason -
+that row *is* the ticket, and the money may well be on the next page. It
+is the one road a state with no payment behind a closed ticket can still
+travel, and it is named in the ADR rather than closed here.
 
 ## Intended app responsibilities
 

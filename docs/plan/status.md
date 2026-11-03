@@ -3,9 +3,9 @@
 > **Status:** Snapshot. Regenerate by reading the source, not by trusting
 > this page. The detailed counts below describe the admin app; the
 > service and kiosk mount their role's subsets of the same core.
-> **Last verified:** 2026-11-03, by source review and the split suites.
+> **Last verified:** 2026-11-04, by source review and the split suites.
 > `scripts/verify-all.sh` is green for ros-core, admin, kiosk, net-spike
-> and service; the suites are admin 225/225, kiosk 8/8, net-spike 13/13,
+> and service; the suites are admin 230/230, kiosk 8/8, net-spike 13/13,
 > service 10/10 and ros-core 46/46.
 > `native build` produces ReleaseFast binaries.
 > `scripts/package.sh --ci` and `--check` produce and verify three macOS
@@ -29,12 +29,12 @@
 | Templates with a render test | 53 in the admin | `apps/admin/src/tests.zig` (the screen-coverage test builds each one, and finds a landmark of its own) |
 | `Msg` variants | 223 | `packages/ros-core/src/core/msg.zig` |
 | Tables | 46 | `apps/admin/src/schema/*.sql` |
-| Migrations | 20 | `apps/admin/src/schema/migrations.lock.json` version 20 |
+| Migrations | 21 | `apps/admin/src/schema/migrations.lock.json` version 21 |
 | Read queries | 34 named constants | `packages/ros-core/src/data/repos.zig` (one named constant each, and one place that says the app is loading) |
 | Write paths | setup, order + lines, status + history, config, currency, product, employee, employee credential (hash and kind), employee removal, customer, category, tax slab, discount, modifier group, dish station, stock count, payment, op log, reference version, log compaction, snapshot apply, pairing token (seeded once, then rotated) | `repos.zig` |
 | Effect keys | 71, each used once | `packages/ros-core/src/data/repos.zig`; a test asserts the uniqueness |
-| Headless tests | admin 225/225, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 46/46; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
-| Database integration tests | 150, green | `apps/admin/src/tests_data.zig` |
+| Headless tests | admin 230/230, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 46/46; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
+| Database integration tests | 155, green | `apps/admin/src/tests_data.zig` |
 | Sidecar binaries | 0 | `tools/*` contain READMEs only |
 | CI workflows | 1 (verify, smoke, package) | `.github/workflows/ci.yml` |
 | Reusable component templates | 0 | `src/components/` empty |
@@ -198,6 +198,7 @@ a docs change.
 | D49 | The pad kept taking digits while the till was locked, and nothing on the screen said it was locked | `packages/ros-core/src/core/{model,update}.zig`, `src/screens/screen-session.native` (all three apps), `src/tests{,_data}.zig` | FIXED: `login_locked()` and `login_locked_seconds()` had been computed for a year and bound by no markup, so an operator tapped a six-digit PIN, was refused, and saw a live pad with no reason - the answer only ever arrived on the next press. `credential_surface_open` gates the pad and the field as one tree, the sign-in button is disabled for the wait, and the countdown is the heading in its place, under the person's name that is already on the card. A refused digit is refused on the way in, not hidden on the way out: `.credential_digit`, `.credential_edit`, `.credential_back` and `.credential_clear` all stop at the same gate, and the wrong guess that tripped the lock is cleared so the pad is empty when the wait ends. The lockout itself still lives only in the model - SEC8 and #135 are the persistence half, not this one |
 | D50 | The kitchen board's badge counted every open ticket while the board itself showed one station's | `packages/ros-core/src/core/model.zig` (`ticket_count`), `src/tests_data.zig` | FIXED: the count applies the station filter the list applies, so the number over the board is the length of the list under it - the same class D5 caught on the orders badge. A station with nothing on it now reports nothing, which is what the board's empty state binds (#146) |
 | D51 | `GET /v1/reference` answered anybody on the network, and the document it served was every employee's credential hash plus the installation salt | `packages/ros-core/src/net/{protocol,server}.zig`, `src/core/{net_bridge,model,msg,update}.zig`, `src/data/repos.zig`, `apps/*/src/main.zig`, `src/screens/screen-settings.native`, `src/tests{,_data}.zig` | FIXED: one pairing token per restaurant, held in `app_config` under `pairing_token`, seeded by `main` or `ROS_NET_TOKEN` and beaten by whatever is stored. It rides the `x-ros-token` header of every request for the restaurant's data and is checked twice, because the two halves of the wire are answered in two places: in `update` for `/v1/reference`, `/v1/ops` and `/v1/snapshot`, and in the listener thread for the held-open `/v1/events`, which never asks the app. An unpaired peer gets `401` and no bytes, and the refusal is counted on the Control centre beside the token an operator reads out to the next device. `/v1/hello` still answers anyone - a device that is not paired yet should be seen, and its card carries no restaurant data. Rotating is a typed field: `update` has no randomness, so a button could not make a secret ([ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md), #134, SEC9 for what is left) |
+| D52 | A ticket could be closed with no money on it. The rule that only payment closes an order lived in `update`, and the two statements that write a status never asked about it | `packages/ros-core/src/data/repos.zig` (`setOrderStatus`, `applyOrderStatus`), `apps/*/src/schema/0021_unpaid_closures.sql`, `apps/admin/src/schema/migrations.lock.json`, `src/tests_data.zig` | FIXED: `completed` is refused by the statement unless a `payment` row stands behind the order - on the local writer and on the apply path, so a peer on an older build, a replay and a screen nobody has read yet meet the same no, and a refused move writes no op and burns no clock. `update` keeps its message, because a database that says no cannot also say why to the person who pressed the button. Migration 0021 reopens the tickets that closed unpaid to `served`, with a history row and no invented money, on the version bump each device opens on; the repair is local and writes no op, because a status op moves a ticket forward and never back. What the state did - a Pay button that refuses itself, a table that stays occupied - is #143 and #144, and both lose their premise here ([ADR-0024](../decisions/0024-a-ticket-closes-with-its-money.md), #139). The one road it leaves open - a snapshot `order` row that lands `completed` with nothing paid, repaired only on the next version bump - is #155 |
 
 B-002 and B-003 are fixed in the working tree of 2026-10-21, with the
 effect-key collision (D21) and the four unrenderable screens (D20) found
