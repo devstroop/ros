@@ -107,6 +107,9 @@ pub const key_sync_compact = 66;
 pub const key_theme = 67;
 pub const key_save_theme = 68;
 pub const key_payment_check = 69;
+pub const key_pairing = 70;
+pub const key_save_pairing = 71;
+pub const key_set_pairing = 72;
 
 // ------------------------------------------------------------ queries
 
@@ -219,6 +222,15 @@ pub const theme_sql =
     \\SELECT key, value FROM app_config
     \\WHERE key IN ('theme_palette', 'theme_contrast')
     \\ORDER BY key;
+;
+
+/// The pairing token, kept beside the salt and the look of the device.
+///
+/// It is a setting rather than a record: one value, owned by the device,
+/// that says which restaurant the peer talking on this wire belongs to
+/// (ADR-0023). A new `app_config` key needs no table and no migration.
+pub const pairing_sql =
+    \\SELECT key, value FROM app_config WHERE key = 'pairing_token' LIMIT 1;
 ;
 
 /// The day's takings, in one row.
@@ -798,6 +810,64 @@ pub fn saveTheme(fx: *Effects, palette: i64, contrast: bool, at: i64) void {
             .params = &params,
         }},
         .on_result = Effects.dbMsg(.theme_saved),
+    });
+}
+
+/// The pairing token this device holds. Read at boot, like the salt: a
+/// request can arrive before the database has answered, so the value the
+/// wire checks has to be in hand as early as possible.
+pub fn loadPairing(model: *Model, fx: *Effects) void {
+    query(model, fx, key_pairing, pairing_sql, &.{}, Effects.dbMsg(.pairing_loaded));
+}
+
+/// Store the token this device came up with, if the database has no token
+/// of its own yet.
+///
+/// `DO NOTHING` is the whole of the safety: the row a device already has
+/// is the row that keeps its peers, and a boot that overwrote it would
+/// lock out every device in the restaurant. The same rule as the salt, for
+/// the same reason.
+pub fn savePairing(fx: *Effects, token: []const u8, at: i64) void {
+    if (token.len == 0) return;
+    var params: [2]native_sdk.EffectDbValue = .{
+        .{ .text = token },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = key_save_pairing,
+        .statements = &.{.{
+            .sql =
+            \\INSERT INTO app_config (key, value, updated_at) VALUES ('pairing_token', ?1, ?2)
+            \\ON CONFLICT(key) DO NOTHING;
+            ,
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.pairing_saved),
+    });
+}
+
+/// Replace the token with one the operator typed.
+///
+/// This is the revocation path, and it is a typed value rather than a
+/// random one because `update` has no `Io`: the app cannot draw a new
+/// secret while it is running. A device that has been left out in the
+/// cold gets its answer the moment it is given the new value.
+pub fn setPairing(fx: *Effects, token: []const u8, at: i64) void {
+    if (token.len == 0) return;
+    var params: [2]native_sdk.EffectDbValue = .{
+        .{ .text = token },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = key_set_pairing,
+        .statements = &.{.{
+            .sql =
+            \\INSERT INTO app_config (key, value, updated_at) VALUES ('pairing_token', ?1, ?2)
+            \\ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+            ,
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.pairing_saved),
     });
 }
 

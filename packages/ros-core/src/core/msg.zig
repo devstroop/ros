@@ -396,6 +396,15 @@ pub const Msg = union(enum) {
     /// The company was saved.
     company_saved: native_sdk.EffectDbResult,
 
+    // -------------------------------------------------------- the pairing
+
+    /// The token being typed. Rotating a token is the only revocation the
+    /// wire has, and it has to be typed: `update` is handed no randomness,
+    /// so a Settings button could not make a new secret out of nothing.
+    pairing_edit: canvas.TextInputEvent,
+    /// Save the typed token, and hand it to the net thread.
+    save_pairing,
+
     // ------------------------------------------------------ the kitchen board
 
     /// The board refreshes itself: the kitchen is a different device
@@ -470,6 +479,10 @@ pub const Msg = union(enum) {
     /// fails is not worth a banner: the device draws its default.
     theme_loaded: native_sdk.EffectDbResult,
     theme_saved: native_sdk.EffectDbResult,
+    /// The pairing token this device stores. It is read at boot like the
+    /// salt is, because a request can arrive before the database answers.
+    pairing_loaded: native_sdk.EffectDbResult,
+    pairing_saved: native_sdk.EffectDbResult,
     /// A query or write failed.
     db_failed: native_sdk.EffectDbResult,
 
@@ -562,6 +575,8 @@ pub const Msg = union(enum) {
         "config_saved",
         "theme_loaded",
         "theme_saved",
+        "pairing_loaded",
+        "pairing_saved",
         "setup_created",
         "payment_taken",
         "payments_loaded",

@@ -6,6 +6,8 @@
 > **Related:** [ADR-0016](0016-what-a-pin-is.md) (decision 3 is
 > replaced by this one; the rest of it stands),
 > [ADR-0017](0017-three-apps-over-tcp-ip.md),
+> [ADR-0023](0023-a-peer-presents-a-shared-device-token.md) (which
+> corrects decision 4: the installation salt does cross the wire),
 > [`architecture/12`](../architecture/12-three-apps-and-ipc.md),
 > [`plan/phase-9`](../plan/phase-9-three-apps-and-ipc.md)
 
@@ -67,6 +69,14 @@ employee's id, and the sign-in identifies the person before it hashes.**
 4. **The installation salt does not travel.** What crosses the wire is
    the employee row, hash and all. There is no shared secret in the
    protocol, so there is no secret to protect on it.
+   *(Corrected by [ADR-0023](0023-a-peer-presents-a-shared-device-token.md):
+   the salt has always travelled, under `pin_salt`, in the reference
+   document - not because a bcrypt row needs it but because a legacy
+   `sha256(pin_salt || PIN)` digest cannot be verified without it. What
+   this sentence got right is the part that matters for a modern row:
+   it verifies itself, with nothing else. Since ADR-0023 the salt goes
+   only to a peer that presents the pairing token, and retiring those
+   legacy rows is the way to stop it going at all.)*
 5. **An old digest still verifies.** A hash from before bcrypt is
    salted with the installation, so verifying it needs the
    installation salt, and the sign-in waits for the database to confirm
