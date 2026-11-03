@@ -5,7 +5,7 @@
 > service and kiosk mount their role's subsets of the same core.
 > **Last verified:** 2026-11-03, by source review and the split suites.
 > `scripts/verify-all.sh` is green for ros-core, admin, kiosk, net-spike
-> and service; the suites are admin 217/217, kiosk 8/8, net-spike 13/13,
+> and service; the suites are admin 225/225, kiosk 8/8, net-spike 13/13,
 > service 10/10 and ros-core 46/46.
 > `native build` produces ReleaseFast binaries.
 > `scripts/package.sh --ci` and `--check` produce and verify three macOS
@@ -30,11 +30,11 @@
 | `Msg` variants | 223 | `packages/ros-core/src/core/msg.zig` |
 | Tables | 46 | `apps/admin/src/schema/*.sql` |
 | Migrations | 20 | `apps/admin/src/schema/migrations.lock.json` version 20 |
-| Read queries | 33 named constants | `packages/ros-core/src/data/repos.zig` (one named constant each, and one place that says the app is loading) |
+| Read queries | 34 named constants | `packages/ros-core/src/data/repos.zig` (one named constant each, and one place that says the app is loading) |
 | Write paths | setup, order + lines, status + history, config, currency, product, employee, employee credential (hash and kind), employee removal, customer, category, tax slab, discount, modifier group, dish station, stock count, payment, op log, reference version, log compaction, snapshot apply, pairing token (seeded once, then rotated) | `repos.zig` |
-| Effect keys | 70, each used once | `packages/ros-core/src/data/repos.zig`; a test asserts the uniqueness |
-| Headless tests | admin 217/217, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 46/46; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
-| Database integration tests | 145, green | `apps/admin/src/tests_data.zig` |
+| Effect keys | 71, each used once | `packages/ros-core/src/data/repos.zig`; a test asserts the uniqueness |
+| Headless tests | admin 225/225, kiosk 8/8, net-spike 13/13, service 10/10, ros-core 46/46; every target green | `apps/*/src/tests*.zig`, `packages/*`, `scripts/verify-all.sh` |
+| Database integration tests | 150, green | `apps/admin/src/tests_data.zig` |
 | Sidecar binaries | 0 | `tools/*` contain READMEs only |
 | CI workflows | 1 (verify, smoke, package) | `.github/workflows/ci.yml` |
 | Reusable component templates | 0 | `src/components/` empty |

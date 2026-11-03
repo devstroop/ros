@@ -177,7 +177,7 @@ the picker, first-run setup, the dashboard, the point of sale, the order
 list, the floor, the kitchen board, the customer display, the waiter
 shell, the settings screens and the catalogue and people forms. Three
 binaries — `admin`, `service`, `kiosk` — share one core and talk to each
-other over the LAN. The admin app's two suites hold 217 tests, the
+other over the LAN. The admin app's two suites hold 225 tests, the
 service and kiosk suites 10 and 8, and `packages/ros-core` 46; together
 they cover the model, navigation, markup, the wire and the SQL against
 the database engine, and `scripts/verify-all.sh` runs all of them. The

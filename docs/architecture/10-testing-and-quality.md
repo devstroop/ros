@@ -1,7 +1,7 @@
 # Testing and quality
 
 > **Status:** Healthy — `scripts/verify-all.sh` is green: admin
-> **217/217** (71 handwritten rules, 145 against a migrated database, and
+> **225/225** (74 handwritten rules, 150 against a migrated database, and
 > one test block that imports both), service **10/10**, kiosk **8/8**,
 > `ros-core` **46/46**, net-spike **13/13**. CI adds a headless paint
 > check per app and the sale walkthrough. Still uncovered: the clock
@@ -31,8 +31,8 @@ A rule that lives only in a comment is a rule that breaks. The tests in
 
 ## Current tests
 
-`native test apps/admin` reports **217** for the admin target - 71 in
-`tests.zig`, 145 in `tests_data.zig`, one generated - and the service and
+`native test apps/admin` reports **225** for the admin target - 74 in
+`tests.zig`, 150 in `tests_data.zig`, one generated - and the service and
 kiosk targets add 10 and 8 of their own. The table below is the subset
 this page names, not the whole list.
 
@@ -94,7 +94,7 @@ does) or bind an in-memory store.
 | Pure update | `native test` | Model transitions, RBAC, cart, status machine, the sign-in | Covered |
 | Markup build | `native test` | Every screen builds for its fixture and stays inside the widget budget | Covered |
 | Page decoder | `native test` | The page dialect and every repository load | Covered |
-| Relational integration | `native test` + `openMemoryMigrated` | Migrate, insert fixtures, run repo SQL, assert rows | Covered — 145 tests |
+| Relational integration | `native test` + `openMemoryMigrated` | Migrate, insert fixtures, run repo SQL, assert rows | Covered — 150 tests |
 | Business calculations | `native test` | Tax, discounts, cash tenders and change | Covered |
 | Split payment | — | One bill paid by more than one tender | Not a feature yet |
 | Live automation | `native automate` | Role picker → sign-in → sale → KDS advance, node budget, non-blank GPU | In CI (`smoke`, `sale-smoke`) |

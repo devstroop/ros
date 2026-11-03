@@ -106,9 +106,10 @@ pub const key_sync_snapshot = 65;
 pub const key_sync_compact = 66;
 pub const key_theme = 67;
 pub const key_save_theme = 68;
-pub const key_pairing = 69;
-pub const key_save_pairing = 70;
-pub const key_set_pairing = 71;
+pub const key_payment_check = 69;
+pub const key_pairing = 70;
+pub const key_save_pairing = 71;
+pub const key_set_pairing = 72;
 
 // ------------------------------------------------------------ queries
 
@@ -507,6 +508,14 @@ pub fn watchOpenOrders(fx: *Effects) void {
 
 pub fn loadOrders(model: *Model, fx: *Effects) void {
     query(model, fx, key_orders, orders_sql, &.{}, Effects.dbMsg(.orders_loaded));
+}
+
+/// Read the board after a payment and report it under its own key. The
+/// confirmation screen waits for this read: a board loaded before the
+/// payment committed is not evidence that the money landed, and only
+/// this key means "the payment's own read".
+pub fn loadOrdersForPayment(model: *Model, fx: *Effects) void {
+    query(model, fx, key_payment_check, orders_sql, &.{}, Effects.dbMsg(.orders_loaded));
 }
 
 /// Send a dish to a station.
@@ -2024,11 +2033,12 @@ pub fn addOrderLine(
     // moves; the customer pays the price on the menu.
     const total_tax: i64 = if (model.tax_inclusive) 0 else line_tax;
 
-    var order_params: [4]native_sdk.EffectDbValue = .{
+    var order_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
         .{ .integer = line_tax },
         .{ .integer = total_tax },
         .{ .integer = at },
+        .{ .integer = 0 },
     };
 
     // The kitchen board reads an order and its lines, so the new plate
@@ -2067,6 +2077,7 @@ pub fn addOrderLine(
     // plate overwrite the first, so a plate added here is named after
     // the device, the order, the moment and its position.
     const new_line_id = newOrderLineId(model, order_id, snapshot_count, at);
+    order_params[4] = .{ .integer = new_line_id };
     for (model.orders) |order| {
         if (order.id != order_id) continue;
         order_type = @intFromEnum(order.order_type);
@@ -2093,7 +2104,7 @@ pub fn addOrderLine(
     // An inclusive menu already has the tax inside the price.
     const snapshot_total = subtotal + (if (model.tax_inclusive) 0 else order_tax);
 
-    var line_params: [7]native_sdk.EffectDbValue = .{
+    var line_params: [8]native_sdk.EffectDbValue = .{
         .{ .integer = new_line_id },
         .{ .integer = order_id },
         .{ .integer = product_id },
@@ -2101,6 +2112,7 @@ pub fn addOrderLine(
         .{ .integer = unit_price_minor },
         .{ .integer = tax_bps },
         .{ .integer = at },
+        .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
     };
 
     var json_buffer: [16 * 1024]u8 = undefined;
@@ -2130,12 +2142,15 @@ pub fn addOrderLine(
         // The id is the plate's name across devices, not a row number:
         // a second waiter's plate must not take the same name. The
         // marker says the plate is in this device's stock figure, so a
-        // later void knows to put it back.
+        // later void knows to put it back. The insert is conditional on
+        // the ticket still being open: a plate that arrives after the
+        // payment is not food the customer ordered.
         .sql =
         \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
         \\  unit_price_minor, tax_bps, notes, stock_taken, created_at)
-        \\VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, '',
-        \\  COALESCE((SELECT track_stock FROM product WHERE id = ?3), 0), ?7);
+        \\SELECT ?1, ?2, ?3, ?4, 1, ?5, ?6, '',
+        \\  COALESCE((SELECT track_stock FROM product WHERE id = ?3), 0), ?7
+        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?2 AND status < ?8);
         ,
         .params = &line_params,
     };
@@ -2161,15 +2176,20 @@ pub fn addOrderLine(
         \\UPDATE orders SET
         \\  subtotal_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1),
         \\  tax_minor = tax_minor + ?2,
-        \\  total_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1) + ?3,
+        \\  total_minor = (SELECT COALESCE(SUM(unit_price_minor * qty), 0) FROM order_line WHERE order_id = ?1)
+        \\    + ?3 - discount_minor,
         \\  updated_at = ?4
-        \\WHERE id = ?1;
+        \\WHERE id = ?1 AND EXISTS (SELECT 1 FROM order_line WHERE id = ?5);
         ,
         .params = &order_params,
     };
     var count: usize = 3;
     if (order_op.ready) {
-        statements[count] = .{ .sql = insert_op_log_sql, .params = &order_op.params };
+        // The op should not outlive a line insert that did not land.
+        var line_op_params: [9]native_sdk.EffectDbValue = undefined;
+        for (order_op.params, 0..) |param, index| line_op_params[index] = param;
+        line_op_params[8] = .{ .integer = new_line_id };
+        statements[count] = .{ .sql = insert_line_op_sql, .params = &line_op_params };
         count += 1;
         statements[count] = .{ .sql = save_clock_sql, .params = &order_op.clock_params };
         count += 1;
@@ -2328,24 +2348,34 @@ pub fn saveCurrency(fx: *Effects, key: u64, code: []const u8, symbol: []const u8
 /// Take the payment for an order and close it. ONE transaction: the
 /// money and the closed order land together, or neither does. A paid
 /// order that is still open is a cashier's worst day.
+///
+/// The amount is the bill the cashier saw. The write is conditional on
+/// the order still carrying that total: a plate added on another
+/// device after the confirmation opened makes the payment fail instead
+/// of charging the old figure. The status guard is "not closed yet",
+/// not the exact status the model held - the kitchen may have moved
+/// the ticket from pending to preparing while the guest was paying,
+/// and that must not lose the money.
 pub fn takePayment(
     model: *Model,
     fx: *Effects,
     key: u64,
     order_id: i64,
-    from_status: domain.OrderStatus,
     mode: domain.PaymentMode,
     amount_minor: i64,
     at: i64,
 ) void {
     const origin = orderOrigin(model, order_id);
+    const completed = @intFromEnum(domain.OrderStatus.completed);
     // Each statement carries its OWN parameters: the engine checks that
     // a statement's parameter count matches the placeholders it uses,
     // and one shared array for three different statements never does.
     //
     // The payment, the history and the close are all CONDITIONAL on the
-    // order being where it should be. A second tap finds the order
-    // closed, writes nothing, and the customer is charged once.
+    // order being open and still carrying this bill. A second tap finds
+    // the order closed, writes nothing, and the customer is charged
+    // once. A late plate finds the total changed, writes nothing, and
+    // the cashier sees the new bill instead of undercharging it.
     var statements: [6]native_sdk.EffectDbStatement = undefined;
     var payment_params: [6]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
@@ -2353,27 +2383,32 @@ pub fn takePayment(
         .{ .integer = @intFromEnum(mode) },
         .{ .integer = amount_minor },
         .{ .integer = at },
-        .{ .integer = @intFromEnum(from_status) },
+        .{ .integer = completed },
     };
-    var order_params: [4]native_sdk.EffectDbValue = .{
+    var order_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
-        .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
+        .{ .integer = completed },
         .{ .integer = at },
-        .{ .integer = @intFromEnum(from_status) },
+        .{ .integer = amount_minor },
+        .{ .integer = completed },
     };
-    var history_params: [4]native_sdk.EffectDbValue = .{
+    var history_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
-        .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
+        .{ .integer = completed },
         .{ .integer = at },
-        .{ .integer = @intFromEnum(from_status) },
+        .{ .integer = amount_minor },
+        .{ .integer = completed },
     };
     statements[0] = .{
         // The history first: it says the order closed, and it is only
-        // true if the order was still open.
+        // true if the order was still open at this bill.
         .sql =
         \\INSERT INTO order_status_history (order_id, status, changed_at)
         \\SELECT ?1, ?2, ?3
-        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status = ?4);
+        \\WHERE EXISTS (
+        \\  SELECT 1 FROM orders
+        \\  WHERE id = ?1 AND status < ?5 AND total_minor = ?4
+        \\);
         ,
         .params = &history_params,
     };
@@ -2383,36 +2418,14 @@ pub fn takePayment(
         .sql =
         \\INSERT INTO payment (id, order_id, mode, amount_minor, reference, paid_at, created_at)
         \\SELECT ?1, ?2, ?3, ?4, '', ?5, ?5
-        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?2 AND status = ?6);
+        \\WHERE EXISTS (
+        \\  SELECT 1 FROM orders
+        \\  WHERE id = ?2 AND status < ?6 AND total_minor = ?4
+        \\);
         ,
         .params = &payment_params,
     };
-    statements[2] = .{
-        .sql = "UPDATE orders SET status = ?2, updated_at = ?3 WHERE id = ?1 AND status = ?4;",
-        .params = &order_params,
-    };
-    statements[3] = .{
-        // The guest has paid and gone, so the table is free again - in
-        // the same transaction as the payment, so a table is never free
-        // while the money is still owed. Only the order that was just
-        // closed may free it: another open ticket on the same table
-        // means the room is still in use.
-        .sql =
-        \\UPDATE dining_table SET status = 0
-        \\WHERE id = (
-        \\  SELECT dining_table_id FROM orders WHERE id = ?1 AND status = ?2
-        \\)
-        \\  AND NOT EXISTS (
-        \\    SELECT 1 FROM orders
-        \\    WHERE dining_table_id = dining_table.id AND status < ?2
-        \\  );
-        ,
-        .params = &.{
-            .{ .integer = order_id },
-            .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
-        },
-    };
-    var count: usize = 4;
+    var count: usize = 2;
 
     const snapshot = record.PaymentSnapshot{
         .order_id = origin.id,
@@ -2471,11 +2484,50 @@ pub fn takePayment(
     };
 
     if (op_ready) {
-        statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
+        // The op belongs to the payment insert. `changes()` is 1 only
+        // when the payment really landed, so a second tap or a late
+        // plate writes neither an op nor a clock.
+        statements[count] = .{ .sql = insert_op_if_written_sql, .params = &op_params };
         count += 1;
-        statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
+        statements[count] = .{ .sql = save_clock_if_op_written_sql, .params = &clock_params };
         count += 1;
     }
+
+    statements[count] = .{
+        // Close the ticket only if the payment above landed at this
+        // bill. The status guard lets a ticket the kitchen has already
+        // moved forward close; the total guard is what makes the late
+        // plate a refusal rather than an undercharge.
+        .sql =
+        \\UPDATE orders SET status = ?2, updated_at = ?3
+        \\WHERE id = ?1 AND status < ?5 AND total_minor = ?4;
+        ,
+        .params = &order_params,
+    };
+    count += 1;
+
+    statements[count] = .{
+        // The guest has paid and gone, so the table is free again - in
+        // the same transaction as the payment, so a table is never free
+        // while the money is still owed. Only the order that was just
+        // closed may free it: another open ticket on the same table
+        // means the room is still in use.
+        .sql =
+        \\UPDATE dining_table SET status = 0
+        \\WHERE id = (
+        \\  SELECT dining_table_id FROM orders WHERE id = ?1 AND status = ?2
+        \\)
+        \\  AND NOT EXISTS (
+        \\    SELECT 1 FROM orders
+        \\    WHERE dining_table_id = dining_table.id AND status < ?2
+        \\  );
+        ,
+        .params = &.{
+            .{ .integer = order_id },
+            .{ .integer = completed },
+        },
+    };
+    count += 1;
 
     fx.dbExec(.{
         .key = key,
@@ -2704,6 +2756,17 @@ const insert_op_log_sql =
     \\INSERT INTO op_log (id, entity_table, entity_id, operation, data_json,
     \\  previous_json, logical_clock, device_id, host_id, parent_id, created_at)
     \\VALUES (?1, ?2, ?3, ?4, ?5, '{}', ?6, ?7, '', '', ?8)
+    \\ON CONFLICT(id) DO NOTHING;
+;
+
+/// The op for a plate added later joins the line insert's transaction,
+/// but only when that insert landed. A paid bill takes no plate, and a
+/// peer must not be told that one did.
+const insert_line_op_sql =
+    \\INSERT INTO op_log (id, entity_table, entity_id, operation, data_json,
+    \\  previous_json, logical_clock, device_id, host_id, parent_id, created_at)
+    \\SELECT ?1, ?2, ?3, ?4, ?5, '{}', ?6, ?7, '', '', ?8
+    \\WHERE EXISTS (SELECT 1 FROM order_line WHERE id = ?9)
     \\ON CONFLICT(id) DO NOTHING;
 ;
 
@@ -4347,16 +4410,27 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
             \\    SELECT COALESCE(SUM(unit_price_minor * qty), 0)
             \\    FROM order_line WHERE order_line.order_id = orders.id
             \\  ),
-            \\  tax_minor = (
-            \\    SELECT COALESCE(SUM((unit_price_minor * qty * tax_bps + 5000) / 10000), 0)
-            \\    FROM order_line WHERE order_line.order_id = orders.id
-            \\  ),
+            \\  tax_minor = CASE WHEN COALESCE(
+            \\      (SELECT tax_inclusive FROM company LIMIT 1), 0) = 1
+            \\    THEN (
+            \\      SELECT COALESCE(SUM(
+            \\        (unit_price_minor * qty * tax_bps + (10000 + tax_bps) / 2)
+            \\          / (10000 + tax_bps)), 0)
+            \\      FROM order_line WHERE order_line.order_id = orders.id
+            \\    )
+            \\    ELSE (
+            \\      SELECT COALESCE(SUM(
+            \\        (unit_price_minor * qty * tax_bps + 5000) / 10000), 0)
+            \\      FROM order_line WHERE order_line.order_id = orders.id
+            \\    )
+            \\  END,
             \\  total_minor =
             \\    (SELECT COALESCE(SUM(unit_price_minor * qty), 0)
             \\     FROM order_line WHERE order_line.order_id = orders.id)
             \\    + CASE WHEN COALESCE((SELECT tax_inclusive FROM company LIMIT 1), 0)
             \\        THEN 0
-            \\        ELSE (SELECT COALESCE(SUM((unit_price_minor * qty * tax_bps + 5000) / 10000), 0)
+            \\        ELSE (SELECT COALESCE(SUM(
+            \\               (unit_price_minor * qty * tax_bps + 5000) / 10000), 0)
             \\              FROM order_line WHERE order_line.order_id = orders.id)
             \\      END
             \\    - discount_minor,

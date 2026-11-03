@@ -100,22 +100,58 @@ fn choose_sign_in(model: *Model, employee: domain.Employee) void {
 /// A new order on the board gets a sound. The kitchen hears the sale
 /// without looking at the screen - and the cashier hears it too, which
 /// is how a second cashier knows a table needs serving.
+///
+/// "New" is the local order number, not the row id. A remote order is
+/// stored under a negative id, so the highest id never moves when a
+/// waiter's ticket arrives from another device; the order number is a
+/// sequence the database assigns to every order, local or synced.
 fn announceNewOrder(model: *Model, fx: *Effects) void {
-    var newest: i64 = model.last_seen_order_id;
+    var newest: i64 = model.last_seen_order_no;
     for (model.orders) |order| {
-        if (order.id > newest) newest = order.id;
+        const number = std.fmt.parseInt(i64, order.order_no, 10) catch 0;
+        if (number > newest) newest = number;
     }
-    if (newest == model.last_seen_order_id) return;
-    const first_time = model.last_seen_order_id == 0;
-    model.last_seen_order_id = newest;
-    // The first board of the shift is not a new sale: the kitchen has
-    // not been watching yet.
-    if (first_time) return;
+    // The first board of the shift is where the kitchen starts
+    // watching, so its orders are not new sales. An empty first board
+    // still counts as primed: the first order after it is a sale.
+    if (!model.board_primed) {
+        model.board_primed = true;
+        model.last_seen_order_no = newest;
+        return;
+    }
+    if (newest <= model.last_seen_order_no) return;
+    model.last_seen_order_no = newest;
     fx.playAudio(.{
         .key = repos.key_chime,
         .path = "assets/chime.wav",
         .on_event = Effects.audioMsg(.audio_event),
     });
+}
+
+/// A payment reports success even when its guards found a late plate or
+/// a ticket that moved, because the transaction itself is healthy. The
+/// board is the truth: only a payment row on the order means the money
+/// landed. Check it before leaving the confirmation screen.
+fn settlePayment(model: *Model, fx: *Effects) void {
+    const id = model.payment_check_id;
+    if (id == 0) return;
+    model.payment_check_id = 0;
+    const order = findOrder(model, id) orelse {
+        // Voided while the cashier was paying. There is no bill left to
+        // charge, and the order list is the right place to be.
+        model.payment_error = "";
+        model.error_text = "That order is no longer on the board";
+        go(model, .orders);
+        return;
+    };
+    if (!order.paid) {
+        model.payment_error = "The bill changed - check the total and take the payment again";
+        return;
+    }
+    model.payment_error = "";
+    go(model, .orders);
+    net_bridge.notify();
+    repos.maybeCompact(model, fx);
 }
 
 /// Keep the waiter's cart in step with the database: the lines of the
@@ -192,6 +228,17 @@ fn addToOrder(model: *Model, fx: *Effects, product_id: i64) void {
         model.error_text = "Pick a table first";
         return;
     }
+    // The table can be paid for while the waiter is still holding the
+    // menu. The board carries the closed status; a plate must not land
+    // on a bill the customer has already settled.
+    const order = findOrder(model, model.active_order_id) orelse {
+        model.error_text = "That table's order is no longer open";
+        return;
+    };
+    if (order.status == .completed or order.status == .voided) {
+        model.error_text = "That table has been paid - start a new order";
+        return;
+    }
     // One plate at a time. The op carries the whole ticket, so the
     // second plate has to see the first one in the list.
     if (model.add_line_pending) {
@@ -223,7 +270,8 @@ fn openProductForm(model: *Model, id: i64) void {
         for (model.products) |product| {
             if (product.id != id) continue;
             model.form_product_name_buf.set(product.name);
-            model.form_product_price_buf.set(priceAsTyped(product.price_minor));
+            var price_buffer: [24]u8 = undefined;
+            model.form_product_price_buf.set(priceAsTyped(&price_buffer, product.price_minor, model.currency_decimals));
             model.form_product_category_id = product.category_id;
             model.form_product_food_id = @intFromEnum(product.food_type);
             break;
@@ -285,8 +333,9 @@ fn openDiscountForm(model: *Model, id: i64) void {
         for (model.discounts_list) |discount| {
             if (discount.id != id) continue;
             model.form_discount_name_buf.set(discount.name);
-            model.form_discount_percent_buf.set(rateAsTyped(discount.percent_bps));
-            model.form_discount_amount_buf.set(priceAsTyped(discount.amount_minor));
+            var text_buffer: [24]u8 = undefined;
+            model.form_discount_percent_buf.set(rateAsTyped(&text_buffer, discount.percent_bps));
+            model.form_discount_amount_buf.set(priceAsTyped(&text_buffer, discount.amount_minor, model.currency_decimals));
             break;
         }
     }
@@ -303,7 +352,8 @@ fn openTaxSlabForm(model: *Model, id: i64) void {
         for (model.tax_slabs_list) |slab| {
             if (slab.id != id) continue;
             model.form_tax_slab_name_buf.set(slab.name);
-            model.form_tax_slab_rate_buf.set(rateAsTyped(slab.rate_bps));
+            var rate_buffer: [24]u8 = undefined;
+            model.form_tax_slab_rate_buf.set(rateAsTyped(&rate_buffer, slab.rate_bps));
             model.form_tax_slab_inclusive = slab.inclusive;
             break;
         }
@@ -312,25 +362,56 @@ fn openTaxSlabForm(model: *Model, id: i64) void {
 }
 
 /// A rate in basis points, as the form shows it: the percentage, with
-/// no decimals the owner did not type.
-fn rateAsTyped(rate_bps: i64) []const u8 {
-    var buffer: [24]u8 = undefined;
+/// no decimals the owner did not type. The caller owns the buffer: a
+/// slice of a local would point at this function's dead frame.
+fn rateAsTyped(buffer: []u8, rate_bps: i64) []const u8 {
     if (@mod(rate_bps, 100) == 0) {
-        const written = std.fmt.bufPrint(&buffer, "{d}", .{@divTrunc(rate_bps, 100)}) catch return "";
+        const written = std.fmt.bufPrint(buffer, "{d}", .{@divTrunc(rate_bps, 100)}) catch return "";
         return written;
     }
-    const written = std.fmt.bufPrint(&buffer, "{d}.{d:0>2}", .{ @divTrunc(rate_bps, 100), @mod(rate_bps, 100) }) catch return "";
+    const written = std.fmt.bufPrint(buffer, "{d}.{d:0>2}", .{ @divTrunc(rate_bps, 100), @mod(rate_bps, 100) }) catch return "";
     return written;
 }
 
-/// A price in minor units, as the form shows it: the amount with two
-/// decimals and no currency symbol.
-fn priceAsTyped(minor: i64) []const u8 {
-    var buffer: [24]u8 = undefined;
-    const whole = @divTrunc(minor, 100);
-    const cents = @mod(minor, 100);
-    const written = std.fmt.bufPrint(&buffer, "{d}.{d:0>2}", .{ whole, cents }) catch return "";
-    return written;
+/// A price in minor units, as the form shows it: the amount in the
+/// company's currency, with its own number of decimals and no symbol.
+/// The caller owns the buffer for the same reason as `rateAsTyped`.
+fn priceAsTyped(buffer: []u8, minor: i64, decimals: i64) []const u8 {
+    if (decimals <= 0) {
+        return std.fmt.bufPrint(buffer, "{d}", .{minor}) catch return "";
+    }
+    if (decimals > 9) return "";
+    const divisor = tenTo(decimals);
+    const whole = @divTrunc(minor, divisor);
+    const frac = @mod(minor, divisor);
+    const whole_text = std.fmt.bufPrint(buffer, "{d}", .{whole}) catch return "";
+    var written = whole_text.len;
+    if (written + 1 + @as(usize, @intCast(decimals)) > buffer.len) return "";
+    buffer[written] = '.';
+    written += 1;
+    const padded = writePadded(buffer[written..], frac, @intCast(decimals)) orelse return "";
+    return buffer[0 .. written + padded];
+}
+
+/// Write `value` right-aligned in a field of `width` zeroes. The form
+/// needs it because a currency's decimals are not a compile-time two.
+fn writePadded(buffer: []u8, value: i64, width: usize) ?usize {
+    var digits_buffer: [24]u8 = undefined;
+    const digits = std.fmt.bufPrint(&digits_buffer, "{d}", .{value}) catch return null;
+    if (digits.len > width or width > buffer.len) return null;
+    const padding = width - digits.len;
+    @memset(buffer[0..padding], '0');
+    @memcpy(buffer[padding..][0..digits.len], digits);
+    return width;
+}
+
+/// Ten to the power of a small exponent: the divisor a currency's
+/// decimals mean.
+fn tenTo(exponent: i64) i64 {
+    var value: i64 = 1;
+    var index: i64 = 0;
+    while (index < exponent) : (index += 1) value *= 10;
+    return value;
 }
 
 /// Save the discount the form is editing.
@@ -555,7 +636,6 @@ fn takePayment(model: *Model, fx: *Effects) void {
         fx,
         repos.key_payment,
         order.id,
-        order.status,
         mode,
         order.total_minor,
         fx.wallMs(),
@@ -1584,6 +1664,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.last_order_items_count += line.qty;
             }
             model.last_order_at = order.placed_at;
+            model.payment_check_id = 0;
             model.payment_error = "";
             model.cash_tendered_buf.clear();
             go(model, .order_confirmation);
@@ -1605,6 +1686,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.last_order_items_count += line.qty;
             }
             model.last_order_at = order.placed_at;
+            model.payment_check_id = 0;
             model.payment_error = "";
             model.cash_tendered_buf.clear();
             go(model, .order_confirmation);
@@ -1748,6 +1830,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.last_order_type_field = "";
             model.last_order_total_minor = 0;
             model.last_order_items_count = 0;
+            model.payment_check_id = 0;
             model.payment_error = "";
             model.cash_tendered_buf.clear();
             go(model, .pos);
@@ -1757,20 +1840,32 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.busy = false;
             model.payment_pending = false;
             if (result.outcome != .ok) {
+                model.payment_check_id = 0;
                 model.payment_error = switch (result.outcome) {
                     .constraint => "The payment broke a data rule",
                     .busy => "The database is busy - try again",
                     else => "Could not take the payment",
                 };
+                // The refusal may be a late plate: re-read the board so
+                // the confirmation shows the bill the next tap will
+                // charge, not the one that was refused.
+                repos.loadOrders(model, fx);
                 return;
             }
             model.payment_error = "";
-            // The sale is done: back to the order list, where the
-            // closed order is now a completed one.
-            go(model, .orders);
-            repos.loadOrders(model, fx);
-            net_bridge.notify();
-            repos.maybeCompact(model, fx);
+            // The write is reported as success even when its guards
+            // found a late plate or a ticket that moved. Read the board
+            // back under the payment-check key and let the order's own
+            // row decide whether the money landed before telling the
+            // cashier the sale is done.
+            if (model.last_order_id != 0) {
+                model.payment_check_id = model.last_order_id;
+                repos.loadOrdersForPayment(model, fx);
+            } else {
+                go(model, .orders);
+                net_bridge.notify();
+                repos.maybeCompact(model, fx);
+            }
         },
 
         // -------------------------------------------------------- the forms
@@ -2251,12 +2346,21 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     .busy => "The database is busy - try again",
                     else => "Could not read the orders",
                 };
+                if (result.key == repos.key_payment_check and model.payment_check_id != 0) {
+                    model.payment_check_id = 0;
+                    model.payment_error = "Could not confirm the payment - try again";
+                }
                 return;
             }
             if (result.kind == .page) {
                 repos.decodeOrders(model, result.bytes);
                 announceNewOrder(model, fx);
             }
+            // The payment's write reports success even when its guards
+            // refused it. Wait for the payment's own board read, then
+            // check the order's payment row before calling the sale
+            // done.
+            if (result.key == repos.key_payment_check and result.kind == .done) settlePayment(model, fx);
             // The order we were moving is not on the board any more. It
             // was deleted, or the database was reset under us, and the
             // operator is told so instead of watching a ticket vanish.
@@ -2608,6 +2712,7 @@ fn resetSession(model: *Model, gate: Screen) void {
     model.last_order_total_minor = 0;
     model.last_order_items_count = 0;
     model.last_order_at = 0;
+    model.payment_check_id = 0;
     model.sale_buf.reset();
     model.payment_error = "";
     model.cash_tendered_buf.clear();
@@ -2935,6 +3040,7 @@ fn placeOrder(model: *Model, fx: *Effects) void {
     model.last_order_items_count = 0;
     for (lines[0..count]) |line| model.last_order_items_count += line.qty;
     model.last_order_at = order.placed_at;
+    model.payment_check_id = 0;
     model.payment_error = "";
     model.cash_tendered_buf.clear();
 
