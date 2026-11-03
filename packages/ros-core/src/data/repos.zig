@@ -705,9 +705,12 @@ pub fn saveStockCount(
     var count: usize = 2;
     if (op_ready) {
         // Unconditional on purpose. The ledger row above either lands
-        // or aborts the transaction, and the op describes that row.
-        // The product update before it can match no row - a peer may
-        // not have the product yet - and the count is still a count.
+        // or aborts the transaction, so there is no write that matched
+        // nothing for the op to outlive: the writer connection enforces
+        // foreign keys and `stock_adjustment.product_id` references the
+        // product, so a count for a product this device does not have
+        // rolls the whole batch back before it reaches the op. The
+        // product update just above this op then always has its row.
         statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
         count += 1;
         statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
@@ -1999,11 +2002,15 @@ pub fn openOrderForTable(
     if (order_op.ready) {
         // Unconditional on purpose. The order insert above either
         // lands or aborts the transaction, so there is no write that
-        // matched nothing for the op to outlive - and the statement
-        // immediately before this one is the table update, which
-        // matches no row for a counter sale. Guarding the op on
-        // `changes()` here would lose the op for every order that
-        // has no table.
+        // matched nothing for the op to outlive. A counter sale never
+        // reaches this function: `placeOrder` writes it through
+        // `saveOrder` below, which binds a `dining_table_id` of zero as
+        // NULL through `idParam`, and NULL has no reference to enforce.
+        // This insert binds the table id raw, and the writer connection
+        // enforces foreign keys, which `orders.dining_table_id` has on
+        // `dining_table` - so a table that is not on the floor plan
+        // aborts the batch at the insert, and the table update just
+        // above this op always has a row to match when it runs.
         statements[count] = .{ .sql = insert_op_log_sql, .params = &order_op.params };
         count += 1;
         statements[count] = .{ .sql = save_clock_sql, .params = &order_op.clock_params };
@@ -2949,9 +2956,12 @@ fn saveCursor(model: *Model, fx: *Effects) void {
 /// window, not the log: when it fills it starts over, and a peer that
 /// missed the window falls back to the durable op_log.
 pub fn cacheOp(model: *Model, op: record.Op, line: []const u8) void {
-    // Every op that reaches the cache also reaches the op log. Counting
-    // here keeps the compaction trigger independent of which write path
-    // produced the op.
+    // The op is cached before its own transaction runs, so a write the
+    // database refuses still leaves its line here and still counts
+    // toward the compaction trigger. Nothing a peer can see: `/v1/ops`
+    // is served from the durable op_log and this is only a window of
+    // recent lines. Counting here rather than in each write path keeps
+    // the trigger independent of which path produced the op.
     model.sync_ops_since_compact +%= 1;
     if (line.len == 0) return;
     if (model.sync_cache_count == model_mod.sync_cache_slots or
