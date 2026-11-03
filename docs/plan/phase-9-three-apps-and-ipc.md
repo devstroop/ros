@@ -7,6 +7,8 @@
 > (Accepted 2026-10-24); the design is
 > [`architecture/12`](../architecture/12-three-apps-and-ipc.md). Bootstrap
 > and compaction are [ADR-0020](../decisions/0020-late-join-and-compaction.md).
+> Peer authentication is
+> [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md).
 > **Estimate:** 42 engineer-days
 > **Depends on:** Phase 3 (the POS slice), Phase 5 (the admin
 > surfaces), ADR-0017 accepted, **and how a person signs in settled**
@@ -67,7 +69,7 @@ the mDNS, the WebSocket and the host election.
 | Discovery | No beacon, no peer list, no manual address |
 | Reference data | No push, no version |
 | Bootstrap | No snapshot, no replay |
-| Security | No peer authentication |
+| Security | ~~No peer authentication~~ **Done**: one pairing token per restaurant, in the `x-ros-token` header of every request that carries its data ([ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md)). Still open: TLS, and a token that cannot revoke one device |
 | Tests | No two-device test of any kind |
 
 The push stream (9.6) is done: `/v1/events` is held open, and the
@@ -207,7 +209,10 @@ there is still one app to fall back on.
    [ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)
    and [#95](https://github.com/devstroop/ros/issues/95) - the
    sign-in identifies the employee before it hashes, so the employee row
-   is self-verifying and no shared secret has to cross the wire. The
+   is self-verifying and no shared secret has to cross the wire. (The
+   row needs nothing; the *transport* turned out to need a secret of its
+   own, which is a different question - see
+   [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md).) The
    picker that makes this possible sits in place of the role picker: a
    person is on the picker with the mode they work in, and the two
    device modes sign in by being the device. It landed on `develop` on

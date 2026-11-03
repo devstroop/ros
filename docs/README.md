@@ -118,7 +118,8 @@ template. The short version:
   apps over TCP/IP (ADR-0017), the PIN hash is the employee's
   (ADR-0018), cross-device order identity (ADR-0019), late join and
   compaction (ADR-0020), the counter POS is the service app (ADR-0021),
-  a person chooses how they sign in (ADR-0022).
+  a person chooses how they sign in (ADR-0022), a peer presents a shared
+  device token (ADR-0023).
 - Superseded: one binary with four roles (ADR-0004, by ADR-0017);
   clock-based order IDs (ADR-0013, by ADR-0014); salted SHA-256 PIN
   hashing (ADR-0007, by ADR-0016); ADR-0016's installation-wide salt

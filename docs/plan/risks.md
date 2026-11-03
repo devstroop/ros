@@ -1,7 +1,7 @@
 # Risk register
 
 > **Status:** Living.
-> **Last reviewed:** 2026-10-31, against the source and `plan/status.md`.
+> **Last reviewed:** 2026-11-03, against the source and `plan/status.md`.
 > **Legend:** L = likelihood, I = impact, both low / med / high.
 
 The register is ordered by current priority, not by ID. An item with no
@@ -31,6 +31,7 @@ owner is not being managed.
 | C2 | Waiter and display roles are unusable | certain / high | FIXED: the waiter floor, menu, cart, order list and counter POS render, the waiter takes payment on the service app, and the display board shows the order cards ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)) |
 | C3 | A fresh install cannot log in | certain / high | FIXED: the setup writes the company, the operator, the salt and a starter menu in one transaction |
 | C4 | Two effects shared an effect key | certain / high | FIXED: a second live effect with the same key is refused, so a write could silently never happen. Every key is used once, and a test says so |
+| SEC3 | Sync has no peer authentication | high / high | PARTLY CLOSED: one pairing token per restaurant, presented in `x-ros-token` on every request that carries the restaurant's data, refused with `401` and counted on the admin's Control centre ([ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md), [#134](https://github.com/devstroop/ros/issues/134)). What is left is SEC9 |
 
 ## Delivery and environment
 
@@ -72,11 +73,12 @@ owner is not being managed.
 |---|---|---|---|---|---|
 | SEC1 | ~~SHA-256 is not a KDF; PINs are brute-forceable~~ | closed | closed | CLOSED: bcrypt at 2^10, salted from the installation salt and the employee's own id ([ADR-0016](../decisions/0016-what-a-pin-is.md), [ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)). A cracked database now costs a slow guess per person, not one derivation that serves them all | Eng |
 | SEC2 | ~~No login throttling or lockout~~ | closed | closed | CLOSED: the till stops after five wrong credentials and tells the operator when they may try again. What is left is SEC8 - the counter lives in the session, so a restart clears it | Eng |
-| SEC3 | Sync has no peer authentication | high | high | Pairing + shared secret minimum; document trust. A credential is never sent over the wire - a person signs in on their own device, and the row that reaches them verifies itself ([ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md), [ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)) | Eng |
+| SEC3 | ~~Sync has no peer authentication~~ | med | high | PARTLY CLOSED: every device of a restaurant shares one pairing token and presents it in `x-ros-token` on every request that carries the restaurant's data; an unpaired peer gets `401`, counted on the admin's Control centre ([ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md), [#134](https://github.com/devstroop/ros/issues/134)). What is left is SEC9: the token is one per restaurant, so it revokes everything or nothing, it travels in plain HTTP, and there is no flow for handing it to the next device. A credential is still never sent over the wire - a person signs in on their own device, and the row that reaches them verifies itself ([ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md), [ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)) | Eng |
 | SEC4 | Kiosk actions are unattributed | certain | med | A manager's credential for sensitive actions; audit log | Product |
 | SEC5 | OAuth secrets or credentials leak into the repo | med | high | Use `fx.credentials*`; never commit secrets; secret scanning | Eng |
 | SEC6 | Receipt/invoice numbering is not legal for a jurisdiction | med | high | Legal review; separate invoice sequence if needed | Product |
 | SEC7 | No audit trail for voids/discounts | high | med | Enforce `void_log_entry`; log discount actor | Eng |
+| SEC9 | The pairing token is one secret per restaurant, sent in plain HTTP | med | med | What [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md) leaves open on purpose: it revokes every peer or none, whoever can read the wire can replay it, and handing it to the next device is a person typing it. The answers are per-device tokens with a revocation list, a TLS option for a network the owner does not control, and an invite flow - none of which is built. Until then the honest statement is that the token is a Wi-Fi password, and the owner has to control the network | Eng |
 
 ## UX and operations
 

@@ -406,6 +406,14 @@ pub const Model = struct {
         "login_legacy_hash",
         "salt_buf",
         "salt_len",
+        // The pairing token is a device's secret rather than a person's.
+        // It is listed because the raw buffer and its length are not for
+        // markup; the Settings card reads `pairing_token_text`, and it is
+        // meant to - the way a second till learns the token is by somebody
+        // reading it out to it. A person's credential stays unreadable.
+        "pairing_buf",
+        "pairing_len",
+        "pairing_entry",
         // A credential is the one value the view must never be able to
         // read whole. Every field here is either the secret itself or
         // the choice that decides how the secret is typed; the view
@@ -425,6 +433,7 @@ pub const Model = struct {
         "net_bound",
         "net_requests",
         "net_dropped",
+        "net_refused",
         "peer_status",
         "peer_outcome",
         "peer_body_buf",
@@ -548,6 +557,10 @@ pub const Model = struct {
     /// poll fallback had to cover.
     net_events: u32 = 0,
     net_stream_drops: u32 = 0,
+    /// Requests turned away because the peer did not present this device's
+    /// pairing token. The number is the operator's only sign that a till
+    /// was configured with the wrong token, or with none.
+    net_refused: u32 = 0,
     /// The reference snapshot the admin publishes, and the version the
     /// peer last applied. A peer keeps its rows when the admin is away.
     reference_version: u64 = 0,
@@ -890,6 +903,20 @@ pub const Model = struct {
     /// retry of their own.
     device_token_buf: [auth.token_len]u8 = undefined,
     device_token_len: usize = 0,
+    /// The pairing token: what a peer presents to say it belongs to this
+    /// restaurant, and what this device presents to say the same of
+    /// itself. Unlike the name above, this one is a secret - but it is a
+    /// device's secret rather than a person's, and it has to be legible on
+    /// screen, because the way a second till gets it is by somebody reading
+    /// it out to it. It buys a place on the wire and nothing else: the wire
+    /// is still plaintext, and ADR-0023 says so in as many words.
+    pairing_buf: [protocol.max_token_bytes]u8 = undefined,
+    pairing_len: usize = 0,
+    /// What the operator is typing as a new token, before it is saved. A
+    /// rotation cannot be a random draw, because `update` has no `Io` and
+    /// therefore no randomness - so revoking a token that got out is a
+    /// person typing another one, and the field is where they type it.
+    pairing_entry: canvas.TextBuffer(protocol.max_token_bytes) = .{},
     /// The order id of the sale the cart is waiting to become. Zero
     /// until the cart is submitted; after that it belongs to the sale
     /// until the sale lands, so a retry is the same sale and not a
@@ -2399,6 +2426,37 @@ pub const Model = struct {
     /// first version chose, which named the only thing it salted.
     pub fn salt(model: *const Model) []const u8 {
         return model.salt_buf[0..model.salt_len];
+    }
+
+    /// The pairing token this device presents, and checks a peer against.
+    /// Empty until somebody has paired the device: an empty token asks for
+    /// nothing and gets the refusal.
+    pub fn pairing(model: *const Model) []const u8 {
+        return model.pairing_buf[0..model.pairing_len];
+    }
+
+    /// The same bytes, spelled for the operator who has to read them out to
+    /// the next device. This is the one secret on the screen on purpose.
+    pub fn pairing_token_text(model: *const Model) []const u8 {
+        return model.pairing();
+    }
+
+    /// The token being typed, before it is saved.
+    pub fn pairing_entry_text(model: *const Model) []const u8 {
+        return model.pairing_entry.text();
+    }
+
+    /// True when the Save button would only save nothing. The field is
+    /// trimmed the way every other name field is: a token of spaces is not
+    /// a token, and pressing Save on one teaches the operator the wrong
+    /// thing about what just happened to their peers.
+    pub fn pairing_incomplete(model: *const Model) bool {
+        return std.mem.trim(u8, model.pairing_entry.text(), " ").len == 0;
+    }
+
+    /// How many requests have been turned away for want of the token.
+    pub fn refused_count(model: *const Model) u32 {
+        return model.net_refused;
     }
 
     /// The name of the person the sign-in screen is asking about.

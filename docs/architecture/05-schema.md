@@ -46,7 +46,7 @@ The SQL file is authoritative for columns. This table is the map.
 | `company` | The one company: name, currency, tax-inclusive flag, address/contact/tax number, brand colour | Read/write |
 | `currency` | Supported currencies with symbol and minor-unit count | No |
 | `employee` | Staff; `role` 0–3; `pin_hash` the credential's bcrypt hash (0001 wrote "salted SHA-256"; see the append-only rule above) | Login read |
-| `app_config` | Key/value settings: the credential salt (the key is still `pin_salt`), this device's palette and contrast, schema version, device role, shift | Read/write (salt, look) |
+| `app_config` | Key/value settings: the credential salt (the key is still `pin_salt`), this device's palette and contrast, the restaurant's pairing token, schema version, device role, shift | Read/write (salt, look, pairing) |
 
 ### 0002 — Catalog (7 tables)
 

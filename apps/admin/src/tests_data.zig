@@ -5986,14 +5986,20 @@ test "a compacted log keeps a tail and a late joiner applies the snapshot" {
 
     // The server side: a page of the snapshot, and a page of the
     // retained ops. Both go through the request path the net thread
-    // uses, so the endpoint routing and the async answer are covered.
+    // uses, so the endpoint routing and the async answer are covered -
+    // and both are for a peer that can say the restaurant's token.
+    const pairing = "restaurant-one";
+    @memcpy(a.model.pairing_buf[0..pairing.len], pairing);
+    a.model.pairing_len = pairing.len;
+    bridge.sharePairing(&a.model);
+
     var answer_buffer: [32 * 1024]u8 = undefined;
     _ = bridge.takeAnswer(3, &answer_buffer);
 
     main.update(&a.model, .{ .net = .{
         .key = 2,
         .kind = .data,
-        .bytes = "CONN 3\nGET /v1/snapshot?after=0 HTTP/1.1\n\n",
+        .bytes = "CONN 3\nGET /v1/snapshot?after=0 HTTP/1.1\nx-ros-token: restaurant-one\n\n",
     } }, a.fx);
     a.drain();
     const snapshot_answer_len = bridge.takeAnswer(3, &answer_buffer) orelse return error.NoAnswer;
@@ -6013,7 +6019,7 @@ test "a compacted log keeps a tail and a late joiner applies the snapshot" {
     main.update(&a.model, .{ .net = .{
         .key = 2,
         .kind = .data,
-        .bytes = "CONN 4\nGET /v1/ops?since=dev-a:2 HTTP/1.1\n\n",
+        .bytes = "CONN 4\nGET /v1/ops?since=dev-a:2 HTTP/1.1\nx-ros-token: restaurant-one\n\n",
     } }, a.fx);
     const refused_len = bridge.takeAnswer(4, &answer_buffer) orelse return error.NoAnswer;
     const refused = answer_buffer[0..refused_len];
@@ -6026,7 +6032,7 @@ test "a compacted log keeps a tail and a late joiner applies the snapshot" {
     main.update(&a.model, .{ .net = .{
         .key = 2,
         .kind = .data,
-        .bytes = "CONN 3\nGET /v1/ops?since=dev-a:3 HTTP/1.1\n\n",
+        .bytes = "CONN 3\nGET /v1/ops?since=dev-a:3 HTTP/1.1\nx-ros-token: restaurant-one\n\n",
     } }, a.fx);
     a.drain();
     const ops_answer_len = bridge.takeAnswer(3, &answer_buffer) orelse return error.NoAnswer;

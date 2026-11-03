@@ -197,7 +197,9 @@ raw TCP.**
   device ships: a protocol that three apps and two app versions must
   agree on is not something to change in flight.
 - Decide peer authentication. A trusted LAN is the default and an
-  explicit decision, not an omission.
+  explicit decision, not an omission. **Decided by
+  [ADR-0023](0023-a-peer-presents-a-shared-device-token.md): a shared
+  device token, presented on every request for the restaurant's data.**
 - Decide whether the admin app is the preferred bootstrap peer and the
   reference-data seed, or whether any peer may serve either.
 - Decide how a device that has been offline for a week reconciles.

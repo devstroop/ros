@@ -2263,6 +2263,10 @@ test "a request from the net thread is answered with the peer card" {
     const len = net_bridge.takeAnswer(1, &answer) orelse return error.NoAnswer;
     const text = answer[0..len];
     try testing.expect(std.mem.indexOf(u8, text, "200 OK") != null);
+    // The card answers with no pairing token on the request. It is how a
+    // device is *seen* on the Control centre before it is trusted, and
+    // everything that actually carries the restaurant is gated - see the
+    // pairing test below.
     try testing.expect(std.mem.indexOf(u8, text, "\"proto\":\"ros/1\"") != null);
     try testing.expect(std.mem.indexOf(u8, text, "\"device\":\"0123456789abcdef\"") != null);
     try testing.expect(std.mem.indexOf(u8, text, "\"role\":\"admin\"") != null);
@@ -2277,6 +2281,173 @@ test "a request from the net thread is answered with the peer card" {
     } }, &fx);
     const not_found_len = net_bridge.takeAnswer(2, &answer) orelse return error.NoAnswer;
     try testing.expect(std.mem.indexOf(u8, answer[0..not_found_len], "404 Not Found") != null);
+}
+
+// The reference document holds every employee's credential hash and the
+// op log holds every order, so the answer to those three paths is the
+// restaurant. A peer that cannot say the shared token gets the refusal
+// and not one byte of either - and the refusal is the whole answer, so
+// a device configured wrong is visible rather than silently ignored.
+test "restaurant data is answered only to a paired peer" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    const pairing = "restaurant-one";
+    @memcpy(model.pairing_buf[0..pairing.len], pairing);
+    model.pairing_len = pairing.len;
+    net_bridge.sharePairing(&model);
+
+    var answer: [1024]u8 = undefined;
+
+    main.update(&model, .{ .net = .{
+        .key = 2,
+        .kind = .data,
+        .bytes = "CONN 1\nGET /v1/reference HTTP/1.1\n\n",
+    } }, &fx);
+    const unpaired_len = net_bridge.takeAnswer(1, &answer) orelse return error.NoAnswer;
+    const unpaired = answer[0..unpaired_len];
+    try testing.expect(std.mem.indexOf(u8, unpaired, "401 Unauthorized") != null);
+    try testing.expect(std.mem.indexOf(u8, unpaired, "pairing token required") != null);
+    // The refusal is counted, and the count is the operator's only sign.
+    const refused = model.refused_count();
+    try testing.expect(refused > 0);
+
+    // Somebody else's token is not a token for this restaurant.
+    main.update(&model, .{ .net = .{
+        .key = 2,
+        .kind = .data,
+        .bytes = "CONN 2\nGET /v1/reference HTTP/1.1\nx-ros-token: restaurant-two\n\n",
+    } }, &fx);
+    const wrong_len = net_bridge.takeAnswer(2, &answer) orelse return error.NoAnswer;
+    try testing.expect(std.mem.indexOf(u8, answer[0..wrong_len], "401 Unauthorized") != null);
+    // Nothing of the restaurant travelled with the refusal.
+    try testing.expect(std.mem.indexOf(u8, answer[0..wrong_len], "\"entity_table\"") == null);
+    try testing.expectEqual(refused + 1, model.refused_count());
+
+    // The right token, and the answer is the restaurant's. This device
+    // holds no reference document yet, so the honest answer is 204 -
+    // the point is that it is not the refusal.
+    main.update(&model, .{ .net = .{
+        .key = 2,
+        .kind = .data,
+        .bytes = "CONN 3\nGET /v1/reference HTTP/1.1\nx-ros-token: restaurant-one\n\n",
+    } }, &fx);
+    const paired_len = net_bridge.takeAnswer(3, &answer) orelse return error.NoAnswer;
+    try testing.expect(std.mem.indexOf(u8, answer[0..paired_len], "204 No Content") != null);
+    // The paired answer is not a refusal: the count did not move again.
+    try testing.expectEqual(refused + 1, model.refused_count());
+}
+
+// The gate is only as good as the request that carries the token, so
+// every pull the app makes - the log, the held-open stream, and the
+// snapshot a compacted peer sends it to - says who it is.
+test "every request for restaurant data carries the pairing token" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    const pairing = "0123456789abcdef";
+    @memcpy(model.pairing_buf[0..pairing.len], pairing);
+    model.pairing_len = pairing.len;
+    withPeer(&model);
+    net_bridge.poll(&model, &fx);
+
+    // The poll is the log, the stream is the fast path: both of them.
+    try testing.expectEqual(@as(usize, 2), fx.pendingFetchCount());
+    for (0..fx.pendingFetchCount()) |index| {
+        const request = fx.pendingFetchAt(index).?;
+        const presented = tokenHeaderOf(request.headers) orelse return error.NoToken;
+        try testing.expectEqualStrings(pairing, presented);
+    }
+
+    // A peer that compacted past the cursor sends this device to the
+    // snapshot, and that answer is the restaurant's data as much as the
+    // log is.
+    try fx.feedResponse(
+        net_bridge.sync_fetch_key_base,
+        409,
+        "{\"error\":\"snapshot required\",\"snapshot\":\"/v1/snapshot\"}\n",
+    );
+    drainFx(&fx, &model);
+    var found_snapshot = false;
+    for (0..fx.pendingFetchCount()) |index| {
+        const request = fx.pendingFetchAt(index).?;
+        if (request.key != net_bridge.snapshot_fetch_key_base) continue;
+        found_snapshot = true;
+        const presented = tokenHeaderOf(request.headers) orelse return error.NoToken;
+        try testing.expectEqualStrings(pairing, presented);
+    }
+    try testing.expect(found_snapshot);
+}
+
+// A device that has nothing to present sends no header at all rather
+// than an empty one: a blank token is not a secret, and a request that
+// carries one is a refusal waiting to be counted on the other side.
+test "a device with no token asks without one" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    try testing.expectEqual(@as(usize, 0), model.pairing().len);
+    withPeer(&model);
+    net_bridge.poll(&model, &fx);
+
+    try testing.expect(fx.pendingFetchCount() > 0);
+    for (0..fx.pendingFetchCount()) |index| {
+        const request = fx.pendingFetchAt(index).?;
+        try testing.expectEqual(@as(usize, 0), request.headers.len);
+    }
+}
+
+// A token is rotated by typing it, so the new value has to reach the
+// thread that answers the event stream by itself as well as the app,
+// and the old one has to stop opening the door.
+test "a rotated token opens the door it just closed" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+
+    main.update(&model, .{ .pairing_edit = .{ .insert_text = "second-restaurant" } }, &fx);
+    try testing.expect(!model.pairing_incomplete());
+    main.update(&model, .save_pairing, &fx);
+
+    // The model wears it, the thread was told, and the field is empty
+    // again for the next rotation.
+    try testing.expectEqualStrings("second-restaurant", model.pairing());
+    try testing.expectEqual(@as(usize, 0), model.pairing_entry_text().len);
+
+    var answer: [1024]u8 = undefined;
+    main.update(&model, .{ .net = .{
+        .key = 2,
+        .kind = .data,
+        .bytes = "CONN 1\nGET /v1/reference HTTP/1.1\nx-ros-token: second-restaurant\n\n",
+    } }, &fx);
+    const len = net_bridge.takeAnswer(1, &answer) orelse return error.NoAnswer;
+    try testing.expect(std.mem.indexOf(u8, answer[0..len], "401") == null);
+
+    // The token the device had before the rotation is now somebody
+    // else's, and a peer still offering it is turned away - once, and
+    // counted once.
+    main.update(&model, .{ .net = .{
+        .key = 2,
+        .kind = .data,
+        .bytes = "CONN 2\nGET /v1/reference HTTP/1.1\nx-ros-token: restaurant-one\n\n",
+    } }, &fx);
+    const stale_len = net_bridge.takeAnswer(2, &answer) orelse return error.NoAnswer;
+    try testing.expect(std.mem.indexOf(u8, answer[0..stale_len], "401 Unauthorized") != null);
+    const refused = model.refused_count();
+    try testing.expect(refused > 0);
+
+    main.update(&model, .{ .net = .{
+        .key = 2,
+        .kind = .data,
+        .bytes = "CONN 3\nGET /v1/reference HTTP/1.1\nx-ros-token: restaurant-one\n\n",
+    } }, &fx);
+    const again_len = net_bridge.takeAnswer(3, &answer) orelse return error.NoAnswer;
+    try testing.expect(std.mem.indexOf(u8, answer[0..again_len], "401 Unauthorized") != null);
+    try testing.expectEqual(refused + 1, model.refused_count());
 }
 
 test "a peer's answer arrives as a message and is recorded" {
@@ -2321,6 +2492,14 @@ fn withPeer(model: *Model) void {
         .tcp = 45871,
         .app_version = "0.1.0",
     }, 0);
+}
+
+/// The header a recorded fetch carries, if it carries one.
+fn tokenHeaderOf(headers: []const std.http.Header) ?[]const u8 {
+    for (headers) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "x-ros-token")) return header.value;
+    }
+    return null;
 }
 
 test "a peer gets an event stream, and a line pulls that peer's ops" {
@@ -2510,6 +2689,10 @@ test "the SDK's real stream fetch reads the held-open NDJSON server" {
     const io = std.testing.io;
     var shared: server.Shared = .{};
     shared.app_ready.store(true, .release);
+    // The stream is gated in the thread, before this app is asked
+    // anything, so the token has to be on the request the SDK makes.
+    const pairing = "0123456789abcdef";
+    shared.pairing.set(pairing);
 
     const thread = try std.Thread.spawn(.{}, server.run, .{
         io,
@@ -2536,9 +2719,11 @@ test "the SDK's real stream fetch reads the held-open NDJSON server" {
     var url_buffer: [client.max_url_bytes]u8 = undefined;
     const url = try client.formatEvents(&url_buffer, "127.0.0.1", shared.port.load(.acquire));
     const fetch_key: u64 = 9500;
+    const token_header = std.http.Header{ .name = "x-ros-token", .value = pairing };
     fx.fetch(.{
         .key = fetch_key,
         .url = url,
+        .headers = &.{token_header},
         .timeout_ms = 10_000,
         .response = .stream,
         .on_line = Effects.lineMsg(.net_event),

@@ -36,6 +36,19 @@ pub const endpoints = struct {
     pub const events = "/v1/events";
 };
 
+/// The header a peer presents its pairing token in, and the longest token
+/// the wire will carry.
+///
+/// The token says *which restaurant* a request belongs to, not which
+/// person: it buys membership on the wire and nothing more, which is the
+/// whole of what `docs/decisions/0023-a-peer-presents-a-shared-device-token.md`
+/// claims and the whole of what it refuses to claim. A plain header rather
+/// than `Authorization: Bearer`, because the server reads its own headers
+/// and the SDK copies whatever it is handed - there is no scheme to
+/// negotiate over plaintext HTTP.
+pub const token_header = "x-ros-token";
+pub const max_token_bytes = 64;
+
 /// The device roles, spelled the way `device.role` stores them.
 ///
 /// This is deliberately not `core.navigation.Role`: the wire describes

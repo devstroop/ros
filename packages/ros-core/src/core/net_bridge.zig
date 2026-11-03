@@ -17,6 +17,14 @@
 //! | `POST /v1/ops` | decoded, validated, and applied |
 //! | anything else | 404 |
 //!
+//! Three of those carry the restaurant - the reference document holds the
+//! staff's credential hashes, the op log holds the orders, and the snapshot
+//! holds both - so all three answer only a peer that presents this
+//! device's pairing token. `/v1/hello` answers anyone: it is how a device
+//! is *seen* before it is trusted, and it carries no restaurant data. The
+//! held-open `/v1/events` is gated in `net/server.zig`, because that one
+//! request never reaches this file. See ADR-0023.
+//!
 //! The device id is the installation token for now. It is stable for the
 //! life of the process, which is enough to prove the seam; 9.3 replaces
 //! it with the `device` row, which is stable across restarts.
@@ -35,6 +43,7 @@ const server = @import("../net/server.zig");
 const discovery = @import("../net/discovery.zig");
 const client = @import("../net/client.zig");
 const repos = @import("../data/repos.zig");
+const auth = @import("../data/auth.zig");
 
 const Model = model_mod.Model;
 const Msg = msg_mod.Msg;
@@ -85,14 +94,41 @@ pub fn open(fx: *Effects) void {
     shared.server_state.app_ready.store(true, .release);
 }
 
+/// The pairing token this installation starts with.
+///
+/// `main` is the one place with randomness, so the made token is the
+/// fallback and an operator's choice beats it: `ROS_NET_TOKEN` is how a
+/// provisioned device is handed the restaurant's token before it has
+/// anything to read. Neither is the last word - the stored value wins
+/// when `boot` reads it back, because a fresh installation writes what
+/// it was given and every later one keeps what it finds.
+pub fn seedPairing(model: *Model, io: std.Io, given: ?[]const u8) void {
+    var made: [auth.token_len]u8 = undefined;
+    auth.makeToken(io, &made);
+    var token: []const u8 = &made;
+    if (given) |text| {
+        const trimmed = std.mem.trim(u8, text, " \t");
+        if (trimmed.len != 0) token = trimmed;
+    }
+    const len = @min(token.len, model.pairing_buf.len);
+    @memcpy(model.pairing_buf[0..len], token[0..len]);
+    model.pairing_len = len;
+}
+
 /// Start the listener, the beacon sender and the beacon receiver.
 /// `main` calls this: it is the one place with an `Io`.
+///
+/// The pairing token goes to the thread at the same moment, because a
+/// request can arrive before `boot` has read the database. A device whose
+/// token is coming later - from the database, a beat after this - passes
+/// an empty slice here, and `sharePairing` hands it over when it lands.
 pub fn start(
     io: std.Io,
     bind_host: []const u8,
     port: u16,
     device: []const u8,
     role: protocol.DeviceRole,
+    pairing: []const u8,
 ) !Threads {
     const len = @min(bind_host.len, shared.bind_host.len);
     @memcpy(shared.bind_host[0..len], bind_host[0..len]);
@@ -102,6 +138,7 @@ pub fn start(
     @memcpy(shared.device[0..device_len], device[0..device_len]);
     shared.device_len = device_len;
     shared.role = role;
+    shared.server_state.pairing.set(pairing);
 
     const listener = try std.Thread.spawn(.{}, server.run, .{
         io,
@@ -118,6 +155,28 @@ pub fn start(
         .beacon = std.Thread.spawn(.{}, beaconLoop, .{io}) catch null,
         .receiver = std.Thread.spawn(.{}, receiverLoop, .{io}) catch null,
     };
+}
+
+/// Hand the token the app just read to the thread that answers the event
+/// stream by itself. Called from `update` whenever the value changes.
+pub fn sharePairing(model: *const Model) void {
+    shared.server_state.pairing.set(model.pairing());
+}
+
+/// The one header a request for restaurant data carries: this device's
+/// pairing token.
+///
+/// A device with no token sends no header and takes the refusal, which is
+/// counted rather than hidden. `FetchOptions` copies names and values at
+/// call time, so the slot can be reused by the next fetch in the same
+/// pass - and every fetch is built here, on the loop thread.
+var pairing_slot: [1]std.http.Header = undefined;
+
+fn pairingHeaders(model: *const Model) []const std.http.Header {
+    const token = model.pairing();
+    if (token.len == 0) return &.{};
+    pairing_slot = .{.{ .name = protocol.token_header, .value = token }};
+    return &pairing_slot;
 }
 
 /// Stop the listener and the beacon threads, and wake the listener out
@@ -260,6 +319,7 @@ fn pollPeer(
     fx.fetch(.{
         .key = peer.sync_key,
         .url = url,
+        .headers = pairingHeaders(model),
         .timeout_ms = 2_000,
         .on_response = Effects.responseMsg(.peer),
     });
@@ -278,6 +338,7 @@ fn pollPeer(
         fx.fetch(.{
             .key = reference_fetch_key_base + index,
             .url = reference_url,
+            .headers = pairingHeaders(model),
             .timeout_ms = 5_000,
             .on_response = Effects.responseMsg(.reference),
         });
@@ -306,6 +367,7 @@ fn openEventStreams(model: *Model, fx: *Effects) void {
         fx.fetch(.{
             .key = key,
             .url = url,
+            .headers = pairingHeaders(model),
             .timeout_ms = event_stream_timeout_ms,
             .response = .stream,
             .on_line = Effects.lineMsg(.net_event),
@@ -470,6 +532,7 @@ fn requestSnapshot(model: *Model, fx: *Effects, peer: *model_mod.Peer) void {
     fx.fetch(.{
         .key = peer.snapshot_key,
         .url = url,
+        .headers = pairingHeaders(model),
         .timeout_ms = 5_000,
         .on_response = Effects.responseMsg(.snapshot),
     });
@@ -676,9 +739,34 @@ fn respond(conn: u32, status: u16, reason: []const u8, content_type: []const u8,
 
 // --------------------------------------------------------------- answers
 
+/// The endpoints whose answer *is* restaurant data, and whose answer is
+/// therefore for a paired peer and nobody else.
+///
+/// `/v1/hello` is deliberately not one of them: it is how a device gets
+/// *seen* on the Control centre before it is trusted, and the card it
+/// carries is this device's own name, role and port. A path this build
+/// does not serve is a 404, which names nothing.
+fn dataEndpoint(path: []const u8) bool {
+    return std.mem.eql(u8, path, protocol.endpoints.reference) or
+        std.mem.eql(u8, path, protocol.endpoints.ops) or
+        std.mem.eql(u8, path, protocol.endpoints.snapshot);
+}
+
 fn answer(model: *Model, fx: *Effects, conn: u32, bytes: []const u8) void {
     const split = server.splitBody(bytes);
     const request = server.Request.parse(split.head) orelse return;
+
+    // The reference document carries every employee's credential hash,
+    // the op log carries every order, and the snapshot carries both. An
+    // unpaired peer gets the refusal and no bytes of either. The count is
+    // kept because an operator's only sign that a device was configured
+    // wrong is that requests were turned away.
+    if (dataEndpoint(request.path) and !shared.server_state.pairing.accepts(split.head)) {
+        _ = shared.server_state.refused.fetchAdd(1, .monotonic);
+        model.net_refused = shared.server_state.refused.load(.monotonic);
+        respond(conn, 401, "Unauthorized", "application/json", "{\"error\":\"pairing token required\"}\n");
+        return;
+    }
 
     // The body must leave room for the response head inside one frame.
     var body: [server.max_frame_bytes - 256]u8 = undefined;

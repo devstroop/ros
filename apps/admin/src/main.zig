@@ -123,6 +123,15 @@ pub fn main(init: std.process.Init) !void {
     auth.makeToken(init.io, &app_state.model.device_token_buf);
     app_state.model.device_token_len = app_state.model.device_token_buf.len;
 
+    // The pairing token every device of this restaurant shares. Made
+    // here because it needs randomness, and `ROS_NET_TOKEN` beats it for
+    // a device that is provisioned before it has a database to read.
+    net_bridge.seedPairing(
+        &app_state.model,
+        init.io,
+        init.environ_map.get("ROS_NET_TOKEN"),
+    );
+
     // The wire. `main` is the one place with an `Io`, so the listener
     // thread starts here; its channel is opened by `boot`, on the loop
     // thread, and the thread waits for that before it posts.
@@ -140,6 +149,7 @@ pub fn main(init: std.process.Init) !void {
         bind_port,
         app_state.model.device_token_buf[0..app_state.model.device_token_len],
         net_bridge.deviceRole(&app_state.model),
+        app_state.model.pairing(),
     );
     defer {
         net_bridge.stop(init.io);

@@ -429,6 +429,35 @@
       </card>
     </if>
 
+    <text size="lg">Pairing</text>
+    <card padding="16" width="480">
+      <column gap="8">
+        <text foreground="text_muted">One token per restaurant. Every till, pad and kitchen display on the network presents it, and a device that cannot is turned away - it is the difference between a shared floor plan and a stranger reading the day's takings.</text>
+        <row gap="6" cross="center">
+          <text size="sm" foreground="text_muted">This device presents</text>
+          <badge>{pairing_token_text}</badge>
+        </row>
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Rotate</text>
+          <text-field
+            text="{pairing_entry_text}"
+            placeholder="Type a new token, then set it on every device"
+            label="New pairing token"
+            on-input="pairing_edit"
+          />
+        </column>
+        <button
+          variant="primary"
+          size="sm"
+          disabled="{pairing_incomplete}"
+          on-press="save_pairing"
+        >Save token</button>
+        <if test="{refused_count > 0}">
+          <text foreground="warning_text">{refused_count} requests turned away for want of this token</text>
+        </if>
+      </column>
+    </card>
+
     <text size="lg">Sync</text>
     <if test="{sync_state_count == 0}">
       <column background="surface" radius="md" padding="16">

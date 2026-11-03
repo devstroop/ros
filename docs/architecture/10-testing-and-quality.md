@@ -1,13 +1,13 @@
 # Testing and quality
 
 > **Status:** Healthy — `scripts/verify-all.sh` is green: admin
-> **213/213** (67 handwritten rules, 145 against a migrated database, and
+> **217/217** (71 handwritten rules, 145 against a migrated database, and
 > one test block that imports both), service **10/10**, kiosk **8/8**,
-> `ros-core` **43/43**, net-spike **13/13**. CI adds a headless paint
+> `ros-core` **46/46**, net-spike **13/13**. CI adds a headless paint
 > check per app and the sale walkthrough. Still uncovered: the clock
 > tick's own arithmetic, a salt race between two first boots, resizes
 > below the minimum, and the Flutter interop.
-> **Last verified:** 2026-10-31, by running `scripts/verify-all.sh` on
+> **Last verified:** 2026-11-03, by running `scripts/verify-all.sh` on
 > Linux.
 > **Source:** `apps/*/src/tests*.zig`, `packages/ros-core/src`,
 > `scripts/verify-all.sh`, `scripts/smoke-sale.sh`,
@@ -31,7 +31,7 @@ A rule that lives only in a comment is a rule that breaks. The tests in
 
 ## Current tests
 
-`native test apps/admin` reports **213** for the admin target - 67 in
+`native test apps/admin` reports **217** for the admin target - 71 in
 `tests.zig`, 145 in `tests_data.zig`, one generated - and the service and
 kiosk targets add 10 and 8 of their own. The table below is the subset
 this page names, not the whole list.

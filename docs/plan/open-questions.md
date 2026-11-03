@@ -1,7 +1,7 @@
 # Open questions
 
 > **Status:** Living document. Expected to grow.
-> **Last reviewed:** 2026-10-24.
+> **Last reviewed:** 2026-11-03.
 > **Related:** [`risks.md`](risks.md), [`status.md`](status.md).
 
 This page exists because the most expensive mistakes in a rewrite are the
@@ -118,7 +118,7 @@ date before that phase starts.
 | D10 | What happens after a restore from backup with an old clock? | Correctness | Design + test | Eng | Open |
 | D11 | How does a new device bootstrap: full snapshot or replay? | Time to join, data size | Design | Eng | Answered - [ADR-0020](../decisions/0020-late-join-and-compaction.md), [#111](https://github.com/devstroop/ros/issues/111): durable replay above the floor, snapshot when the cursor does not cover it |
 | D12 | Are there regulatory constraints on LAN traffic? | Security | Legal/IT review | Product | Open |
-| D13 | Are peers authenticated, and with what? | A trusted LAN means any device on the wire is a device in the restaurant. A shared secret in the handshake is the smallest answer that is not nothing. | Design | Eng | Open |
+| D13 | Are peers authenticated, and with what? | A trusted LAN meant any device on the wire was a device in the restaurant. A shared secret in the handshake was the smallest answer that is not nothing. | Design | Eng | Decided - [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md), [#134](https://github.com/devstroop/ros/issues/134): one device token per installation, presented in the `x-ros-token` header of every request that carries the restaurant's data, stored in `app_config`, rotatable on the admin's Control centre. Not a handshake, and not per-device: revocation is rotate-everywhere, and the wire is still plain HTTP |
 | D14 | Which app owns which entity, formally? | The ownership table in `architecture/12` is a proposal. Moving an entity between owners later is a protocol change. | Design review | Eng | Open |
 | D15 | How are ops compacted into a snapshot, and when? | The log grows without bound and a device that joins late replays it. | Design + load test | Eng | Answered - [ADR-0020](../decisions/0020-late-join-and-compaction.md), [#111](https://github.com/devstroop/ros/issues/111): synthetic ops in `sync_snapshot_op`, header clocks adopted after the last page |
 | D16 | What happens to the ops of a device that is removed from the restaurant? | The history of a sale outlives the till that took it | Product decision | Product | Open |
