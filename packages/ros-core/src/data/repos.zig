@@ -2003,12 +2003,14 @@ pub fn openOrderForTable(
         // Unconditional on purpose. The order insert above either
         // lands or aborts the transaction, so there is no write that
         // matched nothing for the op to outlive. A counter sale never
-        // reaches this function - it goes through `placeOrder` - and
-        // the writer connection enforces foreign keys, which
-        // `orders.dining_table_id` has on `dining_table`, so a table
-        // that is not on the floor plan aborts the batch at the insert.
-        // The table update just above this op therefore always has a
-        // row to match when it runs.
+        // reaches this function: `placeOrder` writes it through
+        // `saveOrder` below, which binds a `dining_table_id` of zero as
+        // NULL through `idParam`, and NULL has no reference to enforce.
+        // This insert binds the table id raw, and the writer connection
+        // enforces foreign keys, which `orders.dining_table_id` has on
+        // `dining_table` - so a table that is not on the floor plan
+        // aborts the batch at the insert, and the table update just
+        // above this op always has a row to match when it runs.
         statements[count] = .{ .sql = insert_op_log_sql, .params = &order_op.params };
         count += 1;
         statements[count] = .{ .sql = save_clock_sql, .params = &order_op.clock_params };
