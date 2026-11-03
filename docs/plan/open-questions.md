@@ -58,7 +58,7 @@ date before that phase starts.
 | A16 | Does a restaurant expect multi-company? | The schema enforces one | v1 usage + sales input | Product | Open |
 | A17 | What are the error messages an operator can act on? | Error copy is currently technical | Shadowing + support tickets | Design | Open |
 | A18 | Which reports does an owner actually open? | Report scope and queries | Usage data + interviews | Product | Open |
-| A19 | What is the day boundary and timezone for reporting? | Epoch-ms is UTC; reports are local | Accountant + product | Product | Open |
+| A19 | What is the day boundary and timezone for reporting? | Epoch-ms is UTC; reports are local | Accountant + product | Product | Open - unresolved by [ADR-0025](../decisions/0025-a-days-report-counts-bills-and-money.md), which left both windows as "since the first millisecond of the day asked" and named the clock on each figure instead. The tickets count on `placed_at`, the drawer on `paid_at`, so a 23:50 ticket settled after midnight is in one and not the other; neither query has an upper bound, so no report can be re-run for a closed day. #157 |
 | A20 | What happens when two waiters edit one table? | Shared model and sync | Interviews + pilot | Product | Open |
 | A21 | Can a customer take the goods and settle later, and who may allow it? | An order now closes only when it is paid for, so "pay later" needs an explicit action | Interviews + product | Product | Open |
 | A24 | Does the kiosk app run one board or both? | A single `kiosk` binary serves the kitchen and the customer display; the device chooses at install. A restaurant wanting both on one screen is a different requirement. | Store visit | Product | Open |

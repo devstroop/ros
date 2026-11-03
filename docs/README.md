@@ -119,7 +119,8 @@ template. The short version:
   (ADR-0018), cross-device order identity (ADR-0019), late join and
   compaction (ADR-0020), the counter POS is the service app (ADR-0021),
   a person chooses how they sign in (ADR-0022), a peer presents a shared
-  device token (ADR-0023), a ticket closes with its money (ADR-0024).
+  device token (ADR-0023), a ticket closes with its money (ADR-0024), a
+  day's report counts bills and money as two figures (ADR-0025).
 - Superseded: one binary with four roles (ADR-0004, by ADR-0017);
   clock-based order IDs (ADR-0013, by ADR-0014); salted SHA-256 PIN
   hashing (ADR-0007, by ADR-0016); ADR-0016's installation-wide salt

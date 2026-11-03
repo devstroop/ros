@@ -35,6 +35,7 @@ This project follows a lightweight MADR-style format.
 | [0022](0022-a-person-chooses-how-they-sign-in.md) | A person chooses how they sign in | Accepted |
 | [0023](0023-a-peer-presents-a-shared-device-token.md) | A peer presents a shared device token | Accepted |
 | [0024](0024-a-ticket-closes-with-its-money.md) | A ticket closes with its money | Accepted |
+| [0025](0025-a-days-report-counts-bills-and-money.md) | A day's report counts the bills and the money as two figures | Accepted |
 
 ADR-0017 was accepted on 2026-10-24. It supersedes ADR-0004 (four
 roles in one binary) and revises ADR-0009 (the op-log sidecar); the op
@@ -58,6 +59,12 @@ status - both the local one and the one that applies a peer's op - and
 reopens the tickets that closed unpaid before the rule was anywhere but
 in `update`. It supersedes no earlier record; it makes an assumption all
 of them shared enforceable.
+
+ADR-0025 was accepted on 2026-11-04. It splits the day's report into what
+the tickets came to and what was taken for them, counted over one set of
+rows by one query, and retires the word that covered both. It leaves the
+drawer's breakdown on its own clock and says so on the screen; the day
+itself, and where it ends, stays with A19 and #157.
 
 ## Drafts
 

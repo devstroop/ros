@@ -296,7 +296,7 @@ rewrite yesterday's bill.
 | `order_line_modifier` | The frozen modifier choice on a line | `id`, `order_line_id` → `order_line` (CASCADE), `modifier_id`, `modifier_name`, `price_delta_minor` |
 | `order_discount` | A discount applied to an order | `id`, `order_id` → `orders` (CASCADE), `discount_id`, `name`, `amount_minor` |
 | `order_status_history` | The lifecycle ledger, written in the same transaction as the status change | `id`, `order_id` → `orders` (CASCADE), `status` (0–5), `changed_at`, `changed_by` |
-| `payment` | One payment against an order; the id is the local order id | `id`, `order_id` → `orders` (CASCADE), `mode` (0–4), `amount_minor`, `reference`, `paid_at` |
+| `payment` | One payment against an order; the id is the local order id, and `payment_one_per_order` makes that a rule rather than a habit - so a ticket's paid figure is at most one row, and the day's taken total is a sum over tickets, not over taps | `id`, `order_id` → `orders` (CASCADE), `mode` (0–4), `amount_minor`, `reference`, `paid_at` |
 | `reservation` | A booking | `id`, `customer_id`, `dining_table_id`, `name`, `phone`, `guests`, `reserved_at`, `status` (0–2), `notes` |
 
 ### 0006 — `inventory.sql` (4 tables)

@@ -238,17 +238,37 @@ pub const pairing_sql =
 /// The day is the calendar day the report was asked for: the caller
 /// passes the first millisecond of it, and the query counts the orders
 /// placed since. A voided order is not money and is not counted.
+///
+/// What the tickets CAME TO and what the restaurant TOOK are two facts,
+/// and only one of them was ever in this row. An open ticket is billed
+/// and unbought, so a single figure that calls itself takings overstates
+/// the drawer by everything still owed. `taken_minor` is the money that
+/// stands against these same tickets, so the difference between the two
+/// columns is the tab the floor has not cleared - and it is scoped by
+/// the ticket's day, not by the moment the cash arrived, which is the
+/// other clock and the other question (#141).
 pub const report_sql =
     \\SELECT COUNT(*) AS order_count,
     \\       COALESCE(SUM(subtotal_minor), 0) AS gross_minor,
     \\       COALESCE(SUM(tax_minor), 0) AS tax_minor,
     \\       COALESCE(SUM(discount_minor), 0) AS discount_minor,
-    \\       COALESCE(SUM(total_minor), 0) AS net_minor
+    \\       COALESCE(SUM(total_minor), 0) AS net_minor,
+    \\       COALESCE(SUM(
+    \\         (SELECT COALESCE(SUM(amount_minor), 0)
+    \\          FROM payment WHERE payment.order_id = orders.id)
+    \\       ), 0) AS taken_minor
     \\FROM orders
     \\WHERE placed_at >= ?1 AND status <> 5;
 ;
 
-/// The day's takings, split by the way they were paid.
+/// The money received today, split by the way it was paid.
+///
+/// This is counted by `paid_at`, not by the day the ticket was opened:
+/// it answers the drawer's question - what came in over this counter
+/// today - and a ticket opened last night and settled this afternoon is
+/// money this drawer holds. It therefore does not add up to the
+/// `taken_minor` above, which follows the ticket's own day. The screen
+/// says which clock each figure is on.
 pub const report_modes_sql =
     \\SELECT mode, COUNT(*) AS n, COALESCE(SUM(amount_minor), 0) AS amount_minor
     \\FROM payment
@@ -1625,6 +1645,7 @@ pub fn decodeReport(model: *Model, bytes: []const u8) void {
     model.report_tax_field = reader.intOf(&values, "tax_minor", 0);
     model.report_discount_field = reader.intOf(&values, "discount_minor", 0);
     model.report_net_field = reader.intOf(&values, "net_minor", 0);
+    model.report_taken_field = reader.intOf(&values, "taken_minor", 0);
 }
 
 /// Decode the day's takings, split by the way they were paid.
