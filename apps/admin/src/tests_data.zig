@@ -895,7 +895,7 @@ test "a payment is taken once" {
 
     // A second tap, from a model that still says the order is open.
     // The customer pays once, whatever the till does.
-    repos.takePayment(&harness.model, harness.fx, repos.key_payment, order.id, domain.OrderStatus.pending, domain.PaymentMode.cash, order.total_minor, 1_700_000_000_000);
+    repos.takePayment(&harness.model, harness.fx, repos.key_payment, order.id, domain.PaymentMode.cash, order.total_minor, 1_700_000_000_000);
     harness.drain();
 
     // And the second tap is not an error: the order was already
@@ -909,6 +909,107 @@ test "a payment is taken once" {
     // And the order closed once: one history row for the close.
     const history = try countRows(&harness, "SELECT COUNT(*) AS n FROM order_status_history WHERE order_id = ?1 AND status = 4;", &.{.{ .integer = order.id }});
     try testing.expectEqual(@as(i64, 1), history);
+}
+
+test "a payment at the old total is refused after a late plate" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+
+    a.model.employee_id = 7;
+    a.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    a.send(.{ .add_to_cart = 1 });
+    a.send(Msg{ .place_order = {} });
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+
+    // The cashier opens the confirmation at 245.00.
+    const stale = a.model.orders[0];
+    try testing.expectEqual(@as(i64, 24500), stale.total_minor);
+
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    b.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    repos.applyOp(&b.model, b.fx, try latestOp(&a, arena));
+    b.drain();
+    repos.loadOrders(&b.model, b.fx);
+    repos.loadOrderLines(&b.model, b.fx);
+    b.drain();
+    const remote = b.model.orders[0];
+
+    // A waiter adds a plate on the second device while the cashier is
+    // looking at the old bill.
+    b.model.employee_id = 7;
+    b.model.active_order_id = remote.id;
+    b.send(.{ .add_to_order = 1 });
+    b.drain();
+    repos.applyOp(&a.model, a.fx, try latestOp(&b, arena));
+    a.drain();
+    try testing.expectEqual(@as(i64, 49000), a.model.orders[0].total_minor);
+
+    // The cashier taps Take on the figure the screen still shows. The
+    // payment must not charge 245.00 for a 490.00 bill.
+    repos.takePayment(
+        &a.model,
+        a.fx,
+        repos.key_payment,
+        stale.id,
+        domain.PaymentMode.cash,
+        stale.total_minor,
+        1_700_000_000_700,
+    );
+    a.drain();
+
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&a, "SELECT COUNT(*) AS n FROM payment;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&a, "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'payment';", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.pending)),
+        try countRows(&a, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = stale.id }}),
+    );
+    // The refusal is visible, and the refreshed bill is on the screen.
+    try testing.expect(a.model.payment_error_text().len > 0);
+    try testing.expectEqual(@as(i64, 49000), a.model.last_order_total());
+
+    // The next tap uses the bill as it stands now and closes the sale.
+    repos.takePayment(
+        &a.model,
+        a.fx,
+        repos.key_payment,
+        stale.id,
+        domain.PaymentMode.cash,
+        a.model.last_order_total(),
+        1_700_000_000_701,
+    );
+    a.drain();
+
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&a, "SELECT COUNT(*) AS n FROM payment;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&a, "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'payment';", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.completed)),
+        try countRows(&a, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = stale.id }}),
+    );
 }
 
 test "an old PIN is rewritten in the modern form the next time it signs in" {
@@ -3937,6 +4038,145 @@ test "cash short of the bill is refused, and the exact amount is taken" {
     );
 }
 
+test "a plate does not land on a paid table" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    const order_id = harness.model.last_order_id;
+
+    harness.send(.{ .set_payment_mode = @intFromEnum(domain.PaymentMode.card) });
+    harness.send(Msg{ .take_payment = {} });
+    try testing.expectEqualStrings("", harness.model.payment_error_text());
+
+    const before_lines = try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM order_line WHERE order_id = ?1;",
+        &.{.{ .integer = order_id }},
+    );
+    const before_total = try countRows(
+        &harness,
+        "SELECT total_minor AS n FROM orders WHERE id = ?1;",
+        &.{.{ .integer = order_id }},
+    );
+    const before_ops = try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'order';",
+        &.{},
+    );
+
+    // The waiter is still holding the menu when the table is paid.
+    harness.model.active_order_id = order_id;
+    harness.send(.{ .add_to_order = 1 });
+    try testing.expectEqualStrings("That table has been paid - start a new order", harness.model.error_text);
+    try testing.expectEqual(before_lines, try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM order_line WHERE order_id = ?1;",
+        &.{.{ .integer = order_id }},
+    ));
+
+    // Even a model that has not heard about the payment cannot plate
+    // the bill: the database refuses the line too.
+    repos.addOrderLine(
+        &harness.model,
+        harness.fx,
+        repos.key_add_line,
+        order_id,
+        1,
+        "Paneer Tikka",
+        24500,
+        1_700_000_000_123,
+    );
+    harness.drain();
+    try testing.expectEqual(before_lines, try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM order_line WHERE order_id = ?1;",
+        &.{.{ .integer = order_id }},
+    ));
+    try testing.expectEqual(before_total, try countRows(
+        &harness,
+        "SELECT total_minor AS n FROM orders WHERE id = ?1;",
+        &.{.{ .integer = order_id }},
+    ));
+    try testing.expectEqual(before_ops, try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'order';",
+        &.{},
+    ));
+}
+
+test "a waiter's plate does not drop a bill's discount" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // A discounted sale lives on the board, and a waiter adds a plate
+    // to it. The discount is on the bill, not on the first plate, so
+    // the new total is the new subtotal plus tax minus the discount.
+    harness.fx.dbExec(.{
+        .key = 958,
+        .statements = &.{
+            .{
+                .sql =
+                \\INSERT INTO orders (id, order_no, order_type, status, dining_table_id,
+                \\  customer_id, employee_id, subtotal_minor, tax_minor, discount_minor,
+                \\  total_minor, placed_at, notes, created_at, updated_at)
+                \\VALUES (500, 'A-500', 0, 0, NULL, NULL, 7, 24500, 0, 1000,
+                \\  23500, 1700000000000, '', 1700000000000, 1700000000000);
+                ,
+                .params = &.{},
+            },
+            .{
+                .sql =
+                \\INSERT INTO order_line (id, order_id, product_id, product_name, qty,
+                \\  unit_price_minor, tax_bps, notes, stock_taken, created_at)
+                \\VALUES (64000, 500, 1, 'Paneer Tikka', 1, 24500, 0, '', 0,
+                \\  1700000000000);
+                ,
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.orders_loaded),
+    });
+    harness.drain();
+    repos.loadOrders(&harness.model, harness.fx);
+    repos.loadOrderLines(&harness.model, harness.fx);
+    harness.drain();
+
+    try testing.expectEqual(@as(i64, 1), try countRows(
+        &harness,
+        "SELECT COUNT(*) AS n FROM order_line WHERE order_id = 500;",
+        &.{},
+    ));
+
+    repos.addOrderLine(
+        &harness.model,
+        harness.fx,
+        repos.key_add_line,
+        500,
+        1,
+        "Paneer Tikka",
+        24500,
+        1_700_000_000_123,
+    );
+    harness.drain();
+
+    try testing.expectEqual(@as(i64, 48000), try countRows(
+        &harness,
+        "SELECT total_minor AS n FROM orders WHERE id = 500;",
+        &.{},
+    ));
+    try testing.expectEqual(@as(i64, 1000), try countRows(
+        &harness,
+        "SELECT discount_minor AS n FROM orders WHERE id = 500;",
+        &.{},
+    ));
+}
+
 test "an unreadable cash tender is refused" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();
@@ -4396,6 +4636,113 @@ test "two waiters can add a plate to one table without losing a line" {
     }
 }
 
+test "an inclusive bill keeps its tax when two waiters add plates" {
+    // Both devices trade in inclusive prices: the menu price already
+    // carries the tax, so the tax is a memo and the total is the sum of
+    // the plates. A synced update must not recompute it as if the tax
+    // were added on top.
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+    a.fx.dbExec(.{
+        .key = 955,
+        .statements = &.{
+            .{
+                .sql = "UPDATE company SET tax_inclusive = 1 WHERE id = 1;",
+                .params = &.{},
+            },
+            .{
+                .sql = "INSERT INTO tax_slab (id, name, rate_bps, inclusive, active) VALUES (2, 'GST 5%', 500, 0, 1);",
+                .params = &.{},
+            },
+            .{
+                .sql = "UPDATE product SET tax_slab_id = 2 WHERE id = 1;",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    a.drain();
+    repos.loadCompany(&a.model, a.fx);
+    repos.loadProducts(&a.model, a.fx);
+    repos.loadTaxSlabs(&a.model, a.fx);
+    a.drain();
+
+    a.model.employee_id = 7;
+    a.model.tables = &.{
+        .{ .id = 1, .category_id = 1, .name = "T1", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 0, .pos_y = 0 },
+    };
+    a.send(.{ .select_table = 1 });
+    a.send(.{ .add_to_order = 1 });
+    a.drain();
+
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    b.fx.dbExec(.{
+        .key = 955,
+        .statements = &.{
+            .{
+                .sql = "UPDATE company SET tax_inclusive = 1 WHERE id = 1;",
+                .params = &.{},
+            },
+            .{
+                .sql = "INSERT INTO tax_slab (id, name, rate_bps, inclusive, active) VALUES (2, 'GST 5%', 500, 0, 1);",
+                .params = &.{},
+            },
+            .{
+                .sql = "UPDATE product SET tax_slab_id = 2 WHERE id = 1;",
+                .params = &.{},
+            },
+        },
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    b.drain();
+    repos.loadCompany(&b.model, b.fx);
+    repos.loadProducts(&b.model, b.fx);
+    repos.loadTaxSlabs(&b.model, b.fx);
+    b.drain();
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const open_op = try latestOp(&a, arena_state.allocator());
+    repos.applyOp(&b.model, b.fx, open_op);
+    b.drain();
+    repos.loadOrders(&b.model, b.fx);
+    repos.loadOrderLines(&b.model, b.fx);
+    b.drain();
+
+    b.model.employee_id = 7;
+    b.model.active_order_id = b.model.orders[0].id;
+    b.model.active_table_id = 1;
+
+    // A and B each add a plate before either sees the other's update.
+    a.send(.{ .add_to_order = 1 });
+    b.send(.{ .add_to_order = 1 });
+    const a_update = try latestOp(&a, arena_state.allocator());
+    const b_update = try latestOp(&b, arena_state.allocator());
+    repos.applyOp(&a.model, a.fx, b_update);
+    a.drain();
+    repos.applyOp(&b.model, b.fx, a_update);
+    b.drain();
+
+    repos.loadOrders(&a.model, a.fx);
+    repos.loadOrders(&b.model, b.fx);
+    repos.loadOrderLines(&a.model, a.fx);
+    repos.loadOrderLines(&b.model, b.fx);
+    a.drain();
+    b.drain();
+
+    // 245.00 at five percent inclusive carries 11.67 of tax, not the
+    // 12.25 an exclusive calculation would add on top.
+    const per_line_tax: i64 = 1167;
+    for ([_]*Harness{ &a, &b }) |harness| {
+        try testing.expectEqual(@as(usize, 3), harness.model.order_lines.len);
+        try testing.expectEqual(@as(i64, 3 * 24500), harness.model.orders[0].total_minor);
+        try testing.expectEqual(@as(i64, 3 * per_line_tax), harness.model.orders[0].tax_minor);
+    }
+}
+
 test "a waiter's table order and its plates reach the kitchen" {
     var a = try seeded(testing.allocator);
     defer a.deinit();
@@ -4470,6 +4817,52 @@ test "a waiter's table order and its plates reach the kitchen" {
         @as(i64, 2),
         try countRows(&b, "SELECT COUNT(*) AS n FROM order_line;", &.{}),
     );
+}
+
+test "the kitchen hears a waiter's order from another device" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+
+    // The kitchen's first board is empty. It has still seen the board,
+    // so the next order is a new sale, not the shift's starting point.
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+    try testing.expect(a.model.board_primed);
+    try testing.expectEqual(@as(i64, 0), a.model.last_seen_order_no);
+
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    b.model.employee_id = 7;
+    b.model.tables = &.{
+        .{ .id = 1, .category_id = 1, .name = "T1", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 0, .pos_y = 0 },
+        .{ .id = 2, .category_id = 1, .name = "T2", .status = .free, .status_label = "Free", .seats = 2, .pos_x = 1, .pos_y = 0 },
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    b.send(.{ .select_table = 1 });
+    b.drain();
+    repos.applyOp(&a.model, a.fx, try latestOp(&b, arena));
+    a.drain();
+
+    // The remote order has a negative row id on this device - the old
+    // "highest id" test saw no new sale - but its local order number is
+    // 1, so the kitchen knows to chime.
+    try testing.expect(a.model.orders.len == 1);
+    try testing.expect(a.model.orders[0].id < 0);
+    try testing.expectEqual(@as(i64, 1), a.model.last_seen_order_no);
+
+    b.send(.{ .select_table = 2 });
+    b.drain();
+    repos.applyOp(&a.model, a.fx, try latestOp(&b, arena));
+    a.drain();
+
+    try testing.expectEqual(@as(usize, 2), a.model.orders.len);
+    try testing.expectEqual(@as(i64, 2), a.model.last_seen_order_no);
 }
 
 test "a table that already has an order is joined, not duplicated" {
@@ -5556,7 +5949,6 @@ test "a payment op closes the order on the second database" {
         a.fx,
         repos.key_payment,
         order.id,
-        order.status,
         domain.PaymentMode.cash,
         order.total_minor,
         1_700_000_000_500,
@@ -5773,7 +6165,6 @@ test "a remapped order's payment travels back to its origin" {
         b.fx,
         repos.key_payment,
         remote.id,
-        remote.status,
         domain.PaymentMode.cash,
         remote.total_minor,
         1_700_000_000_600,

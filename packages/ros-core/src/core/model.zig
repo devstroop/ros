@@ -366,7 +366,9 @@ pub fn parseAmount(text: []const u8, decimals: i64) ?i64 {
             digits += 1;
             fraction = fraction * 10 + (char - '0');
         } else {
-            whole = whole * 10 + (char - '0');
+            const digit: i64 = char - '0';
+            if (whole > @divTrunc(std.math.maxInt(i64) - digit, 10)) return null;
+            whole = whole * 10 + digit;
         }
     }
     var divisor: i64 = 1;
@@ -397,6 +399,9 @@ pub const Model = struct {
         "theme_chosen",
         "salt_state",
         "last_issued_order_id",
+        "last_seen_order_no",
+        "board_primed",
+        "payment_check_id",
         "advance_order_id",
         "add_line_pending",
         "voiding_order_id",
@@ -731,9 +736,15 @@ pub const Model = struct {
     /// is "every station").
     stations_list: []const domain.KdsStation = &.{},
     station_filter_field: i64 = 0,
-    /// The last order the board has seen. A newer one is a new sale,
-    /// and the kitchen hears about it.
-    last_seen_order_id: i64 = 0,
+    /// The last order number the board has seen. The number is the
+    /// database's local sequence, which rises for every order whether
+    /// this device wrote it or a peer's op delivered it. A local row id
+    /// cannot do this job: a remote order has a negative id, so the
+    /// highest id never moves when a waiter's ticket arrives.
+    last_seen_order_no: i64 = 0,
+    /// True once the board has been read at least once. The first read
+    /// is the shift's starting point, not a new sale.
+    board_primed: bool = false,
 
     // --------------------------------------------------------- the waiter
 
@@ -817,6 +828,11 @@ pub const Model = struct {
     last_order_total_minor: i64 = 0,
     last_order_items_count: i64 = 0,
     last_order_at: i64 = 0,
+    /// The order whose payment is waiting for the board to confirm it.
+    /// A payment statement that found a late plate writes nothing but
+    /// still returns success; this makes the till check the board
+    /// before it tells the cashier the sale is done.
+    payment_check_id: i64 = 0,
     /// True while a sale is on its way to the database. The view binds
     /// it: the button that places the order is disabled while it holds,
     /// so a second tap cannot submit the same cart twice.
@@ -2017,7 +2033,18 @@ pub const Model = struct {
     }
 
     /// The total of the order just placed, in minor units.
+    ///
+    /// The board's copy of the order is the truth while it is loaded: a
+    /// plate added on another device updates the order there, and the
+    /// confirmation's total and the change worked out from it have to
+    /// follow. The stored total is the fallback for a sale whose board
+    /// has already moved on.
     pub fn last_order_total(model: *const Model) i64 {
+        if (model.last_order_id != 0) {
+            for (model.orders) |order| {
+                if (order.id == model.last_order_id) return order.total_minor;
+            }
+        }
         return model.last_order_total_minor;
     }
 
@@ -2054,7 +2081,7 @@ pub const Model = struct {
     /// prints a figure it can stand behind. The payment itself refuses
     /// a tender below the total rather than inventing one.
     pub fn cash_change(model: *const Model) i64 {
-        const total = model.last_order_total_minor;
+        const total = model.last_order_total();
         if (total <= 0) return 0;
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return 0;
@@ -2065,7 +2092,7 @@ pub const Model = struct {
 
     /// True when the customer handed over less than the bill.
     pub fn cash_short(model: *const Model) bool {
-        const total = model.last_order_total_minor;
+        const total = model.last_order_total();
         if (total <= 0) return false;
         const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
         if (text.len == 0) return false;
