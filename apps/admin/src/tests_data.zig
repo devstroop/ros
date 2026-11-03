@@ -851,7 +851,7 @@ test "a payment is taken once" {
 
     // A second tap, from a model that still says the order is open.
     // The customer pays once, whatever the till does.
-    repos.takePayment(&harness.model, harness.fx, repos.key_payment, order.id, domain.OrderStatus.pending, domain.PaymentMode.cash, order.total_minor, 1_700_000_000_000);
+    repos.takePayment(&harness.model, harness.fx, repos.key_payment, order.id, domain.PaymentMode.cash, order.total_minor, 1_700_000_000_000);
     harness.drain();
 
     // And the second tap is not an error: the order was already
@@ -865,6 +865,107 @@ test "a payment is taken once" {
     // And the order closed once: one history row for the close.
     const history = try countRows(&harness, "SELECT COUNT(*) AS n FROM order_status_history WHERE order_id = ?1 AND status = 4;", &.{.{ .integer = order.id }});
     try testing.expectEqual(@as(i64, 1), history);
+}
+
+test "a payment at the old total is refused after a late plate" {
+    var a = try seeded(testing.allocator);
+    defer a.deinit();
+
+    a.model.employee_id = 7;
+    a.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    a.send(.{ .add_to_cart = 1 });
+    a.send(Msg{ .place_order = {} });
+    repos.loadOrders(&a.model, a.fx);
+    a.drain();
+
+    // The cashier opens the confirmation at 245.00.
+    const stale = a.model.orders[0];
+    try testing.expectEqual(@as(i64, 24500), stale.total_minor);
+
+    var b = try seeded(testing.allocator);
+    defer b.deinit();
+    @memcpy(b.model.device_token_buf[0..6], "test02");
+    b.model.device_token_len = 6;
+    b.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    repos.applyOp(&b.model, b.fx, try latestOp(&a, arena));
+    b.drain();
+    repos.loadOrders(&b.model, b.fx);
+    repos.loadOrderLines(&b.model, b.fx);
+    b.drain();
+    const remote = b.model.orders[0];
+
+    // A waiter adds a plate on the second device while the cashier is
+    // looking at the old bill.
+    b.model.employee_id = 7;
+    b.model.active_order_id = remote.id;
+    b.send(.{ .add_to_order = 1 });
+    b.drain();
+    repos.applyOp(&a.model, a.fx, try latestOp(&b, arena));
+    a.drain();
+    try testing.expectEqual(@as(i64, 49000), a.model.orders[0].total_minor);
+
+    // The cashier taps Take on the figure the screen still shows. The
+    // payment must not charge 245.00 for a 490.00 bill.
+    repos.takePayment(
+        &a.model,
+        a.fx,
+        repos.key_payment,
+        stale.id,
+        domain.PaymentMode.cash,
+        stale.total_minor,
+        1_700_000_000_700,
+    );
+    a.drain();
+
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&a, "SELECT COUNT(*) AS n FROM payment;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&a, "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'payment';", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.pending)),
+        try countRows(&a, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = stale.id }}),
+    );
+    // The refusal is visible, and the refreshed bill is on the screen.
+    try testing.expect(a.model.payment_error_text().len > 0);
+    try testing.expectEqual(@as(i64, 49000), a.model.last_order_total());
+
+    // The next tap uses the bill as it stands now and closes the sale.
+    repos.takePayment(
+        &a.model,
+        a.fx,
+        repos.key_payment,
+        stale.id,
+        domain.PaymentMode.cash,
+        a.model.last_order_total(),
+        1_700_000_000_701,
+    );
+    a.drain();
+
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&a, "SELECT COUNT(*) AS n FROM payment;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&a, "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'payment';", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.completed)),
+        try countRows(&a, "SELECT status AS n FROM orders WHERE id = ?1;", &.{.{ .integer = stale.id }}),
+    );
 }
 
 test "an old PIN is rewritten in the modern form the next time it signs in" {
@@ -5249,7 +5350,6 @@ test "a payment op closes the order on the second database" {
         a.fx,
         repos.key_payment,
         order.id,
-        order.status,
         domain.PaymentMode.cash,
         order.total_minor,
         1_700_000_000_500,
@@ -5466,7 +5566,6 @@ test "a remapped order's payment travels back to its origin" {
         b.fx,
         repos.key_payment,
         remote.id,
-        remote.status,
         domain.PaymentMode.cash,
         remote.total_minor,
         1_700_000_000_600,

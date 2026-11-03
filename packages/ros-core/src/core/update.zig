@@ -103,6 +103,32 @@ fn announceNewOrder(model: *Model, fx: *Effects) void {
     });
 }
 
+/// A payment reports success even when its guards found a late plate or
+/// a ticket that moved, because the transaction itself is healthy. The
+/// board is the truth: only a payment row on the order means the money
+/// landed. Check it before leaving the confirmation screen.
+fn settlePayment(model: *Model, fx: *Effects) void {
+    const id = model.payment_check_id;
+    if (id == 0) return;
+    model.payment_check_id = 0;
+    const order = findOrder(model, id) orelse {
+        // Voided while the cashier was paying. There is no bill left to
+        // charge, and the order list is the right place to be.
+        model.payment_error = "";
+        model.error_text = "That order is no longer on the board";
+        go(model, .orders);
+        return;
+    };
+    if (!order.paid) {
+        model.payment_error = "The bill changed - check the total and take the payment again";
+        return;
+    }
+    model.payment_error = "";
+    go(model, .orders);
+    net_bridge.notify();
+    repos.maybeCompact(model, fx);
+}
+
 /// Keep the waiter's cart in step with the database: the lines of the
 /// order they are serving, with their names copied (the shared
 /// order-line buffer is reset on every read).
@@ -555,7 +581,6 @@ fn takePayment(model: *Model, fx: *Effects) void {
         fx,
         repos.key_payment,
         order.id,
-        order.status,
         mode,
         order.total_minor,
         fx.wallMs(),
@@ -1500,6 +1525,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.last_order_items_count += line.qty;
             }
             model.last_order_at = order.placed_at;
+            model.payment_check_id = 0;
             model.payment_error = "";
             model.cash_tendered_buf.clear();
             go(model, .order_confirmation);
@@ -1521,6 +1547,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.last_order_items_count += line.qty;
             }
             model.last_order_at = order.placed_at;
+            model.payment_check_id = 0;
             model.payment_error = "";
             model.cash_tendered_buf.clear();
             go(model, .order_confirmation);
@@ -1664,6 +1691,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.last_order_type_field = "";
             model.last_order_total_minor = 0;
             model.last_order_items_count = 0;
+            model.payment_check_id = 0;
             model.payment_error = "";
             model.cash_tendered_buf.clear();
             go(model, .pos);
@@ -1673,20 +1701,32 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.busy = false;
             model.payment_pending = false;
             if (result.outcome != .ok) {
+                model.payment_check_id = 0;
                 model.payment_error = switch (result.outcome) {
                     .constraint => "The payment broke a data rule",
                     .busy => "The database is busy - try again",
                     else => "Could not take the payment",
                 };
+                // The refusal may be a late plate: re-read the board so
+                // the confirmation shows the bill the next tap will
+                // charge, not the one that was refused.
+                repos.loadOrders(model, fx);
                 return;
             }
             model.payment_error = "";
-            // The sale is done: back to the order list, where the
-            // closed order is now a completed one.
-            go(model, .orders);
-            repos.loadOrders(model, fx);
-            net_bridge.notify();
-            repos.maybeCompact(model, fx);
+            // The write is reported as success even when its guards
+            // found a late plate or a ticket that moved. Read the board
+            // back under the payment-check key and let the order's own
+            // row decide whether the money landed before telling the
+            // cashier the sale is done.
+            if (model.last_order_id != 0) {
+                model.payment_check_id = model.last_order_id;
+                repos.loadOrdersForPayment(model, fx);
+            } else {
+                go(model, .orders);
+                net_bridge.notify();
+                repos.maybeCompact(model, fx);
+            }
         },
 
         // -------------------------------------------------------- the forms
@@ -2139,12 +2179,21 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     .busy => "The database is busy - try again",
                     else => "Could not read the orders",
                 };
+                if (result.key == repos.key_payment_check and model.payment_check_id != 0) {
+                    model.payment_check_id = 0;
+                    model.payment_error = "Could not confirm the payment - try again";
+                }
                 return;
             }
             if (result.kind == .page) {
                 repos.decodeOrders(model, result.bytes);
                 announceNewOrder(model, fx);
             }
+            // The payment's write reports success even when its guards
+            // refused it. Wait for the payment's own board read, then
+            // check the order's payment row before calling the sale
+            // done.
+            if (result.key == repos.key_payment_check and result.kind == .done) settlePayment(model, fx);
             // The order we were moving is not on the board any more. It
             // was deleted, or the database was reset under us, and the
             // operator is told so instead of watching a ticket vanish.
@@ -2421,6 +2470,7 @@ fn resetSession(model: *Model, gate: Screen) void {
     model.last_order_total_minor = 0;
     model.last_order_items_count = 0;
     model.last_order_at = 0;
+    model.payment_check_id = 0;
     model.sale_buf.reset();
     model.payment_error = "";
     model.cash_tendered_buf.clear();
@@ -2686,6 +2736,7 @@ fn placeOrder(model: *Model, fx: *Effects) void {
     model.last_order_items_count = 0;
     for (lines[0..count]) |line| model.last_order_items_count += line.qty;
     model.last_order_at = order.placed_at;
+    model.payment_check_id = 0;
     model.payment_error = "";
     model.cash_tendered_buf.clear();
 

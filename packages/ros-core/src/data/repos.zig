@@ -104,6 +104,7 @@ pub const key_reference_apply = 63;
 pub const key_sync_ops = 64;
 pub const key_sync_snapshot = 65;
 pub const key_sync_compact = 66;
+pub const key_payment_check = 67;
 
 // ------------------------------------------------------------ queries
 
@@ -482,6 +483,14 @@ pub fn watchOpenOrders(fx: *Effects) void {
 
 pub fn loadOrders(model: *Model, fx: *Effects) void {
     query(model, fx, key_orders, orders_sql, &.{}, Effects.dbMsg(.orders_loaded));
+}
+
+/// Read the board after a payment and report it under its own key. The
+/// confirmation screen waits for this read: a board loaded before the
+/// payment committed is not evidence that the money landed, and only
+/// this key means "the payment's own read".
+pub fn loadOrdersForPayment(model: *Model, fx: *Effects) void {
+    query(model, fx, key_payment_check, orders_sql, &.{}, Effects.dbMsg(.orders_loaded));
 }
 
 /// Send a dish to a station.
@@ -2180,24 +2189,34 @@ pub fn saveCurrency(fx: *Effects, key: u64, code: []const u8, symbol: []const u8
 /// Take the payment for an order and close it. ONE transaction: the
 /// money and the closed order land together, or neither does. A paid
 /// order that is still open is a cashier's worst day.
+///
+/// The amount is the bill the cashier saw. The write is conditional on
+/// the order still carrying that total: a plate added on another
+/// device after the confirmation opened makes the payment fail instead
+/// of charging the old figure. The status guard is "not closed yet",
+/// not the exact status the model held - the kitchen may have moved
+/// the ticket from pending to preparing while the guest was paying,
+/// and that must not lose the money.
 pub fn takePayment(
     model: *Model,
     fx: *Effects,
     key: u64,
     order_id: i64,
-    from_status: domain.OrderStatus,
     mode: domain.PaymentMode,
     amount_minor: i64,
     at: i64,
 ) void {
     const origin = orderOrigin(model, order_id);
+    const completed = @intFromEnum(domain.OrderStatus.completed);
     // Each statement carries its OWN parameters: the engine checks that
     // a statement's parameter count matches the placeholders it uses,
     // and one shared array for three different statements never does.
     //
     // The payment, the history and the close are all CONDITIONAL on the
-    // order being where it should be. A second tap finds the order
-    // closed, writes nothing, and the customer is charged once.
+    // order being open and still carrying this bill. A second tap finds
+    // the order closed, writes nothing, and the customer is charged
+    // once. A late plate finds the total changed, writes nothing, and
+    // the cashier sees the new bill instead of undercharging it.
     var statements: [6]native_sdk.EffectDbStatement = undefined;
     var payment_params: [6]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
@@ -2205,27 +2224,32 @@ pub fn takePayment(
         .{ .integer = @intFromEnum(mode) },
         .{ .integer = amount_minor },
         .{ .integer = at },
-        .{ .integer = @intFromEnum(from_status) },
+        .{ .integer = completed },
     };
-    var order_params: [4]native_sdk.EffectDbValue = .{
+    var order_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
-        .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
+        .{ .integer = completed },
         .{ .integer = at },
-        .{ .integer = @intFromEnum(from_status) },
+        .{ .integer = amount_minor },
+        .{ .integer = completed },
     };
-    var history_params: [4]native_sdk.EffectDbValue = .{
+    var history_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
-        .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
+        .{ .integer = completed },
         .{ .integer = at },
-        .{ .integer = @intFromEnum(from_status) },
+        .{ .integer = amount_minor },
+        .{ .integer = completed },
     };
     statements[0] = .{
         // The history first: it says the order closed, and it is only
-        // true if the order was still open.
+        // true if the order was still open at this bill.
         .sql =
         \\INSERT INTO order_status_history (order_id, status, changed_at)
         \\SELECT ?1, ?2, ?3
-        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status = ?4);
+        \\WHERE EXISTS (
+        \\  SELECT 1 FROM orders
+        \\  WHERE id = ?1 AND status < ?5 AND total_minor = ?4
+        \\);
         ,
         .params = &history_params,
     };
@@ -2235,36 +2259,14 @@ pub fn takePayment(
         .sql =
         \\INSERT INTO payment (id, order_id, mode, amount_minor, reference, paid_at, created_at)
         \\SELECT ?1, ?2, ?3, ?4, '', ?5, ?5
-        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?2 AND status = ?6);
+        \\WHERE EXISTS (
+        \\  SELECT 1 FROM orders
+        \\  WHERE id = ?2 AND status < ?6 AND total_minor = ?4
+        \\);
         ,
         .params = &payment_params,
     };
-    statements[2] = .{
-        .sql = "UPDATE orders SET status = ?2, updated_at = ?3 WHERE id = ?1 AND status = ?4;",
-        .params = &order_params,
-    };
-    statements[3] = .{
-        // The guest has paid and gone, so the table is free again - in
-        // the same transaction as the payment, so a table is never free
-        // while the money is still owed. Only the order that was just
-        // closed may free it: another open ticket on the same table
-        // means the room is still in use.
-        .sql =
-        \\UPDATE dining_table SET status = 0
-        \\WHERE id = (
-        \\  SELECT dining_table_id FROM orders WHERE id = ?1 AND status = ?2
-        \\)
-        \\  AND NOT EXISTS (
-        \\    SELECT 1 FROM orders
-        \\    WHERE dining_table_id = dining_table.id AND status < ?2
-        \\  );
-        ,
-        .params = &.{
-            .{ .integer = order_id },
-            .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
-        },
-    };
-    var count: usize = 4;
+    var count: usize = 2;
 
     const snapshot = record.PaymentSnapshot{
         .order_id = origin.id,
@@ -2323,11 +2325,50 @@ pub fn takePayment(
     };
 
     if (op_ready) {
-        statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
+        // The op belongs to the payment insert. `changes()` is 1 only
+        // when the payment really landed, so a second tap or a late
+        // plate writes neither an op nor a clock.
+        statements[count] = .{ .sql = insert_op_if_written_sql, .params = &op_params };
         count += 1;
-        statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
+        statements[count] = .{ .sql = save_clock_if_op_written_sql, .params = &clock_params };
         count += 1;
     }
+
+    statements[count] = .{
+        // Close the ticket only if the payment above landed at this
+        // bill. The status guard lets a ticket the kitchen has already
+        // moved forward close; the total guard is what makes the late
+        // plate a refusal rather than an undercharge.
+        .sql =
+        \\UPDATE orders SET status = ?2, updated_at = ?3
+        \\WHERE id = ?1 AND status < ?5 AND total_minor = ?4;
+        ,
+        .params = &order_params,
+    };
+    count += 1;
+
+    statements[count] = .{
+        // The guest has paid and gone, so the table is free again - in
+        // the same transaction as the payment, so a table is never free
+        // while the money is still owed. Only the order that was just
+        // closed may free it: another open ticket on the same table
+        // means the room is still in use.
+        .sql =
+        \\UPDATE dining_table SET status = 0
+        \\WHERE id = (
+        \\  SELECT dining_table_id FROM orders WHERE id = ?1 AND status = ?2
+        \\)
+        \\  AND NOT EXISTS (
+        \\    SELECT 1 FROM orders
+        \\    WHERE dining_table_id = dining_table.id AND status < ?2
+        \\  );
+        ,
+        .params = &.{
+            .{ .integer = order_id },
+            .{ .integer = completed },
+        },
+    };
+    count += 1;
 
     fx.dbExec(.{
         .key = key,

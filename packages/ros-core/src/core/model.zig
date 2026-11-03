@@ -354,6 +354,7 @@ pub const Model = struct {
         "last_issued_order_id",
         "last_seen_order_no",
         "board_primed",
+        "payment_check_id",
         "advance_order_id",
         "add_line_pending",
         "voiding_order_id",
@@ -752,6 +753,11 @@ pub const Model = struct {
     last_order_total_minor: i64 = 0,
     last_order_items_count: i64 = 0,
     last_order_at: i64 = 0,
+    /// The order whose payment is waiting for the board to confirm it.
+    /// A payment statement that found a late plate writes nothing but
+    /// still returns success; this makes the till check the board
+    /// before it tells the cashier the sale is done.
+    payment_check_id: i64 = 0,
     /// True while a sale is on its way to the database. The view binds
     /// it: the button that places the order is disabled while it holds,
     /// so a second tap cannot submit the same cart twice.
