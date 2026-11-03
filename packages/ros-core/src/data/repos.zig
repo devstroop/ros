@@ -3795,6 +3795,10 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
 /// the order already moved on, writes nothing, and leaves the history
 /// with one row instead of two.
 ///
+/// A move to `completed` is conditional on more than the status it came
+/// from: it needs a `payment` row behind the order. The last step of the
+/// lifecycle is money's, and `takePayment` writes both in one transaction.
+///
 /// The order's status is the model's, not the database's, because the
 /// model read it a moment ago; the database is the one that decides
 /// whether the move still applies.
@@ -3808,31 +3812,54 @@ pub fn setOrderStatus(
 ) void {
     const origin = orderOrigin(model, order_id);
     var statements: [4]native_sdk.EffectDbStatement = undefined;
-    var history_params: [4]native_sdk.EffectDbValue = .{
+    var history_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
         .{ .integer = @intFromEnum(to_status) },
         .{ .integer = at },
         .{ .integer = @intFromEnum(from_status) },
+        .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
     };
-    var order_params: [4]native_sdk.EffectDbValue = .{
+    var order_params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = order_id },
         .{ .integer = @intFromEnum(to_status) },
         .{ .integer = at },
         .{ .integer = @intFromEnum(from_status) },
+        .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
     };
     statements[0] = .{
         // The history first, and only for an order that is where the
         // move expects it: the row says the order BECAME this status,
         // and it is only true if it was not already.
+        //
+        // And only for a move that this statement is allowed to make.
+        // `completed` is the one status a status move may not write on
+        // its own: money closes a ticket, in `takePayment`'s own
+        // transaction, and it is the write that puts the `payment` row
+        // the clause below asks for. A guard that lives only in `update`
+        // is a guard for the one caller that happens to be the reducer -
+        // so the rule is here, where a peer's replay, a second screen and
+        // any other caller of this write meet the same refusal.
         .sql =
         \\INSERT INTO order_status_history (order_id, status, changed_at)
         \\SELECT ?1, ?2, ?3
-        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status = ?4);
+        \\WHERE EXISTS (
+        \\  SELECT 1 FROM orders
+        \\  WHERE id = ?1 AND status = ?4
+        \\    AND (?2 <> ?5 OR EXISTS (
+        \\      SELECT 1 FROM payment WHERE payment.order_id = orders.id
+        \\    ))
+        \\);
         ,
         .params = &history_params,
     };
     statements[1] = .{
-        .sql = "UPDATE orders SET status = ?2, updated_at = ?3 WHERE id = ?1 AND status = ?4;",
+        .sql =
+        \\UPDATE orders SET status = ?2, updated_at = ?3
+        \\WHERE id = ?1 AND status = ?4
+        \\  AND (?2 <> ?5 OR EXISTS (
+        \\    SELECT 1 FROM payment WHERE payment.order_id = orders.id
+        \\  ));
+        ,
         .params = &order_params,
     };
     var count: usize = 2;
@@ -4490,16 +4517,26 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
 
 fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSnapshot, persist: bool) void {
     var statements: [8]native_sdk.EffectDbStatement = undefined;
-    var params: [4]native_sdk.EffectDbValue = .{
+    var params: [5]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.id },
         .{ .integer = snapshot.status },
         .{ .integer = snapshot.changed_at },
         .{ .text = snapshot.origin_device },
+        .{ .integer = @intFromEnum(domain.OrderStatus.completed) },
     };
     statements[0] = .{
         // The status is monotonic. `voided` is the terminal exception:
         // it can end an open ticket, but it cannot undo a completed
         // one.
+        //
+        // And `completed` never arrives on a status op at all. Money
+        // closes a ticket, and it closes it on every device in the same
+        // place: `applyPayment`, with the payment row it carries. An op
+        // that asks for `completed` on an order with nothing paid
+        // describes a ticket the till cannot collect, on a table the
+        // floor still shows as occupied, with the money nowhere on
+        // record - so it is refused here, where no local guard would
+        // ever have been consulted.
         //
         // The order is named by its origin pair. A status op written
         // on a device that only holds a remapped copy carries the
@@ -4515,7 +4552,10 @@ fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSna
         \\  END
         \\)
         \\  AND status <> ?2
-        \\  AND (status < ?2 OR (?2 = 5 AND status < 4));
+        \\  AND (status < ?2 OR (?2 = 5 AND status < 4))
+        \\  AND (?2 <> ?5 OR EXISTS (
+        \\    SELECT 1 FROM payment WHERE payment.order_id = orders.id
+        \\  ));
         ,
         .params = &params,
     };
@@ -4530,7 +4570,12 @@ fn applyOrderStatus(fx: *Effects, op: record.Op, snapshot: record.OrderStatusSna
         \\  ?2, ?3
         \\WHERE changes() > 0;
         ,
-        .params = &params,
+        // Four values, not five. This row rides the update above - it is
+        // written only when `changes()` says the status really moved - so
+        // the payment clause is the update's to ask and this statement
+        // never names `?5`. A statement bound to a parameter it does not
+        // have rejects the whole batch.
+        .params = params[0..4],
     };
     var count: usize = 2;
 

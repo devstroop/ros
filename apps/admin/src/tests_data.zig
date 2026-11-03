@@ -71,6 +71,7 @@ const migration_sql = [_][]const u8{
     @embedFile("schema/0018_order_line_stock.sql"),
     @embedFile("schema/0019_company_brand.sql"),
     @embedFile("schema/0020_employee_credential.sql"),
+    @embedFile("schema/0021_unpaid_closures.sql"),
 };
 
 const migration_names = [_][]const u8{
@@ -78,7 +79,22 @@ const migration_names = [_][]const u8{
     "inventory",        "ops",            "compliance",        "printing",      "sync",
     "default_tax_slab", "order_sequence", "order_request_key", "payment_once",  "currency_decimals",
     "order_origin",     "sync_snapshot",  "order_line_stock",  "company_brand", "employee_credential",
+    "unpaid_closures",
 };
+
+/// The migrations, in the order the runtime applies them, each at the
+/// version its position gives it. The same list the CLI turns into
+/// `migrations.zig`; a test that wants a database at an older version
+/// hands over a shorter slice of it.
+fn buildMigrations(out: []native_sdk.relational_store.Migration) void {
+    for (migration_sql, 0..) |sql, index| {
+        out[index] = .{
+            .version = @intCast(index + 1),
+            .name = migration_names[index],
+            .sql = sql,
+        };
+    }
+}
 
 /// A model, a real database and a real effects channel, together.
 ///
@@ -95,16 +111,19 @@ pub const Harness = struct {
     allocator: std.mem.Allocator,
 
     fn start(allocator: std.mem.Allocator) !Harness {
-        var migrations: [migration_sql.len]native_sdk.relational_store.Migration = undefined;
-        for (migration_sql, 0..) |sql, index| {
-            migrations[index] = .{
-                .version = @intCast(index + 1),
-                .name = migration_names[index],
-                .sql = sql,
-            };
-        }
+        return startTo(allocator, migration_sql.len);
+    }
 
-        const opened = try native_sdk.relational_store.Database.openMemoryMigrated(allocator, &migrations);
+    /// A harness opened and migrated by the first `migration_count`
+    /// migrations. Stopping short of the last one is how a test gets a
+    /// database that already holds the state a later migration repairs -
+    /// and the migration then runs the way it runs on boot, on a database
+    /// at the previous version.
+    fn startTo(allocator: std.mem.Allocator, migration_count: usize) !Harness {
+        var migrations: [migration_sql.len]native_sdk.relational_store.Migration = undefined;
+        buildMigrations(&migrations);
+
+        const opened = try native_sdk.relational_store.Database.openMemoryMigrated(allocator, migrations[0..migration_count]);
         if (opened.outcome != .ok) return error.MigrateFailed;
 
         const database = try allocator.create(native_sdk.relational_store.Database);
@@ -300,6 +319,47 @@ test "the migrations apply to an empty database" {
     // number of migrations.
     const version = try harness.database.schemaVersion();
     try testing.expectEqual(@as(u32, migration_sql.len), version);
+}
+
+test "a ticket that closed unpaid is reopened when the database opens" {
+    // A database from before the guard. It stopped one migration short,
+    // and it holds the state #139 found: a completed order with no
+    // payment behind it, which a build before this one could write.
+    var harness = try Harness.startTo(testing.allocator, migration_sql.len - 1);
+    defer harness.deinit();
+
+    harness.fx.dbExec(.{
+        .key = 963,
+        .statements = &.{.{
+            .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (1, 'A-1', 0, 4, NULL, NULL, NULL, 1000, 0, 0, 1000, 1700000000000, '', 1700000000000, 1700000000000);",
+            .params = &.{},
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+    try testing.expectEqual(@as(i64, 4), try countRows(&harness, "SELECT status AS n FROM orders WHERE id = 1;", &.{}));
+
+    // A device that is already at version 20 upgrades exactly the way the
+    // runtime does it: `openMigrated` opens the file and applies the list,
+    // and migration 0021 is the only thing in that list that touches rows.
+    var migrations: [migration_sql.len]native_sdk.relational_store.Migration = undefined;
+    buildMigrations(&migrations);
+    const applied = harness.database.applyMigrations(&migrations);
+    try testing.expectEqual(native_sdk.relational_store.OpenOutcome.ok, applied.outcome);
+    try testing.expectEqual(@as(u32, migration_sql.len), try harness.database.schemaVersion());
+
+    // Served, which is the step the ticket was standing on when money was
+    // asked of it, with the history row to match. `changed_at` is the
+    // order's own `updated_at`: there is no honest timestamp for a state
+    // the app never recorded anyone entering.
+    try testing.expectEqual(@as(i64, 3), try countRows(&harness, "SELECT status AS n FROM orders WHERE id = 1;", &.{}));
+    try testing.expectEqual(@as(i64, 1), try countRows(&harness, "SELECT COUNT(*) AS n FROM order_status_history WHERE order_id = 1;", &.{}));
+    try testing.expectEqual(@as(i64, 3), try countRows(&harness, "SELECT status AS n FROM order_status_history WHERE order_id = 1;", &.{}));
+    try testing.expectEqual(@as(i64, 1_700_000_000_000), try countRows(&harness, "SELECT changed_at AS n FROM order_status_history WHERE order_id = 1;", &.{}));
+
+    // The repair moves the ticket back so the money can be taken. It does
+    // not invent the money.
+    try testing.expectEqual(@as(i64, 0), try countRows(&harness, "SELECT COUNT(*) AS n FROM payment;", &.{}));
 }
 
 test "the company row loads into the model" {
@@ -727,6 +787,77 @@ test "a move that matched no row writes no op and burns no clock" {
         @as(i64, 0),
         try countRows(&harness, "SELECT COUNT(*) AS n FROM order_status_history WHERE order_id = ?1;", &.{.{ .integer = order.id }}),
     );
+}
+
+test "a ticket cannot close without money" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    const order = harness.model.orders[0];
+
+    // The ticket is standing where money is asked of it. `update` walks
+    // through preparing and ready on the way there; the walk is not what
+    // is being tested.
+    repos.setOrderStatus(&harness.model, harness.fx, order.id, domain.OrderStatus.pending, domain.OrderStatus.served, 1_700_000_000_000);
+    harness.drain();
+
+    const history = "SELECT COUNT(*) AS n FROM order_status_history WHERE order_id = ?1;";
+    const status_sql = "SELECT status AS n FROM orders WHERE id = ?1;";
+    const params = [_]native_sdk.EffectDbValue{.{ .integer = order.id }};
+    const served: i64 = @intFromEnum(domain.OrderStatus.served);
+    const before_ops = try countRows(&harness, "SELECT COUNT(*) AS n FROM op_log;", &.{});
+    const before_history = try countRows(&harness, history, &params);
+    var clock_buffer: [32]u8 = undefined;
+    const clock_text = try std.fmt.bufPrint(&clock_buffer, "{d}", .{harness.model.sync_clock});
+
+    // A caller that is not the reducer asks for `completed`. The refusal
+    // has to be in the statement: a guard that lives only in `update` is
+    // a guard for the one caller that happens to be the reducer, and a
+    // replay, an older build and a screen nobody has read yet all reach
+    // the write path without passing through it.
+    repos.setOrderStatus(&harness.model, harness.fx, order.id, domain.OrderStatus.served, domain.OrderStatus.completed, 1_700_000_000_500);
+    harness.drain();
+
+    // Nothing moved, nothing was recorded, and nobody was told: an
+    // unpaid close is refused before it can become an op and a clock.
+    try testing.expectEqual(served, try countRows(&harness, status_sql, &params));
+    try testing.expectEqual(before_history, try countRows(&harness, history, &params));
+    try testing.expectEqual(before_ops, try countRows(&harness, "SELECT COUNT(*) AS n FROM op_log;", &.{}));
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM sync_state WHERE key = 'clock' AND value = ?1;", &.{.{ .text = clock_text }}),
+    );
+
+    // The rule is about the money, not about the word. With a payment row
+    // behind the order - the row `takePayment` writes in the same
+    // transaction as the close - the very same move lands.
+    harness.fx.dbExec(.{
+        .key = 961,
+        .statements = &.{.{
+            .sql = "INSERT INTO payment (id, order_id, mode, amount_minor, reference, paid_at, created_at) VALUES (?1, ?1, 0, 24500, '', ?2, ?2);",
+            .params = &.{ .{ .integer = order.id }, .{ .integer = 1_700_000_001_000 } },
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    repos.setOrderStatus(&harness.model, harness.fx, order.id, domain.OrderStatus.served, domain.OrderStatus.completed, 1_700_000_001_000);
+    harness.drain();
+
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.completed)),
+        try countRows(&harness, status_sql, &params),
+    );
+    try testing.expectEqual(before_history + 1, try countRows(&harness, history, &params));
+    try testing.expectEqual(before_ops + 1, try countRows(&harness, "SELECT COUNT(*) AS n FROM op_log;", &.{}));
 }
 
 test "the tax is worked out line by line, from the product's own slab" {
@@ -6104,6 +6235,89 @@ test "a payment op does not pay a voided ticket" {
     );
     try testing.expectEqual(
         @as(i64, @intFromEnum(domain.OrderStatus.voided)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = 1;", &.{}),
+    );
+}
+
+test "a completed status op does not close an order nobody paid" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // A ticket that is served and has no money on it. This is the state
+    // #139 found: written by a peer on an older build, or by a replay
+    // that got here without passing through `update`.
+    harness.fx.dbExec(.{
+        .key = 960,
+        .statements = &.{.{
+            .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at, origin_device, origin_id) VALUES (1, 'A-1', 0, 3, 1, NULL, 7, 1000, 0, 0, 1000, 1700000000000, '', 1700000000000, 1700000000000, 'dev-a', 4242);",
+            .params = &.{},
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    const status_json = "{\"id\":4242,\"origin_device\":\"dev-a\",\"status\":4,\"changed_at\":1700000000100}";
+    const status_op = record.Op{
+        .id = "dev-a:7:0",
+        .entity_table = "order_status",
+        .entity_id = "4242",
+        .operation = .update,
+        .logical_clock = 7,
+        .device_id = "dev-a",
+        .created_at = 1700000000100,
+        .data_json = status_json,
+    };
+    repos.applyOp(&harness.model, harness.fx, status_op);
+    harness.drain();
+
+    // The order stays where the kitchen left it. Closing it here would
+    // park a ticket that the till refuses to take money for, holding a
+    // table that only a payment or a void releases.
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.served)),
+        try countRows(&harness, "SELECT status AS n FROM orders WHERE id = 1;", &.{}),
+    );
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM order_status_history WHERE order_id = 1 AND status = 4;", &.{}),
+    );
+
+    // The op itself is still remembered. It arrived, and this device has
+    // an answer for it; refusing the state is not asking the peer to send
+    // it again.
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM op_log WHERE id = ?1;", &.{.{ .text = "dev-a:7:0" }}),
+    );
+
+    // And the money path is untouched: an order with a payment row
+    // behind it closes when a later op says it should. A repeat of the
+    // op above would be skipped by the cursor, so this is the next one
+    // from the same peer.
+    harness.fx.dbExec(.{
+        .key = 962,
+        .statements = &.{.{
+            .sql = "INSERT INTO payment (id, order_id, mode, amount_minor, reference, paid_at, created_at) VALUES (1, 1, 0, 1000, '', 1700000000200, 1700000000200);",
+            .params = &.{},
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    const paid_op = record.Op{
+        .id = "dev-a:8:0",
+        .entity_table = "order_status",
+        .entity_id = "4242",
+        .operation = .update,
+        .logical_clock = 8,
+        .device_id = "dev-a",
+        .created_at = 1700000000200,
+        .data_json = status_json,
+    };
+    repos.applyOp(&harness.model, harness.fx, paid_op);
+    harness.drain();
+    try testing.expectEqual(
+        @as(i64, @intFromEnum(domain.OrderStatus.completed)),
         try countRows(&harness, "SELECT status AS n FROM orders WHERE id = 1;", &.{}),
     );
 }

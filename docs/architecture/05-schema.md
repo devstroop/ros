@@ -1,9 +1,9 @@
 # Schema
 
-> **Status:** Scaffolded — 46 tables across 20 migrations; only the core
+> **Status:** Scaffolded — 46 tables across 21 migrations; only the core
 > subset is used by repositories or UI.
-> **Last verified:** 2026-10-31, by source review and the migration lock.
-> **Source:** `src/schema/0001_core.sql` … `0020_employee_credential.sql`,
+> **Last verified:** 2026-11-04, by source review and the migration lock.
+> **Source:** `src/schema/0001_core.sql` … `0021_unpaid_closures.sql`,
 > `src/schema/migrations.lock.json`.
 
 ## Conventions
@@ -26,7 +26,8 @@ partly by review.
 ## Migration policy
 
 - Files are numbered `NNNN_name.sql` in `src/schema/`.
-- `migrations.lock.json` is the authority: version 20 and twenty hashes.
+- `migrations.lock.json` is the authority: version 21 and twenty-one
+  hashes.
 - `native db new-migration <name>` is the intended authoring path.
 - The engine opens the database **already migrated** at boot; the app
   never runs migration code.
@@ -34,6 +35,10 @@ partly by review.
 - The target is a greenfield baseline plus forward migrations. There is no
   installed Restaurant OS base yet, so a correction can still be folded into a new
   migration without a data migration. Once a release ships, that stops.
+  `0021` is the first migration that breaks the rule, and it does so
+  deliberately: the rows it repairs were written by a build the owner
+  already runs, on a database that upgrades in place, and there is no
+  version of "fold it into the baseline" that reaches them.
 
 ## Tables by domain
 
@@ -210,6 +215,34 @@ The kind is part of the reference document, so a second device offers the
 right surface for a person it has never met, and the sign-in takes the
 kind from the row it is about to check rather than from a list it loaded
 earlier. See [ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md).
+
+### 0021 — Unpaid closures reopened (a data repair, no DDL)
+
+| Statement | Effect |
+|---|---|
+| `INSERT INTO order_status_history … SELECT id, 3, updated_at FROM orders WHERE status = 4 AND NOT EXISTS (payment)` | Records the reopening of every ticket that closed without money |
+| `UPDATE orders SET status = 3 WHERE …the same rows…` | Puts them back on the last step the kitchen owns |
+
+Nothing about the shape of a table changes. This migration repairs rows:
+every order sitting in `completed` with no `payment` behind it goes back
+to `served`, where the till can take the money and close it properly.
+
+The state is not untidy, it is uncollectable. `paid` is read from the
+payment rows an order has, so an unpaid closed ticket still shows a Pay
+button, and taking the payment refuses a ticket it reads as paid; and a
+table is freed only by a payment or a void, so the ticket keeps its party
+on the floor plan. `served` is where a reopened ticket lands because
+`ready` and `preparing` ring the pass for plates that have already gone
+out. Its history row's `changed_at` is the order's own `updated_at`,
+because there is no honest timestamp for a state the app never recorded a
+person entering.
+
+The repair is local and writes no op: `applyOrderStatus` moves a ticket
+forward, never back, so a `served` op arriving after a `completed` one is
+refused by design. Each device repairs its own copy the first time it
+opens on this version, and the statements that were guarded in the same
+release stop any of them writing another one. See
+[ADR-0024](../decisions/0024-a-ticket-closes-with-its-money.md).
 
 ## Indexes
 

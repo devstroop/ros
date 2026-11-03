@@ -46,7 +46,12 @@ The button names the move it makes, on the kitchen board and the orders
 board alike - so neither has a button called "Next" or "Advance". A
 ticket with no state left to move to shows no button at all, because a
 caption-less button is a blank one. **Closed** is not a ticket that has
-been rung up: it is one whose money has been taken.
+been rung up: it is one whose money has been taken. That is not a
+wording — the statement that writes a status refuses `completed` without
+a payment row behind the order, so **Close ticket** on a ticket nobody
+has paid for is the one button that names a move the app will not make,
+and it answers with the reason rather than with a state no money is
+behind ([ADR-0024](decisions/0024-a-ticket-closes-with-its-money.md)).
 
 ## Money and tickets
 

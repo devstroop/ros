@@ -2,7 +2,7 @@
 
 > **Status:** Partial — core reads and order writes work; most entities have
 > no write path or UI.
-> **Last verified:** 2026-11-03, by source review and the test suite.
+> **Last verified:** 2026-11-04, by source review and the test suite.
 > **Source:** `src/data/repos.zig`, `src/data/page.zig`, `src/data/auth.zig`,
 > `src/core/update.zig`, `src/domain/models.zig`.
 
@@ -106,12 +106,31 @@ atomically.
 
 ### Advance an order
 
-`repos.setOrderStatus` runs two statements in one transaction:
+`repos.setOrderStatus` runs its statements in one transaction:
 
-1. `UPDATE orders SET status, updated_at WHERE id`
-2. `INSERT INTO order_status_history (order_id, status, changed_at)`
+1. `INSERT INTO order_status_history ... WHERE EXISTS (the order is in
+   the status the caller held, and the move is one this statement may
+   make)`
+2. `UPDATE orders SET status, updated_at WHERE id = the order AND status
+   = the status the caller held AND the same clause`
+3. the op and the clock, each conditional on the update having written a
+   row
 
-The history and the current status can never disagree.
+Every move is conditional on the status the caller held, so a double tap
+or two devices at the board make one move, the history and the current
+status cannot disagree, and a move that matched nothing writes no op and
+burns no clock.
+
+`completed` is the one status a move may not write on its own: it needs a
+`payment` row behind the order. Money closes a ticket, and it closes it
+inside `repos.takePayment`'s own transaction - the payment row, the
+close and the table release in one batch. The rule lives in the statement
+and not only in `update`, because `update` is one caller of a write path
+that has three: a peer's replay, a device on an older build and a screen
+nobody has read yet all reach the SQL without passing through the
+reducer. The receiving half, `repos.applyOrderStatus`, carries the same
+clause, so an unpaid close cannot arrive over the wire either
+([ADR-0024](../decisions/0024-a-ticket-closes-with-its-money.md)).
 
 ### Settings
 
