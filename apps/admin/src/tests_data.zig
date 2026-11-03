@@ -686,6 +686,49 @@ test "a move that does not apply leaves the order where it is" {
     try testing.expectEqual(@as(i64, 0), rows);
 }
 
+test "a move that matched no row writes no op and burns no clock" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    repos.loadOrders(&harness.model, harness.fx);
+    harness.drain();
+    const order = harness.model.orders[0];
+
+    // The clock the sale was written under is this device's own
+    // history: every op it writes later has to be above it.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const placed = try latestOp(&harness, arena_state.allocator());
+    var clock_buffer: [32]u8 = undefined;
+    const clock_text = try std.fmt.bufPrint(&clock_buffer, "{d}", .{placed.logical_clock});
+    const before_ops = try countRows(&harness, "SELECT COUNT(*) AS n FROM op_log;", &.{});
+
+    // The kitchen has already moved the ticket on and this till has
+    // not heard. The move matches no row, so the order stays put.
+    repos.setOrderStatus(&harness.model, harness.fx, order.id, domain.OrderStatus.ready, domain.OrderStatus.served, 1_700_000_000_000);
+    harness.drain();
+
+    // A move that did not land is not a move to tell anybody about. An
+    // op for it hands every peer a status this order never had, and a
+    // clock burned for a write that did not happen leaves a hole in
+    // this device's own history.
+    try testing.expectEqual(before_ops, try countRows(&harness, "SELECT COUNT(*) AS n FROM op_log;", &.{}));
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM sync_state WHERE key = 'clock' AND value = ?1;", &.{.{ .text = clock_text }}),
+    );
+    try testing.expectEqual(
+        @as(i64, 0),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM order_status_history WHERE order_id = ?1;", &.{.{ .integer = order.id }}),
+    );
+}
+
 test "the tax is worked out line by line, from the product's own slab" {
     var harness = try seeded(testing.allocator);
     defer harness.deinit();
@@ -4108,6 +4151,41 @@ test "a plate does not land on a paid table" {
         "SELECT COUNT(*) AS n FROM op_log WHERE entity_table = 'order';",
         &.{},
     ));
+}
+
+test "a plate the bill refused burns no clock" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    harness.model.employee_id = 7;
+    harness.model.products = &.{
+        .{ .id = 1, .category_id = 1, .name = "Paneer Tikka", .food_label = "Veg", .price_minor = 24500, .product_type = .dish, .food_type = .veg, .tax_slab_id = 0, .stock_qty = 0, .active = true },
+    };
+    harness.send(.{ .add_to_cart = 1 });
+    harness.send(Msg{ .place_order = {} });
+    const order_id = harness.model.last_order_id;
+
+    repos.takePayment(&harness.model, harness.fx, repos.key_payment, order_id, domain.PaymentMode.card, 24500, 1_700_000_000_500);
+    harness.drain();
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const paid = try latestOp(&harness, arena_state.allocator());
+    var clock_buffer: [32]u8 = undefined;
+    const clock_text = try std.fmt.bufPrint(&clock_buffer, "{d}", .{paid.logical_clock});
+    const before_ops = try countRows(&harness, "SELECT COUNT(*) AS n FROM op_log;", &.{});
+
+    // The waiter is still holding the menu when the bill was paid. The
+    // database refuses the line and the op is refused with it - so the
+    // clock belongs to the payment and must stay where it was left.
+    repos.addOrderLine(&harness.model, harness.fx, repos.key_add_line, order_id, 1, "Paneer Tikka", 24500, 1_700_000_000_123);
+    harness.drain();
+
+    try testing.expectEqual(before_ops, try countRows(&harness, "SELECT COUNT(*) AS n FROM op_log;", &.{}));
+    try testing.expectEqual(
+        @as(i64, 1),
+        try countRows(&harness, "SELECT COUNT(*) AS n FROM sync_state WHERE key = 'clock' AND value = ?1;", &.{.{ .text = clock_text }}),
+    );
 }
 
 test "a waiter's plate does not drop a bill's discount" {

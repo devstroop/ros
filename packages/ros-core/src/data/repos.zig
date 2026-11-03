@@ -692,6 +692,10 @@ pub fn saveStockCount(
     };
     var count: usize = 2;
     if (op_ready) {
+        // Unconditional on purpose. The ledger row above either lands
+        // or aborts the transaction, and the op describes that row.
+        // The product update before it can match no row - a peer may
+        // not have the product yet - and the count is still a count.
         statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
         count += 1;
         statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
@@ -1923,6 +1927,13 @@ pub fn openOrderForTable(
     };
     var count: usize = 3;
     if (order_op.ready) {
+        // Unconditional on purpose. The order insert above either
+        // lands or aborts the transaction, so there is no write that
+        // matched nothing for the op to outlive - and the statement
+        // immediately before this one is the table update, which
+        // matches no row for a counter sale. Guarding the op on
+        // `changes()` here would lose the op for every order that
+        // has no table.
         statements[count] = .{ .sql = insert_op_log_sql, .params = &order_op.params };
         count += 1;
         statements[count] = .{ .sql = save_clock_sql, .params = &order_op.clock_params };
@@ -2115,13 +2126,15 @@ pub fn addOrderLine(
     };
     var count: usize = 3;
     if (order_op.ready) {
-        // The op should not outlive a line insert that did not land.
+        // Neither the op nor the clock should outlive a line insert
+        // that did not land: a plate the bill refused is not a write
+        // to tell a peer about, and not a clock value to burn.
         var line_op_params: [9]native_sdk.EffectDbValue = undefined;
         for (order_op.params, 0..) |param, index| line_op_params[index] = param;
         line_op_params[8] = .{ .integer = new_line_id };
         statements[count] = .{ .sql = insert_line_op_sql, .params = &line_op_params };
         count += 1;
-        statements[count] = .{ .sql = save_clock_sql, .params = &order_op.clock_params };
+        statements[count] = .{ .sql = save_clock_if_op_written_sql, .params = &order_op.clock_params };
         count += 1;
     }
 
@@ -3810,9 +3823,14 @@ pub fn setOrderStatus(
     };
 
     if (op_ready) {
-        statements[count] = .{ .sql = insert_op_log_sql, .params = &op_params };
+        // The move above is conditional on the order still being in
+        // the status the caller held, so the op is conditional with
+        // it. A status this order never held must not reach a peer,
+        // and a clock burned for a write that did not land leaves a
+        // hole in this device's own history.
+        statements[count] = .{ .sql = insert_op_if_written_sql, .params = &op_params };
         count += 1;
-        statements[count] = .{ .sql = save_clock_sql, .params = &clock_params };
+        statements[count] = .{ .sql = save_clock_if_op_written_sql, .params = &clock_params };
         count += 1;
     }
 
