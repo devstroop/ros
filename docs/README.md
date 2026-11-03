@@ -53,6 +53,12 @@ If you are new to the codebase, read in this order:
 5. [`plan/status.md`](plan/status.md) — what is actually built, screen by screen.
 6. [`plan/open-questions.md`](plan/open-questions.md) — what we do not know yet.
 
+If you are changing what an operator reads, read
+[`glossary.md`](glossary.md) first. The names the product uses for its own
+destinations are pinned by a test, so a screen that reaches for a retired
+word fails the suite rather than quietly shipping a second name for one
+thing.
+
 If you are changing a screen, also read
 [`architecture/06-ui-markup-and-theming.md`](architecture/06-ui-markup-and-theming.md)
 and the "add a screen" checklist in it.
@@ -106,16 +112,19 @@ wins until both are corrected. Status claims belong to
 See [`decisions/README.md`](decisions/README.md) for the index and the
 template. The short version:
 
-- Accepted: native Zig rewrite, pure model/update, no router, one binary
-  four roles, engine-owned SQLite + STRICT schema, integer money, markup
-  only.
-- Provisional: PIN hashing, clock-based order IDs.
-- Proposed (need an owner): printing sidecar, sync sidecar, desktop-first,
-  CSV-first interchange, three apps over TCP/IP.
-
-The last one proposes to supersede "one binary four roles". A proposal
-to supersede is not a supersession: the one-binary decision stands
-until the three-app one is accepted.
+- Accepted: native Zig rewrite, pure model/update, no router,
+  engine-owned SQLite + STRICT schema, integer money, markup only,
+  session-scoped navigation (ADR-0015), what a PIN is (ADR-0016), three
+  apps over TCP/IP (ADR-0017), the PIN hash is the employee's
+  (ADR-0018), cross-device order identity (ADR-0019), late join and
+  compaction (ADR-0020), the counter POS is the service app (ADR-0021),
+  a person chooses how they sign in (ADR-0022).
+- Superseded: one binary with four roles (ADR-0004, by ADR-0017);
+  clock-based order IDs (ADR-0013, by ADR-0014); salted SHA-256 PIN
+  hashing (ADR-0007, by ADR-0016); ADR-0016's installation-wide salt
+  (by ADR-0018) and its six-digits-only rule (in part, by ADR-0022).
+- Proposed (need an owner): printing sidecar, desktop-first, CSV-first
+  interchange.
 
 ### Plan
 
@@ -138,6 +147,12 @@ until the three-app one is accepted.
 | [apps/net-spike](../apps/net-spike/README.md) | The seam: a net thread and the loop thread, proved by running |
 | [plan/risks](plan/risks.md) | Risk register |
 | [plan/open-questions](plan/open-questions.md) | Known unknowns and unknown unknowns |
+
+### Operations
+
+| Document | Subject |
+|---|---|
+| [operations/release](operations/release.md) | Three macOS artifacts, signing/notarisation, the Local Network grant, clean-machine install and the per-app update cadence |
 
 ### Review
 
@@ -185,5 +200,6 @@ When a change lands, update:
 | New effect or message | `architecture/02`, `architecture/04` |
 | Role or permission change | `architecture/03`, add/extend the RBAC test |
 | New external process or protocol | `architecture/08` or `09`, `architecture/12` for the app-to-app protocol, ADR if the decision is new |
+| A release, packaging or update change | `operations/release`, `plan/phase-8`, `plan/status` |
 | A phase is finished | Its phase page, `plan/README`, `plan/status` |
 | A question is answered | `plan/open-questions`, possibly a new ADR |

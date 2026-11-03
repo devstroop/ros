@@ -218,7 +218,8 @@ test "the shell draws the waiter's rail and its home screen" {
     try testing.expectEqual(@as(usize, 1), model.nav_sections().len);
 
     const tree = try buildTree(arena, &model);
-    _ = try expectByText(tree.root, .text, "NAVIGATION");
+    // The rail is its destinations and the person, and nothing above them.
+    try testing.expect(findByText(tree.root, .text, "NAVIGATION") == null);
     _ = try expectByText(tree.root, .text, "Ravi");
     // The counter POS is this app's, and the floor is the way in.
     _ = try expectByText(tree.root, .button, "Counter sale");

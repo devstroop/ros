@@ -10,6 +10,7 @@ const native_sdk = @import("native_sdk");
 const canvas = native_sdk.canvas;
 
 pub const sources = [_]canvas.ui_markup.SourceFile{
+    .{ .path = "screens/parts.native", .source = @embedFile("screens/parts.native") },
     .{ .path = "screens/screen-session.native", .source = @embedFile("screens/screen-session.native") },
     .{ .path = "screens/screen-overview.native", .source = @embedFile("screens/screen-overview.native") },
     .{ .path = "screens/screen-sell.native", .source = @embedFile("screens/screen-sell.native") },

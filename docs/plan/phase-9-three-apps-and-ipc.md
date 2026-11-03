@@ -1,14 +1,15 @@
 # Phase 9 — Three apps over TCP/IP
 
-> **Status:** In progress. Slices 9.0–9.8 are merged; packaging (9.9)
-> remains.
+> **Status:** In progress. Slices 9.0–9.8 are merged; 9.9 packaging is
+> implemented (ad-hoc CI, identity/notarisation supported) and awaits
+> the clean-machine release sign-off.
 > **Decision:** [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md)
 > (Accepted 2026-10-24); the design is
 > [`architecture/12`](../architecture/12-three-apps-and-ipc.md). Bootstrap
 > and compaction are [ADR-0020](../decisions/0020-late-join-and-compaction.md).
 > **Estimate:** 42 engineer-days
 > **Depends on:** Phase 3 (the POS slice), Phase 5 (the admin
-> surfaces), ADR-0017 accepted, **and the PIN salt settled**
+> surfaces), ADR-0017 accepted, **and how a person signs in settled**
 > **Supersedes:** [Phase 6](phase-6-sync-sidecar.md) — the op log and the
 > transport are the same work, and the sidecar is not being built
 > **Exit criterion:** three apps on three machines converge, the kitchen
@@ -196,7 +197,8 @@ there is still one app to fall back on.
    is the recorded follow-up of an *accepted* decision (ADR-0016 says
    the per-employee salt is the fix, "when the sign-in can identify the
    employee before it hashes"), it stands on its own as a security
-   property - a cracked database gives up one PIN, not every PIN - and
+   property - two rows that hold the same code hold different hashes,
+   so nothing in the database is shared between them - and
    it makes the sign-in better for the same product: a person picks
    their own name instead of a role. Landed on its own, it is a
    security fix; held until the three apps are decided, it is a
@@ -210,7 +212,7 @@ there is still one app to fall back on.
    person is on the picker with the mode they work in, and the two
    device modes sign in by being the device. It landed on `develop` on
    its own in [#117](https://github.com/devstroop/ros/pull/117). See
-   [`architecture/12`](../architecture/12-three-apps-and-ipc.md#the-sign-in-problem).
+   [`architecture/12`](../architecture/12-three-apps-and-ipc.md#the-sign-in-problem-and-how-it-was-settled).
 
 **Done when:** one app, one loop thread, one net thread, one request
 answered, one test per direction; and the salt landed on `develop` in
@@ -347,7 +349,7 @@ executor: opening the stream, a line pulling the peer's ops, the
 pending-pull race, a failed stream counting and reopening, and a clean
 close not counting. The real SDK `.stream` fetch test reads the chunked
 NDJSON from a live `ros-core` server, so the wire and the line message
-are proven together. `scripts/verify-all.sh` is green: admin 154/154,
+are proven together. `scripts/verify-all.sh` is green: admin 213/213,
 kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43.
 
 **Done when:** an order placed on the service app appears on the kiosk
@@ -434,11 +436,34 @@ one.
 
 ### 9.9 — Packaging (4 days, overlaps Phase 8)
 
-Three signed artifacts, three installs, three updates. The Local
-Network permission prompt is part of the kiosk's install, by hand.
+**As built.** [`scripts/package.sh`](../../scripts/package.sh) builds the
+three apps in ReleaseFast and produces
+`dist/ros-admin-<version>-macos.dmg`,
+`dist/ros-service-<version>-macos.dmg` and
+`dist/ros-kiosk-<version>-macos.dmg`. It packages with
+`native package --signing none`, injects each app's own
+`NSLocalNetworkUsageDescription`, signs again (ad-hoc by default;
+Developer ID, hardened runtime and a secure timestamp when
+`ROS_SIGNING_IDENTITY` is set), optionally notarises and staples, then
+builds and verifies the DMG. `--check` re-verifies the checksums and the
+app inside each mounted DMG. CI's **Package (macOS)** job runs `--ci` and
+`--check` and uploads the three DMGs plus `checksums.txt`.
+
+The kiosk's text names the kitchen and the two peers it syncs with; the
+install checklist explains the manual Local Network grant. The update
+path per app - admin often, service deliberately, kiosk rarely - is
+written down in
+[`docs/operations/release.md`](../operations/release.md), together with
+the manual replace-and-backup flow and the SDK's signed-feed path. The
+bundle ids stay `com.devstroop.ros.*`: the design's `dev.eatery.v2.*`
+names were placeholders, and the id is the app-data and Local Network
+key. Each app has its own icon.
 
 **Done when:** three signed builds install on clean machines and the
-kiosk asks for the Local Network permission in its own words.
+kiosk asks for the Local Network permission in its own words. Packaging
+and the kiosk text are proven in CI; the clean-machine install is a
+manual release sign-off, and Developer ID/notarisation need the release
+credentials.
 
 ## Exit criterion
 
@@ -472,10 +497,13 @@ kiosk asks for the Local Network permission in its own words.
 
 ## Unknowns
 
-- **The PIN salt is decided**: per-employee, by
-  [#95](https://github.com/devstroop/ros/issues/95). It is the
-  first thing slice 9.0 implements, because the sign-in does not work
-  across the apps until it lands.
+- ~~Can a person sign in on a device that is not the admin's?~~ Yes,
+  and the protocol carries no secret to make it work. The salt is per
+  employee, so a replicated row verifies itself
+  ([#95](https://github.com/devstroop/ros/issues/95),
+  [ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)), and
+  the person chooses a PIN or a password with that row
+  ([ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)).
 - ~~Is the counter POS the `admin` app or the `service` app?~~ The
   service app; the waiter opens `pos`, `pos_cart` and `payments`
   ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
@@ -490,7 +518,7 @@ kiosk asks for the Local Network permission in its own words.
 - What happens to a device that is removed from the restaurant?
 - Must the Flutter app interoperate during a mixed rollout?
 
-The PIN salt, peer authentication and the remaining operational
+Peer authentication and the remaining operational
 questions are tracked in
 [`open-questions.md`](open-questions.md). See also
 [`architecture/12`](../architecture/12-three-apps-and-ipc.md) and

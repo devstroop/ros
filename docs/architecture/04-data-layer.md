@@ -115,9 +115,26 @@ The history and the current status can never disagree.
 
 ### Settings
 
-`repos.saveConfigValue` upserts `app_config(key, value, updated_at)`.
-This is used for the PIN salt today; the target also uses it for the
-device role and the current shift.
+`app_config(key, value, updated_at)` is written by two named statements,
+one per setting, because the two settings behave differently:
+
+- `repos.saveSalt` inserts the installation salt `ON CONFLICT DO NOTHING`
+  - the first salt wins. A bcrypt hash carries its own salt and so does
+  not depend on this one, but a digest written before bcrypt was
+  computed against the salt already in the row, and adopting a second
+  one would make that person's credential unverifiable.
+- `repos.saveTheme` upserts the device's palette and contrast
+  `ON CONFLICT DO UPDATE` - the last choice the operator made is the one
+  the next boot reads back.
+
+The device role and the current shift are targets for the same table.
+
+Not everything that looks like a setting is one. The restaurant's brand
+colour is a setting only in the sense that somebody chooses it: it
+belongs to the company rather than to the device, so it is a column on
+`company`, written by `repos.updateCompany` with the rest of the
+restaurant's details, and it reaches the other devices inside the
+reference document instead of by each machine deciding for itself.
 
 ### Not implemented
 
@@ -154,7 +171,7 @@ prevent.
 | Entity | Read | Decode | Write | UI |
 |---|---|---|---|---|
 | company | Yes | Yes | No | Dashboard header / labels |
-| app_config | Yes (salt) | Yes | Yes (upsert) | Login |
+| app_config | Yes (salt, look) | Yes | Yes (write-once salt, upsert look) | Login / Appearance |
 | product | Yes | Yes | No | POS menu |
 | product_category | Yes | Yes | No | POS filters |
 | dining_table | Yes | Yes | No | Floor board |
@@ -163,13 +180,13 @@ prevent.
 | orders | Yes | Yes | Yes (insert/update) | Orders, KDS, dashboard |
 | order_line | Yes | Yes | Yes (insert) | KDS summary |
 | order_status_history | No read | No | Yes (insert) | None |
-| auth | — | — | — | Login (SHA-256) |
+| auth | — | — | — | Login (bcrypt, verified in Zig against the row) |
 | everything else | No | No | No | None |
 
 ### Query behaviour
 
 - `orders_sql` selects `status <> 5` (not voided), newest first, limit
-  200. Completed orders remain in the list.
+  200. Closed orders remain in the list.
 - `order_lines_sql` selects lines for non-voided orders, so the kitchen
   summary has data without a second round trip.
 - `products_sql` selects active products ordered by name; the POS filters
@@ -202,7 +219,7 @@ itself. That is deliberate: the engine owns the connection.
 | Order line `id` | `local_order_id * 128 + line index` | Namespaced under the local order. A received line is remapped the same way; the wire line id is not trusted. |
 | Request key | device token + attempt id | `UNIQUE`; a retry is the same sale. |
 | `placed_at`, `created_at`, `updated_at` | epoch ms UTC | Integer, never a string |
-| `pin_salt` | 64 hex chars in `app_config` | Per installation |
+| `pin_salt` | 64 hex chars in `app_config` | Per installation, and per employee: `deriveSalt` mixes the employee's id into the sixteen bytes bcrypt salts with, so two people with the same secret never share a hash. The key literal is a shipped name. |
 
 The local identity is settled in
 [ADR-0014](../decisions/0014-order-identity.md); the cross-device half is
@@ -229,7 +246,8 @@ Current tests cover:
 
 - page decoding (NULL fallback, INTEGER, TEXT, end-of-page);
 - integer money in the cart;
-- PIN hashing determinism and salt divergence.
+- credential hashing: the same person and secret give the same hash, two
+  people with the same secret do not, and a legacy digest still verifies.
 
 Target tests (from the port plan) use
 `native_sdk.relational_store.Database.openMemoryMigrated(allocator, migrations)`

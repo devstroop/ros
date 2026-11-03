@@ -19,8 +19,11 @@
   <row padding="12" gap="8" cross="center" background="surface">
     <text size="lg" grow="1">{company_label}</text>
     <badge>{role_label}</badge>
-    <button size="sm" variant="ghost" on-press="toggle_theme">Theme</button>
+    <button size="sm" variant="ghost" icon="{theme_icon}" label="Switch theme" on-press="toggle_theme"/>
   </row>
+  <!-- A <row> has no border code path in the SDK - `border-color` on one
+       paints nothing - so the title bar's edge is an element of its own. -->
+  <separator/>
 
   <if test="{is_loading}">
     <row padding="6" gap="8" cross="center" background="surface">
@@ -71,12 +74,14 @@
   </if>
 
   <if test="{show_shell}">
-    <split grow="1" value="{rail_split}" on-resize="rail_resized">
+    <!-- `gap` on a split is the divider band's width, not padding around
+         the panes; the 9px default floats the hairline in empty space. -->
+    <split grow="1" gap="2" value="{rail_split}" on-resize="rail_resized">
       <column width="200" gap="2" padding="12" background="surface">
-        <text size="sm" foreground="text_muted">NAVIGATION</text>
         <for each="nav_sections" key="id" as="section">
           <list-item selected="{section.id == nav_section}" on-press="open_section:{section.id}">{section.label}</list-item>
         </for>
+        <spacer grow="1"/>
         <separator/>
         <text size="sm" foreground="text_muted">{operator_label}</text>
       </column>
@@ -96,7 +101,7 @@
           <if test="{screen_index == 14}"><use template="screen-order-detail"/></if>
           <if test="{screen_index == 15}"><use template="screen-payments"/></if>
           <if test="{screen_index == 16}"><use template="screen-customers"/></if>
-          <if test="{screen_index == 6}"><use template="screen-reset-pin"/></if>
+          <if test="{screen_index == 6}"><use template="screen-reset-credential"/></if>
           <if test="{screen_index == 37}"><use template="screen-waiter-tables"/></if>
           <if test="{screen_index == 38}"><use template="screen-waiter-menu"/></if>
           <if test="{screen_index == 39}"><use template="screen-waiter-cart"/></if>

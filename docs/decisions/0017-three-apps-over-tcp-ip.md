@@ -121,7 +121,7 @@ raw TCP.**
    The employee row is the one entry in that table that is not yet
    settled: a device can only verify a PIN if the row carries the salt
    it needs, and the salt is currently the **installation's**, which
-   each app owns separately. See [the sign-in problem](../architecture/12-three-apps-and-ipc.md#the-sign-in-problem).
+   each app owns separately. See [the sign-in problem](../architecture/12-three-apps-and-ipc.md#the-sign-in-problem-and-how-it-was-settled).
    The protocol does not change either way - the row replicates as
    reference data - but the row's contents do, and that has to be
    decided before the protocol is frozen.

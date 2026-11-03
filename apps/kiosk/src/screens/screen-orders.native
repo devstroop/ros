@@ -11,6 +11,8 @@
      model's live view of the `orders` table - a status change anywhere
      in the app lands here without a refresh. -->
 
+<import src="parts.native"/>
+
 <template name="screen-orders">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
@@ -38,17 +40,19 @@
           <card padding="12">
             <row gap="12" cross="center">
               <text grow="1" on-press="open_order:{order.id}">{order.order_no}</text>
-              <badge>{order.status_label}</badge>
+              <use template="status-badge" code="{order.status_code}" label="{order.status_label}"/>
               <text foreground="text_muted">{order.type_label}</text>
               <text>{currency_symbol}{fixed(order.total_minor / currency_divisor, currency_decimal_count)}</text>
               <!-- A closed ticket has taken its money. Offering the
-                   same two buttons again is a no-op on Advance and a
+                   same buttons again would be a no-op on the move and a
                    second charge on Pay. -->
               <if test="{order.paid}">
                 <badge>Paid</badge>
               </if>
               <else>
-                <button size="sm" variant="secondary" disabled="{advancing}" on-press="advance_order:{order.id}">Advance</button>
+                <if test="{order.advanceable}">
+                  <button size="sm" variant="secondary" disabled="{advancing}" on-press="advance_order:{order.id}">{order.advance_label}</button>
+                </if>
                 <button size="sm" variant="primary" on-press="pay_order:{order.id}">Pay</button>
               </else>
             </row>
@@ -67,7 +71,7 @@
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
       <text size="heading" grow="1">Order {selected_order_no}</text>
-      <badge>{selected_order_status}</badge>
+      <use template="status-badge" code="{selected_order_status_code}" label="{selected_order_status}"/>
       <button size="sm" variant="ghost" on-press="open_orders">Back</button>
     </row>
 
@@ -112,12 +116,15 @@
       <card padding="16" width="520">
         <column gap="8">
           <text size="sm" foreground="text_muted">VOID THIS ORDER</text>
-          <text-field
-            text="{void_reason}"
-            placeholder="Wrong table, customer left, ..."
-            label="Reason"
-            on-input="void_reason_edit"
-          />
+          <column gap="4">
+            <text size="sm" foreground="text_muted">Reason</text>
+            <text-field
+              text="{void_reason}"
+              placeholder="Wrong table, customer left, ..."
+              label="Reason"
+              on-input="void_reason_edit"
+            />
+          </column>
           <row gap="8">
             <spacer grow="1"/>
             <button variant="secondary" on-press="void_order:{selected_order_id}">Void order</button>

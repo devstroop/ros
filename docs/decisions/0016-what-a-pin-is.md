@@ -1,7 +1,10 @@
 # ADR-0016: What a PIN is in this app
 
-> **Status:** Superseded by [ADR-0018](0018-the-pin-hash-is-the-employees.md)
-> - decision 3 only. Decisions 1, 2, 4, 5 and 6 stand.
+> **Status:** Partly superseded - decision 3 by
+> [ADR-0018](0018-the-pin-hash-is-the-employees.md), decision 1 by
+> [ADR-0022](0022-a-person-chooses-how-they-sign-in.md), which also
+> closes the mask follow-up. Decisions 2, 4, 5 and 6 and the hash
+> itself stand.
 > **Date:** 2026-10-21
 > **Deciders:** Devstroop maintainers
 > **Related:** [ADR-0007](0007-pin-hashing.md) (superseded),
@@ -44,6 +47,9 @@ installation, and the till stops taking guesses.**
 1. **Six digits or more, digits only.** The setup and every other
    place a PIN is chosen refuse anything shorter, and say why. Four
    digits is ten thousand guesses; six is a hundred times more.
+   **Made PIN-only by [ADR-0022](0022-a-person-chooses-how-they-sign-in.md):**
+   a person may now choose a password instead, and then the rule is
+   eight characters, not six digits.
 2. **bcrypt, at a cost of 2^10 rounds.** The hash is bcrypt's own
    crypt string, so it carries its cost and its salt with it: the cost
    can be raised later, the old hashes still verify, and a hash written
@@ -87,6 +93,8 @@ installation, and the till stops taking guesses.**
   a determined guesser would do.
 - The PIN field is not masked. The SDK's text field has no password
   mode, and the gap is written down rather than worked around.
+  **Closed by [ADR-0022](0022-a-person-chooses-how-they-sign-in.md)**,
+  which masks it without one.
 - Six digits is still not a password. A PIN is a name on a list, and
   the app treats it as one: it identifies the cashier, it does not
   protect the money.
@@ -94,16 +102,27 @@ installation, and the till stops taking guesses.**
 ### Follow-ups
 
 - The mask, when the SDK grows one: a PIN typed on a screen in front
-  of a customer is a PIN that a customer knows.
+  of a customer is a PIN that a customer knows. **Closed by
+  [ADR-0022](0022-a-person-chooses-how-they-sign-in.md)** - the SDK
+  never grew one, and the mask turned out to be a bound value rather
+  than a field mode.
 - The per-employee salt, when the sign-in can identify the employee
   before it hashes: an employee picker makes the salt per employee
-  and the login one hash.
+  and the login one hash. **Closed by
+  [ADR-0018](0018-the-pin-hash-is-the-employees.md)**, which derives
+  the salt from the id and identifies the person before it hashes.
 - The failure counter, when the sign-in can be written to the
   database: a counter that a restart clears is a counter that a
-  restart is worth.
+  restart is worth. **Still open** - the counter is session-scoped,
+  and [ADR-0022](0022-a-person-chooses-how-they-sign-in.md) leaves it
+  alone.
 - The PIN policy for the employees an owner creates: the employee
   form has no PIN field yet, and the six-digit rule has to reach it
-  when it does.
+  when it does. **Reached, by
+  [ADR-0022](0022-a-person-chooses-how-they-sign-in.md):** the
+  credential is written on its own form now, and that form enforces
+  the rule for whichever kind is selected. A person saved without one
+  has an empty hash and cannot sign in until it is written.
 
 ## Alternatives considered
 

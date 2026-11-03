@@ -79,7 +79,8 @@ pub const Model = struct {
         "error_text",
         "company_id",
         "pending_screen",
-        "theme_dark",
+        "theme_palette",
+        "theme_contrast_high",
     };
 ```
 
@@ -132,8 +133,8 @@ randomness from an `Io` and `update` does not have one:
 // The installation salt. It is made here because this is the one
 // place with an `Io` (and therefore with randomness); `boot` writes
 // it to the database if this is a fresh installation.
-auth.makeSalt(init.io, &app_state.model.pin_salt_buf);
-app_state.model.pin_salt_len = app_state.model.pin_salt_buf.len;
+auth.makeSalt(init.io, &app_state.model.salt_buf);
+app_state.model.salt_len = app_state.model.salt_buf.len;
 ```
 
 ---
@@ -201,7 +202,7 @@ pub fn boot(model: *Model, fx: *Effects) void {
 Two things start here: the repeating clock timer (key `100`, arm
 `.tick`) that keeps `model.now_ms` fresh so the kitchen board can say
 how long a ticket has been waiting, and the first database read — the
-`app_config` row that holds the PIN salt.
+`app_config` row that holds the installation salt.
 
 ### 2.2 First frame
 
@@ -219,10 +220,12 @@ presents it. Two details matter:
 
   ```zig
   /// The tokens for the current model state. The runtime asks for these
-  /// on every rebuild, so flipping the theme is a model change and
+  /// on every rebuild, so changing the theme is a model change and
   /// nothing else.
-  pub fn tokens(model: *const Model) canvas.DesignTokens {
-      return if (model.theme_dark) dark() else light();
+  pub fn tokens(model: *const Model) DesignTokens {
+      const chosen = model.theme_palette;
+      if (!model.theme_contrast_high) return register(chosen);
+      return withColors(highContrast(register(chosen).colors, chosen.is_dark()));
   }
   ```
 
@@ -258,7 +261,7 @@ the text edit is `canvas.TextInputEvent`:
 
 ```zig
 pub const Msg = union(enum) {
-    /// The PIN check came back.
+    /// The credential check came back.
     login_checked: native_sdk.EffectDbResult,
     /// The order write came back.
     order_placed: native_sdk.EffectDbResult,
@@ -288,15 +291,15 @@ to be copied — into the model's bump buffers. That rule is the reason
 | `core/update.zig` | `update(model, msg, fx)` and `boot(model, fx)`: the only writers of model state, plus the navigation helper `go`, the cart helpers, and `nextStatus`. |
 | `core/navigation.zig` | The `Role` and `Screen` enums, `Screen.title()` / `Screen.nav_section()`, the role cards, the `NavSection` enum, and the fixed-capacity `Stack`. |
 | `core/rbac.zig` | The permission matrix: `allows(role, screen)`, `home(role)`, the per-role nav rails, and `section_screen(section)`. A pure function with a total test. |
-| `core/theme.zig` | The design tokens: the brand palette, the light and dark token sets, and `tokens(model)` which picks between them. |
+| `core/theme.zig` | The design tokens: the brand palette, the four registers (Light, Dark, Warm, Night), the high-contrast derivation, and `tokens(model)` which picks between them. |
 | `core/bump.zig` | `Bump(comptime capacity)`: the fixed-capacity allocator the model uses for its rows. `alloc`, `dupe`, `dupeC`, `allocSlice`, `reset`, `used`, `free`. |
 | `domain/models.zig` | The entities: `Product`, `Order`, `OrderLine`, `DiningTable`, `Customer`, `Employee`, `CartLine`, `TaxSlab`, `Shift`, and the enums `OrderType`, `OrderStatus`, `ProductType`, `FoodType`, `TableStatus`, `PaymentMode`. |
 | `data/repos.zig` | The data layer: the effect keys, the SQL constants, the loader functions (`loadProducts`, `loadOrders`, `loadAll`, …), the decoders (`decodeProducts`, `decodeOrders`, …), the writers (`saveOrder`, `setOrderStatus`, `saveConfigValue`) and the defensive `enumFromInt` cast. |
 | `data/page.zig` | The reader for the engine's row format: `Reader.init`, `readHeader`, `nextRow`, `indexOf`, `intOf`, `boolOf`, `textOf`, and the `Value` union. |
-| `data/auth.zig` | PIN hashing: `hashPin`, `makeSalt`, `equal`, and `hex_len`. Pure — no clock, no allocation, no effects. |
-| `schema/0001..0017_*.sql` | The database: seventeen migrations, 46 tables, every one `STRICT`. |
-| `schema/migrations.lock.json` | The migration authority: version 17, seventeen per-file hashes, and a `schema_hash`. |
-| `screens/*.native` | Nine screen templates: setup, role picker, login, dashboard, POS, orders, confirmation, tables, kitchen. |
+| `data/auth.zig` | Credential hashing: `hashCredential`, `verifyCredential`, `isLegacy`, `legacyHash`, `makeSalt`, and the per-kind length rules. bcrypt, salted per installation and per employee. Pure — no clock, no allocation, no effects; slow on purpose. |
+| `schema/0001..0020_*.sql` | The database: twenty migrations, 46 tables, every one `STRICT`. |
+| `schema/migrations.lock.json` | The migration authority: version 20, twenty per-file hashes, and a `schema_hash`. |
+| `screens/*.native` | Ten screen files and `parts.native`, 53 templates: the walk-through and wizard, the picker of modes and of people, the pad and the password field, dashboard, POS, orders, confirmation, floor, kitchen, the people list and its forms, settings. |
 | `tests.zig` | The rules the app must not break. Twelve tests, written as rules. |
 | `app.json` (in `apps/admin/`) | The manifest: identity, permissions, capabilities (`sqlite` among them), the shell window and its GPU surface, and the navigation policy. |
 

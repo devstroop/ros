@@ -114,8 +114,8 @@ pub fn main(init: std.process.Init) !void {
     // The installation salt. It is made here because this is the one
     // place with an `Io` (and therefore with randomness); `boot` writes
     // it to the database if this is a fresh installation.
-    auth.makeSalt(init.io, &app_state.model.pin_salt_buf);
-    app_state.model.pin_salt_len = app_state.model.pin_salt_buf.len;
+    auth.makeSalt(init.io, &app_state.model.salt_buf);
+    app_state.model.salt_len = app_state.model.salt_buf.len;
 
     // This installation's token. It names the device in the request
     // keys it makes, so two devices cannot mistake each other's sale

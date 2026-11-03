@@ -11,8 +11,8 @@
 
 A restaurant runs a service on Restaurant OS when:
 
-1. an owner installs it, creates a company, an admin PIN, a menu and a
-   floor;
+1. an owner installs it, creates a company, an admin credential, a menu
+   and a floor;
 2. a cashier takes an order, takes payment and prints a receipt;
 3. the kitchen sees the ticket and advances it;
 4. the customer display shows the order;
@@ -29,7 +29,7 @@ an exit criterion that can be checked rather than asserted.
 
 | Track | Branch | Scope | Done when |
 |---|---|---|---|
-| **Money** | `feat/money` | Tax and discount arithmetic, the order identifier, idempotent writes, a payment that cannot be taken twice, a PIN that is not a fast digest over four digits | A bill is right for a taxed restaurant, and an order cannot complete unpaid |
+| **Money** | `feat/money` | Tax and discount arithmetic, the order identifier, idempotent writes, a payment that cannot be taken twice, a credential that is not a fast digest over four digits | A bill is right for a taxed restaurant, and an order cannot complete unpaid |
 | **Back office** | `feat/back-office` | The operator's surfaces: the catalogue, the people, the customers, the stock, the floor, and the writes behind them | Every entity in the schema can be written, and every screen that shows one can edit it |
 | **Reports** | `feat/reports` | Z and X reports, the tax report, item mix, CSV export, the audit trail | A report is a query, not a description of a query |
 | **Sync** | `feat/three-apps` | The split into three apps, the TCP/IP protocol between them, and the op log that carries state across devices | Three apps on three devices converge, and the kitchen keeps cooking while the admin app is closed |
@@ -208,7 +208,7 @@ everybody's memory.
 | Derived values are methods | A stored number that could be computed drifts from its inputs |
 | Permissions are a pure function | A permission check you cannot test is not a permission check |
 | Migrations are append-only | The lock file is the authority for what has shipped |
-| PINs are salted and hashed | v1 stored them in the clear |
+| A credential is a slow hash, salted per person | v1 stored PINs in the clear |
 
 ## Related
 

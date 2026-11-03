@@ -19,8 +19,8 @@ silently.
 
 A restaurant runs a service on Restaurant OS when:
 
-1. an owner installs it, creates a company, an admin PIN, a menu and a
-   floor;
+1. an owner installs it, creates a company, an admin credential, a menu
+   and a floor;
 2. a cashier takes an order, takes payment and prints a receipt;
 3. the kitchen sees the ticket and advances it;
 4. the customer display shows the order;
@@ -39,12 +39,13 @@ Everything else is a prerequisite for one of those six, or it is later.
 | [3](#phase-3--the-waiter-and-kiosk-surfaces) | The waiter and kiosk surfaces | The waiter and the two kiosks are usable on their own | Not started | — |
 | [4](#phase-4--sync-sidecar) | Sync sidecar | Two devices converge over a LAN with no cloud | Scaffolded | **Long pole** |
 | [5](#phase-5--printing-sidecar) | Printing sidecar | Receipts and kitchen tickets print on a real device | Scaffolded | **Long pole** |
-| [6](#phase-6--packaging-and-cutover) | Packaging and cutover | A signed build installs on a clean machine and runs a service | Not started | — |
+| [6](#phase-6--packaging-and-cutover) | Packaging and cutover | A signed build installs on a clean machine and runs a service | Started (three macOS artifacts package and verify in CI; the clean-machine release remains) | — |
 
 Phase 4 and Phase 5 are the long poles: each needs a second program, a
-device integration the SDK does not have, and a packaging story that does
-not exist yet. They must be *started* inside Phase 1, not scheduled after
-Phase 3. The detail is in the dependency graph below.
+device integration the SDK does not have, and a packaging story that is
+only partly in place (macOS first; Linux/Windows and the release
+credentials remain). They must be *started* inside Phase 1, not scheduled
+after Phase 3. The detail is in the dependency graph below.
 
 ## Dependency graph
 
@@ -112,7 +113,8 @@ rules.
 
 - [x] `cd apps/admin && native check` is clean.
 - [x] `cd apps/admin && native test` is green.
-- [x] A role can be picked, a PIN accepted, a dashboard rendered.
+- [x] A person can be picked, a credential accepted, a dashboard
+      rendered.
 - [x] An order can be placed and lands in `orders` and `order_line` in one
       transaction.
 - [x] A ticket can be advanced and `order_status_history` is written in the
@@ -296,8 +298,9 @@ PLANNED), each imported by the screens that use it and listed in
       instead, because they are shown before anybody is signed in and the
       shell is not drawn yet.
 - [x] A fresh install can be driven from the role picker to a signed-in
-      admin with a company, an admin PIN, one category, one product and one
-      table — all created through the app, with no external seeding. The
+      admin with a company, an admin credential, one category, one
+      product and one table — all created through the app, with no
+      external seeding. The
       walk-through is the way in now, and the quick setup is the other.
 - [x] Every admin screen is inside the 1024-widget budget. The criterion
       says `native automate snapshot`, which needs a running app; the
@@ -372,8 +375,8 @@ avoided, and how a shared session is scoped. The answers go into
 - [ ] `cd apps/admin && native check` is clean and `native test` is green.
 - [ ] The waiter can open a table, add a product with a modifier, place the
       order, and see it on the order list.
-- [ ] The customer display shows the placed order and its status without a
-      PIN.
+- [ ] The customer display shows the placed order and its status without
+      a credential.
 - [ ] The kitchen board shows a ticket, advances it, and the customer
       display reflects the new status on the next rebuild.
 - [ ] A kiosk device restarts and comes up on its own board, not on the
@@ -387,7 +390,7 @@ avoided, and how a shared session is scoped. The answers go into
 
 | Risk | Mitigation |
 |---|---|
-| A kiosk with no PIN is unattended and can be walked up to | The kiosk permission list is narrow by construction; the display board shows nothing an attacker would want, and the KDS shows no money |
+| A kiosk with no credential is unattended and can be walked up to | The kiosk permission list is narrow by construction; the display board shows nothing an attacker would want, and the KDS shows no money |
 | The waiter and the admin want different cart semantics from the same `Model.cart` | The cart is session state in the model and one machine runs one session at a time; the multi-window decision in this phase has to say what happens when it does not |
 | The display board has to be readable from across a room | A dedicated template with a large type size, and a widget budget that leaves room for a 4-column grid at 1920x1080 |
 

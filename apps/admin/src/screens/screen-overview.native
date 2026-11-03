@@ -9,6 +9,8 @@
      numbers, the open orders, and the shortcuts an owner reaches for.
      Every number is a derived binding - the dashboard stores nothing. -->
 
+<import src="parts.native"/>
+
 <template name="screen-dashboard">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
@@ -46,7 +48,7 @@
     <row gap="8">
       <button variant="primary" on-press="open_pos">New order</button>
       <button variant="secondary" on-press="open_orders">Orders</button>
-      <button variant="secondary" on-press="open_tables">Floor</button>
+      <button variant="secondary" on-press="open_tables">Dining</button>
       <spacer grow="1"/>
       <button variant="ghost" on-press="sign_out">Sign out</button>
     </row>
@@ -74,7 +76,7 @@
         <for each="orders" key="id" as="order">
           <row background="surface" radius="md" padding="8" gap="8" cross="center">
             <text grow="1">{order.order_no}</text>
-            <badge>{order.status_label}</badge>
+            <use template="status-badge" code="{order.status_code}" label="{order.status_label}"/>
             <text>{currency_symbol}{fixed(order.total_minor / currency_divisor, currency_decimal_count)}</text>
           </row>
         </for>
