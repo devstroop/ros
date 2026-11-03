@@ -6,9 +6,11 @@
 > Packaging (9.9) remains. The decision is
 > [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md); the bootstrap
 > and compaction rules are
-> [ADR-0020](../decisions/0020-late-join-and-compaction.md); the delivery
-> order is [`plan/phase-9`](../plan/phase-9-three-apps-and-ipc.md).
-> **Last reviewed:** 2026-10-24, after the bootstrap/compaction slice landed.
+> [ADR-0020](../decisions/0020-late-join-and-compaction.md); the pairing
+> token that decides who may ask is
+> [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md);
+> the delivery order is [`plan/phase-9`](../plan/phase-9-three-apps-and-ipc.md).
+> **Last reviewed:** 2026-11-03, after the peer-pairing slice landed.
 
 ## What this page is
 
@@ -324,14 +326,22 @@ could speak without a second protocol.
 
 ### Endpoints
 
-| Endpoint | Direction | Body | Purpose |
-|---|---|---|---|
-| `GET /v1/hello` | peer → peer | — | The peer card: device id, role, protocol version, app version, local clock |
-| `GET /v1/ops?since=<cursor>` | peer → peer | NDJSON out | A page of durable ops the cursor does not already cover; `409` when the cursor is below the compacted floor |
-| `POST /v1/ops` | peer → peer | NDJSON in | Ops this peer produced |
-| `GET /v1/reference?after=<version>` | admin → peer | NDJSON out | Admin-owned reference rows above a version |
-| `GET /v1/snapshot?after=<seq>` | peer → peer | NDJSON out | One page of a compacted base state, for a device that joins late or fell below the floor |
-| `GET /v1/events` | peer → peer | NDJSON out | A long-lived stream of push notifications |
+| Endpoint | Direction | Body | Token | Purpose |
+|---|---|---|---|---|
+| `GET /v1/hello` | peer → peer | — | not asked | The peer card: device id, role, protocol version, app version, local clock |
+| `GET /v1/ops?since=<cursor>` | peer → peer | NDJSON out | required | A page of durable ops the cursor does not already cover; `409` when the cursor is below the compacted floor |
+| `POST /v1/ops` | peer → peer | NDJSON in | required | Ops this peer produced |
+| `GET /v1/reference?after=<version>` | admin → peer | NDJSON out | required | Admin-owned reference rows above a version |
+| `GET /v1/snapshot?after=<seq>` | peer → peer | NDJSON out | required | One page of a compacted base state, for a device that joins late or fell below the floor |
+| `GET /v1/events` | peer → peer | NDJSON out | required | A long-lived stream of push notifications |
+
+"Required" is the pairing token in the `x-ros-token` header: a request
+that cannot present it is answered `401` with a one-line error and none of
+the restaurant's bytes, and counted on the admin's Control centre. The two
+endpoints that carry no restaurant data -
+`/v1/hello` and the 404 for a path this build does not serve - answer
+anyone, so an unpaired device is still seen. See
+[ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md).
 
 `GET /v1/events` is the push path. The server holds the response open
 and writes a line as something happens; the client reads it with
@@ -660,33 +670,56 @@ separately replicated secret is the thing to avoid.
 
 ## Security
 
-The trust model is a trusted LAN, and it is a decision rather than an
-omission: a restaurant's devices sit on a network the owner controls,
-and the alternative - pairing, certificates, a key exchange - is a
-second product.
+The trust model is a trusted LAN **that a device has to prove it belongs
+to**. A restaurant's devices sit on a network the owner controls, and the
+alternative to that - certificates, a key exchange, an enrolment
+ceremony - is a second product. What the network alone does not tell you
+is which machine is in the restaurant, so the restaurant keeps one
+secret and every request that carries its data says it. That is
+[ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md).
 
 What that means concretely:
 
-- Every peer can read the reference data and the ops. A device that
-  joins the LAN is a device in the restaurant.
+- **One pairing token per installation**, held in `app_config` under
+  `pairing_token`, shown on the admin's Control centre, rotatable by
+  typing a new one there and setting it on every other device. It says
+  *which restaurant*, not *which machine* - per-device identity is
+  already on the wire, in the installation token that signs every op
+  this device writes.
+- **`x-ros-token` goes on every request for the restaurant's data** -
+  `GET` and `POST /v1/ops`, `GET /v1/reference`, `GET /v1/snapshot` and
+  the held-open `GET /v1/events` - and a request that cannot present it
+  gets `401` with a one-line error and none of the restaurant's bytes. The
+  events stream is checked in the listener
+  thread, which answers it without asking the app; the other four are
+  checked in `update`. A refusal is counted, and the count is on the
+  same screen, because an owner whose till was misconfigured needs to
+  see that something asked.
+- **`/v1/hello` answers anyone**, deliberately. It carries this
+  device's own name, role and port and nothing of the restaurant's, and
+  it is how a device that has not been paired yet becomes visible rather
+  than invisible. An earlier draft of this page said the shared secret
+  would be presented in `/v1/hello`; no client fetches it, so that
+  sentence described a handshake nobody performs and guarded nothing.
 - **A credential is never sent.** What a person taps or types never
-  leaves the device. What crosses the wire is the employee **row**,
-  hash included - and the hash carries its own salt, so the row is
-  self-verifying and the installation salt does not travel. That is the
-  property [the sign-in problem](#the-sign-in-problem-and-how-it-was-settled)
-  was settled to obtain, and it is what makes this claim accurate: a
-  peer receives a row it can check a credential against with nothing
-  else. A stolen database is still bcrypt at cost 2^10 per guess, and a
+  leaves the device. What crosses the wire is the employee **row**, hash
+  included, and a bcrypt hash carries its own salt, so the row verifies
+  itself. A stolen database is still bcrypt at cost 2^10 per guess, and a
   stolen reference document is no better.
+- **The installation salt does travel**, in the same document, under
+  `pin_salt` - not because the bcrypt rows need it, but because the
+  legacy `sha256(pin_salt || PIN)` rows do, and a device that joined
+  after those were written has nothing else to check them against. It
+  travels only to a paired peer now, and retiring it means retiring
+  those rows: see [`04-data-layer`](04-data-layer.md) and
+  [#134](https://github.com/devstroop/ros/issues/134).
 - Money is never trusted from a peer: an order's total is recomputed
   from its lines by the device that owns the order.
 - The wire is plain HTTP on the LAN. It is readable by anyone on the
-  wire, and that is a known, accepted cost.
-
-The follow-up is peer authentication: a shared secret in the admin app's
-settings, presented in `/v1/hello`. That is a small change to one
-endpoint and it should be decided before the first restaurant runs on
-this.
+  wire, and that is a known, accepted cost: whoever can read it can also
+  read the token. A network the owner does not control - a guest SSID, a
+  shared router - is the case TLS would answer, and it is a follow-up,
+  not a solved thing.
 
 ## The shared package
 

@@ -123,6 +123,27 @@ been rung up: it is one whose money has been taken.
   fixed hues the app falls back on are therefore the **house palette**,
   and never "the brand": in this product the brand is the restaurant's.
 
+## Devices and pairing
+
+- **Device** — a machine running one of the three apps. Named by its own
+  installation token, which is not shared and which signs every op it
+  writes.
+- **Pairing token** — the one word for the secret a device presents to
+  say *I am in this restaurant*. One per restaurant, not one per device,
+  and every device of it holds the same value: it is a Wi-Fi password,
+  and it is described as one. On the screen it is **Pairing**, in the
+  wire header it is `x-ros-token`, in `app_config` it is
+  `pairing_token`. Not "API key", not "shared secret", not "password" -
+  a password belongs to a person, and this belongs to the machines.
+- **Rotate** — what the Settings field does: it replaces the token on
+  this device, and every other device has to be told. The app never
+  invents one at the operator's tap; the value is typed, because the
+  model is not allowed randomness.
+- **Turned away** — what the Control centre says about a request that
+  could not present the token. Not "error", not "rejected": an operator
+  reading a count needs to know a device was refused, and that refusing
+  it was the point.
+
 ## Retired words
 
 Do not use these again in anything an operator reads: Sell, Floor,

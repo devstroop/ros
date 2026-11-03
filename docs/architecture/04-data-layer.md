@@ -2,7 +2,7 @@
 
 > **Status:** Partial — core reads and order writes work; most entities have
 > no write path or UI.
-> **Last verified:** 2026-10-21, by source review and the test suite.
+> **Last verified:** 2026-11-03, by source review and the test suite.
 > **Source:** `src/data/repos.zig`, `src/data/page.zig`, `src/data/auth.zig`,
 > `src/core/update.zig`, `src/domain/models.zig`.
 
@@ -115,8 +115,8 @@ The history and the current status can never disagree.
 
 ### Settings
 
-`app_config(key, value, updated_at)` is written by two named statements,
-one per setting, because the two settings behave differently:
+`app_config(key, value, updated_at)` is written by named statements, one
+per setting, because the settings do not behave the same way:
 
 - `repos.saveSalt` inserts the installation salt `ON CONFLICT DO NOTHING`
   - the first salt wins. A bcrypt hash carries its own salt and so does
@@ -126,6 +126,15 @@ one per setting, because the two settings behave differently:
 - `repos.saveTheme` upserts the device's palette and contrast
   `ON CONFLICT DO UPDATE` - the last choice the operator made is the one
   the next boot reads back.
+- `repos.savePairing` and `repos.setPairing` write the pairing token -
+  the first with `ON CONFLICT DO NOTHING`, the second with `DO UPDATE`.
+  Two statements for one key because there are two different questions:
+  *has this installation ever been given a token?* (seed it and keep the
+  seed), and *has an operator just changed it?* (replace it). Boot seeds
+  the value in `main`, where randomness lives, stores it write-once, and
+  on any later start reads the stored row over the seed - so a stale
+  `ROS_NET_TOKEN` cannot split a restaurant in two
+  ([ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md)).
 
 The device role and the current shift are targets for the same table.
 
@@ -171,7 +180,7 @@ prevent.
 | Entity | Read | Decode | Write | UI |
 |---|---|---|---|---|
 | company | Yes | Yes | No | Dashboard header / labels |
-| app_config | Yes (salt, look) | Yes | Yes (write-once salt, upsert look) | Login / Appearance |
+| app_config | Yes (salt, look, pairing) | Yes | Yes (write-once salt and token, upsert look and token) | Login / Appearance / Control centre |
 | product | Yes | Yes | No | POS menu |
 | product_category | Yes | Yes | No | POS filters |
 | dining_table | Yes | Yes | No | Floor board |
@@ -191,8 +200,11 @@ prevent.
   summary has data without a second round trip.
 - `products_sql` selects active products ordered by name; the POS filters
   by category and search in the model, not in SQL.
-- `config_sql` is hard-coded to `key = 'pin_salt'`. A generic config read
-  is a small future refactor.
+- `config_sql` is hard-coded to `key = 'pin_salt'`, and `pairing_sql` is
+  hard-coded to `key = 'pairing_token'`: one read per setting rather than
+  one generic read of the whole table, which is why boot asks for the
+  salt, the look and the token separately. A generic config read is a
+  small future refactor.
 - `company_sql` has `LIMIT 1`; one company per database is a schema rule,
   not just a UI choice.
 - `loadAll` omits `loadCustomers` and `loadConfig`. Customers are loaded
@@ -220,6 +232,7 @@ itself. That is deliberate: the engine owns the connection.
 | Request key | device token + attempt id | `UNIQUE`; a retry is the same sale. |
 | `placed_at`, `created_at`, `updated_at` | epoch ms UTC | Integer, never a string |
 | `pin_salt` | 64 hex chars in `app_config` | Per installation, and per employee: `deriveSalt` mixes the employee's id into the sixteen bytes bcrypt salts with, so two people with the same secret never share a hash. The key literal is a shipped name. |
+| `pairing_token` | up to 64 chars in `app_config` | Per installation and *shared by every device of it*: it says which restaurant a request belongs to, not which machine, and it is the `x-ros-token` a peer has to present for the reference document, the op log or a snapshot. Seeded in `main` (the one place with randomness) or by `ROS_NET_TOKEN`, stored write-once, rotated by an operator typing a new one on the admin's Control centre. A device's secret is on a screen on purpose; a person's is not, and `view_unbound` says so ([ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md)) |
 
 The local identity is settled in
 [ADR-0014](../decisions/0014-order-identity.md); the cross-device half is

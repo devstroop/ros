@@ -429,8 +429,13 @@ cloud and no account.
       order is still written, and the ops queue in `op_log`.
 - [ ] `op_log` does not grow without bound: a pruning policy runs, and the
       rows it keeps are the ones a peer still needs.
-- [ ] The peer authentication decision is written down and either
+- [x] The peer authentication decision is written down and either
       implemented or recorded as an accepted risk with an owner.
+      Written and implemented in-app by
+      [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md)
+      ([#134](https://github.com/devstroop/ros/issues/134)); the part of
+      it that is still a risk - one token per restaurant, no TLS, no
+      per-device revocation - is SEC9.
 
 **Risks.**
 

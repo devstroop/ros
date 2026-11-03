@@ -53,6 +53,11 @@ pub fn boot(model: *Model, fx: *Effects) void {
     // It is a preference rather than a record, so a database that does
     // not have it is not an error: the device draws its default.
     repos.loadTheme(model, fx);
+    // The pairing token, read with the other settings and for the same
+    // reason the salt is read at boot: the wire is already listening, and
+    // the value it checks a peer against has to be in hand before the
+    // first request, not after it.
+    repos.loadPairing(model, fx);
     repos.loadCompany(model, fx);
     // The people who work here, because the picker asks who is using
     // the device. A person signs in; a device signs in by being the
@@ -550,6 +555,28 @@ fn saveCompany(model: *Model, fx: *Effects) void {
         std.mem.trim(u8, model.form_tax_buf.text(), " "),
         brand,
     );
+}
+
+/// Rotate the device's pairing token.
+///
+/// The typed value becomes the truth the moment it is saved: the thread
+/// is handed it before the write is asked for, because a peer that has
+/// already been told the new token should not be refused while the
+/// database catches up. The write is an UPDATE, so the first rotation
+/// replaces whatever boot seeded.
+fn savePairing(model: *Model, fx: *Effects) void {
+    const token = std.mem.trim(u8, model.pairing_entry.text(), " ");
+    if (token.len == 0) {
+        model.error_text = "A token of spaces pairs nobody";
+        return;
+    }
+    const copied = model.pairing_buf[0..];
+    @memcpy(copied[0..token.len], token);
+    model.pairing_len = token.len;
+    net_bridge.sharePairing(model);
+    model.pairing_entry.clear();
+    model.error_text = "";
+    repos.setPairing(fx, model.pairing(), fx.wallMs());
 }
 
 /// Take the payment for the order that was just placed and close it.
@@ -2131,6 +2158,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.loadCompany(model, fx);
         },
 
+        // --------------------------------------------------------- pairing
+
+        .pairing_edit => |event| model.pairing_entry.apply(event),
+
+        .save_pairing => savePairing(model, fx),
+
         // -------------------------------------------------- the kitchen board
 
         .refresh_orders => |timer| {
@@ -2461,6 +2494,51 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // land means only that the next boot puts the device back.
             if (result.outcome == .ok) return;
             model.error_text = "The look of this device could not be saved";
+        },
+
+        .pairing_loaded => |result| {
+            // A read that failed leaves whatever this device came up with
+            // in place. A device that cannot ask its database is still a
+            // device its own peers can reach, and the count of requests
+            // turned away is the sign that something is off - not a
+            // banner, because nothing the operator can do fixes a database
+            // that will not answer.
+            if (result.outcome != .ok) return;
+            if (result.kind != .page) return;
+            var reader = page.Reader.init(result.bytes);
+            var values: [page.max_columns]page.Value = undefined;
+            var stored: []const u8 = "";
+            if (reader.readHeader() and reader.nextRow(&values)) {
+                stored = reader.textOf(&values, "value");
+            }
+            if (stored.len == 0) {
+                // The database has no token of its own. This device's
+                // value - the one it was given, or the one it made at boot
+                // - becomes the restaurant's, and is stored where a peer
+                // started from the same database will read it back.
+                net_bridge.sharePairing(model);
+                repos.savePairing(fx, model.pairing(), fx.wallMs());
+                return;
+            }
+            // The database's value is the one the wire checks: it is the
+            // value the other devices were handed. A token this device
+            // made for itself steps aside for it, exactly as a provisional
+            // salt does.
+            const copied = model.pairing_buf[0..];
+            const length = @min(stored.len, copied.len);
+            @memcpy(copied[0..length], stored[0..length]);
+            model.pairing_len = length;
+            net_bridge.sharePairing(model);
+        },
+
+        .pairing_saved => |result| {
+            // The device is already using this token, on both halves of
+            // the wire. A write that did not land means the next boot puts
+            // the device back to the value the database holds - and the
+            // peers that were handed the new one stop being recognised,
+            // which the count of refusals will say.
+            if (result.outcome == .ok) return;
+            model.error_text = "The pairing token could not be stored";
         },
 
         .company_loaded => |result| {

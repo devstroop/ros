@@ -33,6 +33,7 @@ This project follows a lightweight MADR-style format.
 | [0020](0020-late-join-and-compaction.md) | Late join, snapshots and log compaction | Accepted |
 | [0021](0021-counter-pos-is-the-service-app.md) | The counter POS is the service app | Accepted |
 | [0022](0022-a-person-chooses-how-they-sign-in.md) | A person chooses how they sign in | Accepted |
+| [0023](0023-a-peer-presents-a-shared-device-token.md) | A peer presents a shared device token | Accepted |
 
 ADR-0017 was accepted on 2026-10-24. It supersedes ADR-0004 (four
 roles in one binary) and revises ADR-0009 (the op-log sidecar); the op
@@ -41,6 +42,14 @@ log stays, and the apps carry the transport themselves.
 ADR-0022 was accepted on 2026-10-31. It partially supersedes ADR-0016:
 the six-digit rule is now the rule for a PIN, and a person may choose a
 password instead. The hash, the cost and the lockout are unchanged.
+
+ADR-0023 was accepted on 2026-11-03. It settles the peer-authentication
+half of ADR-0017 that was left open: a shared device token in a header
+on every request that carries the restaurant's data. It corrects the
+`/v1/hello` wording in [`architecture/12`](../architecture/12-three-apps-and-ipc.md),
+which described a handshake no client performs, and its claim that the
+installation salt does not travel, which the reference document has
+never honoured.
 
 ## Drafts
 
