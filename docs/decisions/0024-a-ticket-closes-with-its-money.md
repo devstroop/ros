@@ -189,7 +189,8 @@ wire - unless a `payment` row is already behind the order.
   two statements, in the apply path, for an `order` row that lands
   `completed` with nothing paid. It has to decide whether to reopen the
   row or to refuse the ticket, and either answer is a bigger claim than
-  this one.
+  this one. Opened as
+  [#155](https://github.com/devstroop/ros/issues/155).
 
 ## Alternatives considered
 
