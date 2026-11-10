@@ -817,6 +817,10 @@ pub const Model = struct {
     report_discount_field: i64 = 0,
     /// The day's net, in minor units.
     report_net_field: i64 = 0,
+    /// The money standing against the day's orders, in minor units. It
+    /// is a second column of the same query because it is a second fact:
+    /// an open ticket is billed and unbought.
+    report_taken_field: i64 = 0,
     /// True while a payment is on its way to the database. The view
     /// binds it: the button that takes the money is disabled while it
     /// holds, so a second tap cannot take the money twice.
@@ -1848,6 +1852,21 @@ pub const Model = struct {
     /// What the day's orders came to, tax and discounts taken off.
     pub fn report_net_minor(model: *const Model) i64 {
         return model.report_net_field;
+    }
+
+    /// The money actually taken for the day's orders. It is not the
+    /// figure above, and the gap between them is the point: an open
+    /// ticket is billed and unbought.
+    pub fn report_taken_minor(model: *const Model) i64 {
+        return model.report_taken_field;
+    }
+
+    /// What the day's tickets came to and nobody has paid for. A
+    /// payment row is the bill, not the tender - the change was never
+    /// revenue - so a closed ticket owes nothing and this cannot go
+    /// negative on money this app took.
+    pub fn report_owed_minor(model: *const Model) i64 {
+        return model.report_net_field - model.report_taken_field;
     }
 
     /// How the money came in, one row per mode.

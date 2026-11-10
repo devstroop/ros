@@ -1,7 +1,7 @@
 # Testing and quality
 
 > **Status:** Healthy — `scripts/verify-all.sh` is green: admin
-> **230/230** (74 handwritten rules, 155 against a migrated database, and
+> **232/232** (75 handwritten rules, 156 against a migrated database, and
 > one test block that imports both), service **10/10**, kiosk **8/8**,
 > `ros-core` **46/46**, net-spike **13/13**. CI adds a headless paint
 > check per app and the sale walkthrough. Still uncovered: the clock
@@ -31,8 +31,8 @@ A rule that lives only in a comment is a rule that breaks. The tests in
 
 ## Current tests
 
-`native test apps/admin` reports **230** for the admin target - 74 in
-`tests.zig`, 155 in `tests_data.zig`, one generated - and the service and
+`native test apps/admin` reports **232** for the admin target - 75 in
+`tests.zig`, 156 in `tests_data.zig`, one generated - and the service and
 kiosk targets add 10 and 8 of their own. The table below is the subset
 this page names, not the whole list.
 
@@ -59,6 +59,7 @@ this page names, not the whole list.
 | 19 | A wrong try is counted once | The lockout arithmetic, against a query's terminal result |
 | 20 | A price is read in the currency the till actually trades in | Money decimals come from the company; a finer fraction is refused, not rounded |
 | 21 | A tax slab is saved, and the rate the owner typed is the rate stored | A rate keeps the hundred of the percent, one fraction digit included |
+| 22 | The rail, the title bar and the markup say the same thing | One vocabulary list, pinned against three places a name is drawn. `retired_words` is the enforcement half: a caption the product stopped using fails the build wherever it reappears, and the day's figure joined the list when it turned out to be counting bills under a money word ([ADR-0025](../decisions/0025-a-days-report-counts-bills-and-money.md)) |
 
 How they run:
 
@@ -94,7 +95,7 @@ does) or bind an in-memory store.
 | Pure update | `native test` | Model transitions, RBAC, cart, status machine, the sign-in | Covered |
 | Markup build | `native test` | Every screen builds for its fixture and stays inside the widget budget | Covered |
 | Page decoder | `native test` | The page dialect and every repository load | Covered |
-| Relational integration | `native test` + `openMemoryMigrated` | Migrate, insert fixtures, run repo SQL, assert rows | Covered — 155 tests |
+| Relational integration | `native test` + `openMemoryMigrated` | Migrate, insert fixtures, run repo SQL, assert rows | Covered — 156 tests |
 | Business calculations | `native test` | Tax, discounts, cash tenders and change | Covered |
 | Split payment | — | One bill paid by more than one tender | Not a feature yet |
 | Live automation | `native automate` | Role picker → sign-in → sale → KDS advance, node budget, non-blank GPU | In CI (`smoke`, `sale-smoke`) |

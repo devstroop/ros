@@ -12,7 +12,7 @@
 > **Source of truth:** `src/app.native`, `src/screens/*.native`,
 > `src/app_sources.zig`, `src/core/theme.zig`, `src/core/model.zig`,
 > `src/core/msg.zig`, plus the Native SDK's
-> [native-ui authoring guide](../../../native-zig-showcase/docs/sdk/native-ui/SKILL.md).
+> [native-ui authoring guide](~/.local/lib/node_modules/@native-sdk/cli/skill-data/).
 > **Related:** [ADR-0010](../decisions/0010-markup-only-no-custom-paint.md),
 > [06-ui-markup-and-theming](06-ui-markup-and-theming.md).
 

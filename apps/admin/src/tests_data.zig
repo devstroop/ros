@@ -2863,11 +2863,13 @@ test "the report says what the day came to" {
     harness.model.now_ms = day + 3_600_000;
 
     // Three orders today, one of them voided, and a payment on two of
-    // them: one in cash, one by card.
+    // them: one in cash, one by card. The third is served and nobody has
+    // paid for it, which is the whole reason the screen asks two
+    // questions instead of one.
     harness.fx.dbExec(.{
         .key = 942,
         .statements = &.{.{
-            .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (1, 'A-1', 0, 3, 1, NULL, 7, 10000, 1000, 0, 11000, ?1, '', ?1, ?1), (2, 'A-2', 0, 3, 2, NULL, 7, 20000, 2000, 500, 21500, ?1, '', ?1, ?1), (3, 'A-3', 0, 5, 1, NULL, 7, 30000, 3000, 0, 33000, ?1, '', ?1, ?1);",
+            .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (1, 'A-1', 0, 3, 1, NULL, 7, 10000, 1000, 0, 11000, ?1, '', ?1, ?1), (2, 'A-2', 0, 3, 2, NULL, 7, 20000, 2000, 500, 21500, ?1, '', ?1, ?1), (3, 'A-3', 0, 5, 1, NULL, 7, 30000, 3000, 0, 33000, ?1, '', ?1, ?1), (4, 'A-4', 0, 3, 2, NULL, 7, 4000, 200, 0, 4200, ?1, '', ?1, ?1);",
             .params = &.{.{ .integer = day + 60_000 }},
         }},
         .on_result = Effects.dbMsg(.company_loaded),
@@ -2888,14 +2890,21 @@ test "the report says what the day came to" {
     harness.drain();
     try testing.expectEqual(nav.Screen.reports, harness.model.screen());
 
-    // Two orders: the voided one is not money and is not counted.
-    try testing.expectEqual(@as(i64, 2), harness.model.report_order_count());
-    try testing.expectEqual(@as(i64, 30000), harness.model.report_gross_minor());
-    try testing.expectEqual(@as(i64, 3000), harness.model.report_tax_minor());
+    // Three orders: the voided one is not money and is not counted.
+    try testing.expectEqual(@as(i64, 3), harness.model.report_order_count());
+    try testing.expectEqual(@as(i64, 34000), harness.model.report_gross_minor());
+    try testing.expectEqual(@as(i64, 3200), harness.model.report_tax_minor());
     try testing.expectEqual(@as(i64, 500), harness.model.report_discount_minor());
-    try testing.expectEqual(@as(i64, 32500), harness.model.report_net_minor());
 
-    // And the way the money came in, biggest first.
+    // What the tickets came to, and what was taken for them, are two
+    // figures, and the open ticket is the difference. A build that
+    // printed the first under the second's name said the drawer held
+    // 4200 it had never seen.
+    try testing.expectEqual(@as(i64, 36700), harness.model.report_net_minor());
+    try testing.expectEqual(@as(i64, 32500), harness.model.report_taken_minor());
+    try testing.expectEqual(@as(i64, 4200), harness.model.report_owed_minor());
+
+    // And how the money came in, biggest first, on the day it arrived.
     const modes = harness.model.report_modes();
     try testing.expectEqual(@as(usize, 2), modes.len);
     try testing.expectEqualStrings("Card", modes[0].mode_label);
@@ -2903,6 +2912,51 @@ test "the report says what the day came to" {
     try testing.expectEqual(@as(i64, 1), modes[0].count);
     try testing.expectEqualStrings("Cash", modes[1].mode_label);
     try testing.expectEqual(@as(i64, 11000), modes[1].amount_minor);
+}
+
+test "money received today for yesterday's ticket is in the drawer, not in the day's figures" {
+    var harness = try seeded(testing.allocator);
+    defer harness.deinit();
+
+    // The clock says what day it is, and the ticket is from the one
+    // before it. The money, though, came over this counter today.
+    const day = 1_700_000_000_000 / 86_400_000 * 86_400_000;
+    harness.model.now_ms = day + 3_600_000;
+
+    harness.fx.dbExec(.{
+        .key = 944,
+        .statements = &.{.{
+            .sql = "INSERT INTO orders (id, order_no, order_type, status, dining_table_id, customer_id, employee_id, subtotal_minor, tax_minor, discount_minor, total_minor, placed_at, notes, created_at, updated_at) VALUES (1, 'A-1', 0, 4, 1, NULL, 7, 9000, 900, 0, 9900, ?1, '', ?1, ?1);",
+            .params = &.{.{ .integer = day - 3_600_000 }},
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+    harness.fx.dbExec(.{
+        .key = 945,
+        .statements = &.{.{
+            .sql = "INSERT INTO payment (id, order_id, mode, amount_minor, reference, paid_at, created_at) VALUES (1, 1, 0, 9900, 'CASH-1', ?1, ?1);",
+            .params = &.{.{ .integer = day + 60_000 }},
+        }},
+        .on_result = Effects.dbMsg(.company_loaded),
+    });
+    harness.drain();
+
+    harness.send(Msg{ .open_reports = {} });
+    harness.drain();
+
+    // The tickets say nothing, because the ticket was yesterday's. Two
+    // figures on one screen that both claimed to be "the day" would have
+    // disagreed here with no way to tell which one was wrong.
+    try testing.expectEqual(@as(i64, 0), harness.model.report_order_count());
+    try testing.expectEqual(@as(i64, 0), harness.model.report_net_minor());
+    try testing.expectEqual(@as(i64, 0), harness.model.report_taken_minor());
+    try testing.expectEqual(@as(i64, 0), harness.model.report_owed_minor());
+
+    // The drawer says 9900, because the money arrived today.
+    const modes = harness.model.report_modes();
+    try testing.expectEqual(@as(usize, 1), modes.len);
+    try testing.expectEqual(@as(i64, 9900), modes[0].amount_minor);
 }
 
 test "the payments screen shows the money the restaurant took" {

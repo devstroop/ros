@@ -87,7 +87,7 @@ for app in $copies; do
 done
 
 if [ "$failed" -ne 0 ]; then
-  printf '%d shared file(s) drifted - edit %s and copy it across\n' "$failed" "$source_app" >&2
+  printf '%d shared file(s) drifted - edit %s and run scripts/sync-copies.sh\n' "$failed" "$source_app" >&2
   exit 1
 fi
 printf 'shared files agree\n'

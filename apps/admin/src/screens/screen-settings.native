@@ -432,7 +432,7 @@
     <text size="lg">Pairing</text>
     <card padding="16" width="480">
       <column gap="8">
-        <text foreground="text_muted">One token per restaurant. Every till, pad and kitchen display on the network presents it, and a device that cannot is turned away - it is the difference between a shared floor plan and a stranger reading the day's takings.</text>
+        <text foreground="text_muted">One token per restaurant. Every till, pad and kitchen display on the network presents it, and a device that cannot is turned away - it is the difference between a shared floor plan and a stranger reading the day's report.</text>
         <row gap="6" cross="center">
           <text size="sm" foreground="text_muted">This device presents</text>
           <badge>{pairing_token_text}</badge>

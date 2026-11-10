@@ -4,7 +4,7 @@
 > runtime lifecycle, the module map, the data flow, and the mechanics of
 > adding a screen.
 > **Source:** `apps/admin/src/**`, `apps/admin/app.json`, and the Native
-> SDK authoring guides in `native-zig-showcase/docs/sdk/`.
+> SDK authoring guides in `~/.local/lib/node_modules/@native-sdk/cli/skill-data/`.
 > **Method:** read from source. The Native SDK CLI (`native`) is not on the
 > PATH in this workspace, so no build or test run backs the claims here.
 
@@ -674,7 +674,7 @@ print sidecar prototypes are not part of the three-app tree.
 | The model must be default-constructible. | It is built as `.{}`. It cannot own a heap allocator, so its size is a compile-time fact and it uses `Bump`. | `src/core/bump.zig`, `src/main.zig` |
 | A `.native` file not in `app_sources.zig` does not exist. | The import closure is embedded; a missing entry fails loudly at the import site. | `src/app_sources.zig` |
 | `native` is not on the PATH in this workspace; the installed Zig is 0.17.0. | The SDK pins Zig 0.16.0 and 0.17 does not parse it. The statuses in this document come from source review, not from a run. | `README.md` |
-| Counts drift between prose and the tree. | The schema holds 46 tables across 21 migrations and the split suites hold 230 admin tests; the root README has been corrected to match, but any hand-written count will drift again. | `README.md`, `src/schema/`, `src/tests.zig`, `plan/status.md` |
+| Counts drift between prose and the tree. | The schema holds 46 tables across 21 migrations and the split suites hold 232 admin tests; the root README has been corrected to match, but any hand-written count will drift again. | `README.md`, `src/schema/`, `src/tests.zig`, `plan/status.md` |
 | The root `README.md` used to link `docs/architecture/sync.md`, `docs/plan/gaps-from-v1.md`, `docs/plan/roadmap.md`, `docs/plan/backlog.md` and `AGENTS.md`. | Those paths do not exist; the maintained pages are `08-sync.md`, `plan/README.md` and `plan/status.md`. The root README should point at them. | `README.md` |
 
 ---

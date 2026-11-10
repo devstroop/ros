@@ -11,15 +11,13 @@ marked `Planned` is a design, not code.
 
 > **Last full source review:** 2026-10-20
 > **Source of truth:** `apps/admin/` for behaviour, `docs/` for intent.
-> **Upstream analysis:** [`../../PORT-PLAN.md`](../../PORT-PLAN.md) — the
-> original Flutter-to-Native gap analysis. This documentation supersedes
-> it where the two disagree; the plan document is historical input.
+> **Upstream analysis:** the original Flutter-to-Native gap analysis
+> is not in this tree; this documentation is the source of truth.
 >
 > Statuses below were established by reading the source. The Native SDK
-> CLI (`native`) is not on this shell's PATH, so the test suite was not
-> re-run for this review. A built binary exists at
-> `apps/admin/zig-out/bin/ros`; it backs "it compiles", not "the tests
-> pass". When a status changes, update the page that owns the claim, not a
+> CLI (`native`) is installed and on PATH, and the built binaries are
+> `apps/{admin,service,kiosk}/zig-out/bin/ros-{admin,service,kiosk}`.
+> When a status changes, update the page that owns the claim, not a
 > status table in three places.
 
 ---
@@ -119,7 +117,8 @@ template. The short version:
   (ADR-0018), cross-device order identity (ADR-0019), late join and
   compaction (ADR-0020), the counter POS is the service app (ADR-0021),
   a person chooses how they sign in (ADR-0022), a peer presents a shared
-  device token (ADR-0023), a ticket closes with its money (ADR-0024).
+  device token (ADR-0023), a ticket closes with its money (ADR-0024), a
+  day's report counts bills and money as two figures (ADR-0025).
 - Superseded: one binary with four roles (ADR-0004, by ADR-0017);
   clock-based order IDs (ADR-0013, by ADR-0014); salted SHA-256 PIN
   hashing (ADR-0007, by ADR-0016); ADR-0016's installation-wide salt

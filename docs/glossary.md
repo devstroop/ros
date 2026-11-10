@@ -11,7 +11,7 @@ calling the till something else.
 
 | Word | What it is | Was called |
 |---|---|---|
-| **Dashboard** | The day at a glance: open orders, tables busy, takings. | Overview |
+| **Dashboard** | The day at a glance: open orders, tables busy, the shortcuts to everything else. | Overview |
 | **POS** | The till. Ring up a sale, take the money. | Sell, counter, till |
 | **Orders** | Every ticket the restaurant is still working, and the paid ones below it. | — |
 | **Dining** | The room: tables, their status, reservations, customers. | Floor, Dining tables |
@@ -59,7 +59,19 @@ behind ([ADR-0024](decisions/0024-a-ticket-closes-with-its-money.md)).
   the floor both call it an order; `Order 000001` is its number.
 - **Line** — one dish on an order.
 - **Tender** — the money handed over. **Payment** — the record that it
-  was taken. **Change** — what comes back.
+  was taken. **Change** — what comes back. The payment row is the bill,
+  not the tender: change was never revenue, and it is never in the row.
+- **Billed** — what the day's tickets came to, voided ones excluded. It is
+  not money: a served ticket nobody has paid for is in it.
+- **Taken** — the money standing against those same tickets. Billed and
+  taken are counted over one set of rows, by one query, so the difference
+  between them means something.
+- **Owed** — that difference: what the floor is still holding. It is a
+  subtraction and never a stored number, and it says how much, not which.
+- **Received today** — the drawer's own figure: money whose `paid_at`
+  falls in today, whatever day the ticket was opened. It is the one
+  number on the screen that is not about the day's tickets, and the
+  caption says so.
 - **Void** — an order that never happened. It is never deleted: the
   reason is written down.
 
@@ -153,9 +165,13 @@ behind ([ADR-0024](decisions/0024-a-ticket-closes-with-its-money.md)).
 
 Do not use these again in anything an operator reads: Sell, Floor,
 People, Catalog, Catalogue, System, Overview, Employees, Control center,
-counter, Advance, Pending, Preparing, Completed, and **Theme** as the
-name of a button - the control that changes the palette is a glyph with
-a name for the move, not a caption spelling the noun it changes.
+counter, Advance, Pending, Preparing, Completed, **TAKINGS** as the name
+of the day's figure, and **Theme** as the name of a button - the control
+that changes the palette is a glyph with a name for the move, not a
+caption spelling the noun it changes. The figure under that caption was
+`SUM(total_minor)` over the day's tickets, which is what the restaurant
+billed; a ticket served and unpaid sat in it, and an owner reading it as
+cash was told the drawer held money that had not arrived.
 
 Retiring a word is not a rename of the code. `Screen.sell`, the
 `employee` table, `OrderStatus.pending` and the status integers stay:

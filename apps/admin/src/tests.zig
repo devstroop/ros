@@ -311,13 +311,15 @@ test "the palette and the contrast the theme reads are the model's" {
 /// A word the product used for a destination or a ticket state and
 /// stopped using. `docs/glossary.md` is the list; this is the enforcement.
 /// "Advance" named the machine instead of the move, the state words are
-/// what the workflow engine called them, and "Theme" was the noun on the
+/// what the workflow engine called them, "Theme" was the noun on the
 /// title bar's palette control - a button that draws a glyph and names
-/// neither the move nor the theme it brings.
+/// neither the move nor the theme it brings - and "TAKINGS" sat over the
+/// sum of the day's tickets, which is what the restaurant billed and not
+/// what it collected.
 const retired_words = [_][]const u8{
     "Sell",      "Floor",     "People",         "Catalog", "Catalogue", "System",
     "Overview",  "Employees", "Control center", "Advance", "Pending",   "Preparing",
-    "Completed", "Theme",
+    "Completed", "Theme",     "TAKINGS",
 };
 
 fn expectNoRetiredWords(node: canvas.ui_markup.MarkupNode) !void {
@@ -2196,6 +2198,50 @@ test "every screen shows a landmark of its own" {
             std.debug.print("the screen {s} never showed \"{s}\"\n", .{ landmark.template, landmark.text });
             return error.NoLandmark;
         }
+    }
+}
+
+test "the day report tells what was billed from what was taken" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = main.initialModel();
+    model.needs_setup = false;
+    model.role_chosen = true;
+    model.signed_in = true;
+
+    // Three tickets, money on two of them. The figures are the ones the
+    // data test reads out of the database, put here so the screen's own
+    // words are what this test checks.
+    model.report_orders_field = 3;
+    model.report_net_field = 36700;
+    model.report_taken_field = 32500;
+    model.screen_index = screen_index_of("screen-reports");
+
+    const tree = try buildTree(arena, &model);
+
+    // Two captions, because there are two facts. A screen that printed
+    // the tickets under the money's name told the owner the drawer held
+    // four thousand two hundred it had never seen.
+    _ = try expectByText(tree.root, .text, "BILLED");
+    _ = try expectByText(tree.root, .text, "TAKEN");
+    _ = try expectByText(tree.root, .text, "OWED");
+
+    // And the drawer's breakdown says which clock it is on, because it
+    // is not the one the tickets use.
+    _ = try expectByText(tree.root, .text, "received today, by the day the money arrived");
+    try testing.expectEqual(@as(i64, 4200), model.report_owed_minor());
+
+    // The ledger next door must not borrow this screen's word. Its total
+    // is the sum of the rows it lists, over every day, and a second
+    // "TAKEN" on a second scope is the confusion this change removed.
+    model.screen_index = screen_index_of("screen-payments");
+    const ledger = try buildTree(arena, &model);
+    _ = try expectByText(ledger.root, .text, "LISTED");
+    if (findByText(ledger.root, .text, "TAKEN") != null) {
+        std.debug.print("the payments ledger shows TAKEN, which is the report's word for one day's tickets\n", .{});
+        return error.RenamedFigure;
     }
 }
 

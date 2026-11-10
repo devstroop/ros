@@ -219,6 +219,21 @@ prevent.
   summary has data without a second round trip.
 - `products_sql` selects active products ordered by name; the POS filters
   by category and search in the model, not in SQL.
+- `report_sql` answers two questions over one set of tickets: what the
+  day's non-voided tickets came to, and what stands paid against them.
+  The second is a correlated sum over `payment` in the same SELECT,
+  because the gap between the two figures is the number an owner acts
+  on - an open ticket is billed and unbought - and a second query would
+  have had to agree about which tickets are in the day.
+  `payment_one_per_order` makes each lookup a seek and each ticket's
+  taken amount one row at most. The screen's third figure, owed, is a
+  subtraction of the first two and is stored nowhere
+  ([ADR-0025](../decisions/0025-a-days-report-counts-bills-and-money.md)).
+- `report_modes_sql` is on a different clock: it selects on `paid_at`,
+  not `placed_at`, and says so in its caption. Money received today for
+  yesterday's ticket belongs to today's drawer and yesterday's billing,
+  and neither figure is wrong about it. Where the day ends is not decided
+  (#157, A19).
 - `config_sql` is hard-coded to `key = 'pin_salt'`, and `pairing_sql` is
   hard-coded to `key = 'pairing_token'`: one read per setting rather than
   one generic read of the whole table, which is why boot asks for the
