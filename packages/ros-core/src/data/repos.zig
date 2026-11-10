@@ -5320,3 +5320,25 @@ const reference_version_upsert_sql =
     \\INSERT INTO app_config (key, value, updated_at) VALUES ('reference_version', ?1, ?2)
     \\ON CONFLICT(key) DO UPDATE SET value = ?1, updated_at = ?2;
 ;
+
+pub fn recordRefund(model: *Model, fx: *Effects, order_id: i64, reason: []const u8, at: i64) void {
+    _ = model;
+    var params: [4]native_sdk.EffectDbValue = .{
+        .{ .integer = order_id },
+        .{ .text = reason },
+        .{ .integer = at },
+        .{ .integer = at },
+    };
+    const sql =
+        \\INSERT INTO refund (id, payment_id, order_id, amount_minor, reason, refunded_at, created_at)
+        \\SELECT (SELECT COALESCE(MAX(id), 0) + 1 FROM refund), p.id, ?1,
+        \\       -p.amount_minor, ?2, ?3, ?4
+        \\FROM payment p
+        \\WHERE p.order_id = ?1;
+    ;
+    fx.dbExec(.{
+        .key = key_write_order,
+        .statements = &.{.{ .sql = sql, .params = &params }},
+        .on_result = Effects.dbMsg(.refund_recorded),
+    });
+}

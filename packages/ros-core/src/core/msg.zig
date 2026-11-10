@@ -429,6 +429,7 @@ pub const Msg = union(enum) {
     advance_order: i64,
     /// The status write came back.
     order_status_saved: native_sdk.EffectDbResult,
+    refund_recorded: native_sdk.EffectDbResult,
 
     // ------------------------------------------------------------- the wire
 
@@ -599,6 +600,7 @@ pub const Msg = union(enum) {
         "db_failed",
         "order_placed",
         "order_status_saved",
+        "refund_recorded",
         "tick",
         "stations_loaded",
         "company_saved",
