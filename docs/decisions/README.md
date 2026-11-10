@@ -36,6 +36,7 @@ This project follows a lightweight MADR-style format.
 | [0023](0023-a-peer-presents-a-shared-device-token.md) | A peer presents a shared device token | Accepted |
 | [0024](0024-a-ticket-closes-with-its-money.md) | A ticket closes with its money | Accepted |
 | [0025](0025-a-days-report-counts-bills-and-money.md) | A day's report counts the bills and the money as two figures | Accepted |
+| [0026](0026-printing-via-tcp-and-spawn.md) | Printing via TCP :9100 in-process, ESC/POS, spool on failure | Accepted |
 
 ADR-0017 was accepted on 2026-10-24. It supersedes ADR-0004 (four
 roles in one binary) and revises ADR-0009 (the op-log sidecar); the op
