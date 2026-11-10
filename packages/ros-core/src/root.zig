@@ -28,6 +28,10 @@ pub const starter = @import("data/starter.zig");
 
 pub const models = @import("domain/models.zig");
 
+pub const print = struct {
+    pub const escpos = @import("print/escpos.zig");
+};
+
 /// The wire: the protocol vocabulary, the operation record and the
 /// vector cursor. Pure data and pure functions - the server and client
 /// that move them live above this layer.
@@ -47,6 +51,7 @@ pub const net = struct {
 };
 
 test {
+    _ = @import("print/escpos.zig");
     _ = @import("net/protocol.zig");
     _ = @import("net/cursor.zig");
     _ = @import("net/record.zig");
