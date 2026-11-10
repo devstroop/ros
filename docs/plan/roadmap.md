@@ -35,17 +35,18 @@ Everything else is a prerequisite for one of those six, or it is later.
 |---|---|---|---|---|
 | [0](#phase-0--foundation) | Foundation | The app model, the schema, the shell and the first sale exist | **Done** | — |
 | [1](#phase-1--data-layer-completion) | Data layer completion | Every entity has a read, a write and a test; the screens refresh themselves | Started | — |
-| [2](#phase-2--the-admin-back-office) | The admin back office | Every admin screen renders, and the operator can set the restaurant up | Not started | — |
-| [3](#phase-3--the-waiter-and-kiosk-surfaces) | The waiter and kiosk surfaces | The waiter and the two kiosks are usable on their own | Not started | — |
-| [4](#phase-4--sync-sidecar) | Sync sidecar | Two devices converge over a LAN with no cloud | Scaffolded | **Long pole** |
+| [2](#phase-2--the-admin-back-office) | The admin back office | Every admin screen renders, and the operator can set the restaurant up | Started | — |
+| [3](#phase-3--the-waiter-and-kiosk-surfaces) | The waiter and kiosk surfaces | The waiter and the two kiosks are usable on their own | Started | — |
+| [4](#phase-4--sync-sidecar) | Sync (in-process) | Two devices converge over a LAN with no cloud | Started | — |
 | [5](#phase-5--printing-sidecar) | Printing sidecar | Receipts and kitchen tickets print on a real device | Scaffolded | **Long pole** |
 | [6](#phase-6--packaging-and-cutover) | Packaging and cutover | A signed build installs on a clean machine and runs a service | Started (three macOS artifacts package and verify in CI; the clean-machine release remains) | — |
 
-Phase 4 and Phase 5 are the long poles: each needs a second program, a
-device integration the SDK does not have, and a packaging story that is
-only partly in place (macOS first; Linux/Windows and the release
-credentials remain). They must be *started* inside Phase 1, not scheduled
-after Phase 3. The detail is in the dependency graph below.
+Phase 5 is the long pole: it needs a second program, a device
+integration the SDK does not have, and a packaging story that is only
+partly in place (macOS first; Linux/Windows and the release credentials
+remain). Sync no longer is: ADR-0017 moved the socket in-process, so
+Phase 4 ships inside the apps. Both must be *started* inside Phase 1, not
+scheduled after Phase 3. The detail is in the dependency graph below.
 
 ## Dependency graph
 
