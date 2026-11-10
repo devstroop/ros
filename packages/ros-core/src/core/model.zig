@@ -692,6 +692,7 @@ pub const Model = struct {
     /// Why the operator is voiding the order being shown. A void with
     /// no reason is not an audit trail; the update refuses it.
     void_reason_buf: canvas.TextBuffer(96) = .{},
+    refund_pending: bool = false,
 
     // ------------------------------------------------- the settings data
 

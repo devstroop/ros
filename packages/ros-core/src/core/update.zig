@@ -2239,6 +2239,9 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.error_text = "Say why the order is being voided";
                 return;
             }
+            // A paid void owes the money back. The refund is recorded
+            // after the void lands, so a failed void never writes one.
+            model.refund_pending = order.paid;
             model.advance_order_id = order_id;
             model.voiding_order_id = order_id;
             model.busy = true;
@@ -2275,6 +2278,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.loadOrders(model, fx);
             net_bridge.notify();
             repos.maybeCompact(model, fx);
+            if (model.refund_pending) {
+                model.refund_pending = false;
+                const reason = std.mem.trim(u8, model.void_reason_buf.text(), " ");
+                repos.recordRefund(model, fx, model.voiding_order_id, reason, fx.wallMs());
+            }
         },
 
         // -------------------------------------------------------------- data
@@ -2608,6 +2616,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .toggle_theme => chooseTheme(model, fx, model.theme_palette.otherHalf(), model.theme_contrast_high),
         .set_palette => |code| chooseTheme(model, fx, model_mod.Palette.fromCode(code), model.theme_contrast_high),
         .toggle_contrast => chooseTheme(model, fx, model.theme_palette, !model.theme_contrast_high),
+
+        .refund_recorded => |result| {
+            if (result.outcome != .ok) {
+                model.error_text = "The void landed, but the refund could not be recorded";
+            }
+        },
 
         .tick => |timer| {
             if (timer.outcome != .fired) return;
