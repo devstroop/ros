@@ -283,6 +283,7 @@ pub const payments_sql =
     \\       p.reference, p.paid_at
     \\FROM payment p
     \\JOIN orders o ON o.id = p.order_id
+    \\WHERE o.status <> 5
     \\ORDER BY p.paid_at DESC
     \\LIMIT 200;
 ;
@@ -3986,7 +3987,7 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
         .sql =
         \\INSERT INTO void_log_entry (order_id, employee_id, reason, amount_minor, voided_at)
         \\SELECT ?1, ?2, ?3, (SELECT total_minor FROM orders WHERE id = ?1), ?4
-        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status < ?5);
+        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status <= ?5);
         ,
         .params = &log_params,
     };
@@ -4002,7 +4003,7 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
         .sql =
         \\INSERT INTO order_status_history (order_id, status, changed_at, changed_by)
         \\SELECT ?1, ?2, ?3, ?4
-        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status < ?5);
+        \\WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status <= ?5);
         ,
         .params = &history_params,
     };
@@ -4034,7 +4035,7 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
         \\    WHERE order_id = ?1 AND product_id = product.id
         \\      AND stock_taken = 1
         \\  )
-        \\  AND EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status < ?3);
+        \\  AND EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status <= ?3);
         ,
         .params = &stock_params,
     };
@@ -4046,7 +4047,7 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
         .{ .integer = completed },
     };
     statements[3] = .{
-        .sql = "UPDATE orders SET status = ?2, updated_at = ?3 WHERE id = ?1 AND status < ?4;",
+        .sql = "UPDATE orders SET status = ?2, updated_at = ?3 WHERE id = ?1 AND status <= ?4;",
         .params = &order_params,
     };
     var count: usize = 4;
