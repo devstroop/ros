@@ -31,6 +31,7 @@ pub const models = @import("domain/models.zig");
 pub const print = struct {
     pub const escpos = @import("print/escpos.zig");
     pub const tcp = @import("print/tcp.zig");
+    pub const spool = @import("print/spool.zig");
 };
 
 /// The wire: the protocol vocabulary, the operation record and the
@@ -53,6 +54,7 @@ pub const net = struct {
 
 test {
     _ = @import("print/escpos.zig");
+    _ = @import("print/spool.zig");
     _ = @import("print/tcp.zig");
     _ = @import("net/protocol.zig");
     _ = @import("net/cursor.zig");
