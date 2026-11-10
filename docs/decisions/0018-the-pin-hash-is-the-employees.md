@@ -140,17 +140,17 @@ employee's id, and the sign-in identifies the person before it hashes.**
 
 ## Evidence
 
-- `src/data/auth.zig`: `hashPin` and `deriveSalt` - the salt is
+- `packages/ros-core/src/data/auth.zig`: `hashPin` and `deriveSalt` - the salt is
   derived from the installation salt and the id.
-- `src/data/repos.zig`: `login_sql` asks for the employee the picker
+- `packages/ros-core/src/data/repos.zig`: `login_sql` asks for the employee the picker
   chose, and `first_employee_id` names the setup's employee once, for
   both the insert and the hash.
-- `src/core/update.zig`: `pick_employee` and `login_checked` - the
+- `packages/ros-core/src/core/update.zig`: `pick_employee` and `login_checked` - the
   person is chosen first, and the row's hash is verified against the
   PIN.
-- `src/tests.zig`: "two employees with the same PIN have different
+- `apps/admin/src/tests.zig`: "two employees with the same PIN have different
   hashes".
-- `src/tests_data.zig`: "the sign-in checks one person, not the whole
+- `apps/admin/src/tests_data.zig`: "the sign-in checks one person, not the whole
   staff list" - the sign-in makes no hash to look the person up.
 - The SDK has no randomness effect: `grep -n "pub fn random" src/runtime/effects.zig`
   finds nothing, and `update` has no `Io` to draw from.

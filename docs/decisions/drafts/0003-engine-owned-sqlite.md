@@ -77,7 +77,7 @@ replacement for v1's `ref.invalidate` and `FutureProvider` invalidation.
   is no way to override them from the app.
 - **Cost:** the row format is a fixed little-endian dialect with a hard
   limit of 64 columns per query (`page.max_columns`). The app has to carry
-  its own reader (`src/data/page.zig`) rather than use a library.
+  its own reader (`packages/ros-core/src/data/page.zig`) rather than use a library.
 - **Cost:** the page bytes are drain scratch — valid through the update
   that receives them, dead after it. Every value the model keeps has to be
   copied into a bump buffer, so the data layer is more verbose than a
@@ -94,7 +94,7 @@ replacement for v1's `ref.invalidate` and `FutureProvider` invalidation.
   semantics. There is no `BEGIN IMMEDIATE`, no savepoint and no
   `PRAGMA journal_mode` to hand to a long-running reader.
 - **Cost:** the live-query path is available but unused. Every read in
-  `src/data/repos.zig` is a one-shot `dbQuery`, so the kitchen board does
+  `packages/ros-core/src/data/repos.zig` is a one-shot `dbQuery`, so the kitchen board does
   not refresh when another window advances a ticket. Converting the KDS,
   the order list, the floor board and the `op_log` watch to `dbSubscribe`
   is Phase 1 work.
@@ -115,10 +115,10 @@ replacement for v1's `ref.invalidate` and `FutureProvider` invalidation.
   SQL is the part that has to be reviewable: v1's repository defects (D1's
   `as dynamic` casts, D3's incomplete interface, R3's interface/implementation
   drift) were all repository-layer defects. Named constants in one file
-  (`src/data/repos.zig`) keep the statements legible and greppable.
+  (`packages/ros-core/src/data/repos.zig`) keep the statements legible and greppable.
 - **A document store with JSON rows.** Loses for the same reason as the
   in-process store: the compliance and reporting requirements in
-  `src/schema/0008_compliance.sql` require an X/Z report to be
+  `apps/admin/src/schema/0008_compliance.sql` require an X/Z report to be
   reconstructible from the database alone, months later.
 - **Keep the schema in the app and run the migrations itself.** Loses
   because the SDK already applies them at boot and runs them in the right
@@ -136,7 +136,7 @@ Before a data-layer change is treated as done:
       version advanced.
 - [ ] `native check` passes and reports no `NS1405` diagnostic.
 - [ ] Every new query has a named constant, a loader and a decoder in
-      `src/data/repos.zig`, and its effect has its own `key_*` constant in a
+      `packages/ros-core/src/data/repos.zig`, and its effect has its own `key_*` constant in a
       family that cannot collide.
 - [ ] Every write that must be atomic is one `dbExec` with all its
       statements, not a sequence of calls.

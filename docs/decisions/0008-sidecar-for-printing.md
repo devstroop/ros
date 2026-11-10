@@ -72,7 +72,7 @@ a committed sale on a printer.
 
 ## Evidence
 
-- `src/schema/0009_printing.sql`: `printer`, `auto_print`.
+- `apps/admin/src/schema/0009_printing.sql`: `printer`, `auto_print`.
 - `tools/print-sidecar/` exists but is empty.
 - `PORT-PLAN.md` §7.1 Gap A and §11 Phase 7.
 - SDK effect surface has `spawn` but no Bluetooth or socket.

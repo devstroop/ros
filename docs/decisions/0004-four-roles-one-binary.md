@@ -68,7 +68,7 @@ That part is Proposed and not built.
 
 ## Evidence
 
-- `src/core/navigation.zig`: `Role`, `home`, `needs_sign_in`.
-- `src/core/rbac.zig`: rail tables and the matrix.
-- `app.json` and `src/main.zig`: one window today.
+- `packages/ros-core/src/core/navigation.zig`: `Role`, `home`, `needs_sign_in`.
+- `packages/ros-core/src/core/rbac.zig`: rail tables and the matrix.
+- `app.json` and `apps/admin/src/main.zig`: one window today.
 - `PORT-PLAN.md` §6: multi-window mapping.

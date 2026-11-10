@@ -65,6 +65,6 @@ as a separate, later effort.**
 ## Evidence
 
 - `app.json`: `platforms: ["macos", "linux", "windows"]`.
-- `src/main.zig`: a 1280×800 desktop window.
+- `apps/admin/src/main.zig`: a 1280×800 desktop window.
 - `PORT-PLAN.md` §7 rows 51–52, §12 decision 4–5.
 - The SDK's mobile packaging is described as experimental in the plan.

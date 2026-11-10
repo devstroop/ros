@@ -292,8 +292,8 @@ PLANNED), each imported by the screens that use it and listed in
 **Exit criteria — verifiable.**
 
 - [x] `cd apps/admin && native check` is clean and `native test` is green.
-- [x] Every admin screen listed above is mounted in `src/app.native` with
-      its ordinal gate, imported, and listed in `src/app_sources.zig`. The
+- [x] Every admin screen listed above is mounted in `apps/admin/src/app.native` with
+      its ordinal gate, imported, and listed in `apps/admin/src/app_sources.zig`. The
       four SESSION screens — the setup, the role picker, the login and the
       two steps of the walk-through — are mounted on their own condition
       instead, because they are shown before anybody is signed in and the
@@ -562,8 +562,8 @@ Before the next phase starts:
 - [ ] `cd apps/admin && native check` is clean.
 - [ ] `cd apps/admin && native test` is green, and the new rules are in
       the suite.
-- [ ] Every new screen is mounted in `src/app.native`, imported, listed in
-      `src/app_sources.zig`, and covered by a landmark test.
+- [ ] Every new screen is mounted in `apps/admin/src/app.native`, imported, listed in
+      `apps/admin/src/app_sources.zig`, and covered by a landmark test.
 - [ ] Every new table has a migration and an in-memory database test.
 - [ ] `docs/plan/backlog.md` and `docs/plan/status.md` reflect the new
       state.

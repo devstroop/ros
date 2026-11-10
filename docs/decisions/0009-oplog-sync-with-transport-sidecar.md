@@ -87,7 +87,7 @@ conflict rule is a comparison on a logical clock and device id.
 
 ## Evidence
 
-- `src/schema/0010_sync.sql`: `device`, `op_log`, `sync_state` with clock
+- `apps/admin/src/schema/0010_sync.sql`: `device`, `op_log`, `sync_state` with clock
   and device indexes.
 - `tools/sync-sidecar/` exists but is empty.
 - App writes no `op_log` rows today.

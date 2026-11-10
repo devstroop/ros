@@ -85,7 +85,7 @@ and cannot be separated from the mutation it describes.
   `tools/sync-sidecar/` is an empty directory, and there is no sidecar
   binary, no protocol document beyond this ADR and
   [`architecture/08-sync.md`](../../architecture/08-sync.md), and no op-log
-  write in `src/data/repos.zig`. The whole substrate is owed.
+  write in `packages/ros-core/src/data/repos.zig`. The whole substrate is owed.
 - **Cost:** last-writer-wins is lossy. Two edits to different fields of the
   same row cannot both survive; the higher clock wins and the other edit is
   discarded. v1 had the same rule, so Restaurant OS inherits the limitation rather
@@ -110,7 +110,7 @@ and cannot be separated from the mutation it describes.
 - **Cost:** a schema version mismatch between two devices has no defined
   behaviour. The sidecar has to refuse or migrate, and neither is decided.
 - **Cost:** the live-query path the design depends on is unused. Every read
-  in `src/data/repos.zig` is a one-shot `dbQuery`; the `op_log` watch needs
+  in `packages/ros-core/src/data/repos.zig` is a one-shot `dbQuery`; the `op_log` watch needs
   `fx.dbSubscribe`, which is Phase 1 work.
 - **Cost:** v1's cloud replication to a VPS was a stated future direction in
   `../eatery/docs/architecture/sync-protocol.md`. Restaurant OS does not plan for it

@@ -2,8 +2,8 @@
 
 > **Status:** Implemented core; screen coverage is Partial.
 > **Last verified:** 2026-10-21, by source review and the headless suite.
-> **Source:** `src/core/navigation.zig`, `src/core/rbac.zig`,
-> `src/core/update.zig` (`go`, `resetSession`), `src/app.native`,
+> **Source:** `packages/ros-core/src/core/navigation.zig`, `packages/ros-core/src/core/rbac.zig`,
+> `packages/ros-core/src/core/update.zig` (`go`, `resetSession`), `apps/admin/src/app.native`,
 > `src/screens/*.native`.
 
 ## There is no router
@@ -210,7 +210,7 @@ role picker
 ```
 
 Every arrow that ends a session goes through `resetSession(model, gate)`
-in `src/core/update.zig`. It clears the operator, cart, search, filters,
+in `packages/ros-core/src/core/update.zig`. It clears the operator, cart, search, filters,
 waiter table and lines, last sale, forms, errors and history, then lands
 on `gate`. Device settings (theme, splits, station filter, salt, device
 token) are kept. The reset is called from `pick_role`, a successful

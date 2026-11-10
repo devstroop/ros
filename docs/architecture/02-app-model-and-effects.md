@@ -2,8 +2,8 @@
 
 > **Status:** Implemented.
 > **Last verified:** 2026-10-21, by source review and the headless suite.
-> **Source:** `src/core/model.zig`, `src/core/msg.zig`, `src/core/update.zig`,
-> `src/core/bump.zig`, `src/main.zig`, `src/data/page.zig`.
+> **Source:** `packages/ros-core/src/core/model.zig`, `packages/ros-core/src/core/msg.zig`, `packages/ros-core/src/core/update.zig`,
+> `src/core/bump.zig`, `apps/admin/src/main.zig`, `packages/ros-core/src/data/page.zig`.
 
 ## The contract in one paragraph
 
@@ -19,7 +19,7 @@ rebuilt tree.
 
 ## Model
 
-`src/core/model.zig` owns all state. The struct is large (fixed buffers),
+`packages/ros-core/src/core/model.zig` owns all state. The struct is large (fixed buffers),
 so `main.zig` constructs it with `UiApp.create` on the heap rather than
 passing it by value.
 
@@ -87,7 +87,7 @@ does not fit is a menu the app cannot show; see
 
 ## Messages
 
-`Msg` is a `union(enum)` in `src/core/msg.zig`. Three families:
+`Msg` is a `union(enum)` in `packages/ros-core/src/core/msg.zig`. Three families:
 
 | Family | Examples | Payload |
 |---|---|---|

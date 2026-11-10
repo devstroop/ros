@@ -3,8 +3,8 @@
 > **Status:** Partial — core reads and order writes work; most entities have
 > no write path or UI.
 > **Last verified:** 2026-11-04, by source review and the test suite.
-> **Source:** `src/data/repos.zig`, `src/data/page.zig`, `src/data/auth.zig`,
-> `src/core/update.zig`, `src/domain/models.zig`.
+> **Source:** `packages/ros-core/src/data/repos.zig`, `packages/ros-core/src/data/page.zig`, `packages/ros-core/src/data/auth.zig`,
+> `packages/ros-core/src/core/update.zig`, `packages/ros-core/src/domain/models.zig`.
 
 ## Principles
 
@@ -249,7 +249,7 @@ prevent.
 The app declares the `sqlite` capability in `app.json`. The SDK compiles
 its SQLite engine into the app, generates a migrations module from
 `src/schema/*.sql`, and opens the database migrated at boot. The
-append-only authority is `src/schema/migrations.lock.json` (version 17,
+append-only authority is `apps/admin/src/schema/migrations.lock.json` (version 17,
 17 hashes).
 
 The app does not open the database, set PRAGMAs, or run migrations

@@ -40,7 +40,7 @@ the per-app update cadence.
 
 ### The screen partition
 
-The split follows the permission matrix in `src/core/rbac.zig` exactly.
+The split follows the permission matrix in `packages/ros-core/src/core/rbac.zig` exactly.
 `Role.needs_sign_in()` is already the boundary: `admin` and `waiter`
 sign in with a credential - a PIN or a password, per person - and `kds`
 and `display` sign in by device.
@@ -70,7 +70,7 @@ here are read off the tree **this phase will be built on**, which is
 the back office merged: 53 screens in the enum, 50 for the admin app.
 
 The partition is not something to maintain by hand. The matrix is
-walked against the enum by a test in `src/tests.zig`, and the shell's
+walked against the enum by a test in `apps/admin/src/tests.zig`, and the shell's
 gates are pinned to the enum by another, so a screen cannot be added
 or moved without a test saying so. The table below is the partition
 those two tests describe.
@@ -474,7 +474,7 @@ on port **45872**, sent every five seconds:
 
 The `role` is the **device table's vocabulary** - `admin`, `waiter`,
 `kds` or `display` - because that is what `device.role` accepts
-(`src/schema/0010_sync.sql` constrains it with a CHECK, and that table
+(`apps/admin/src/schema/0010_sync.sql` constrains it with a CHECK, and that table
 is in the shared schema all three apps migrate). The kiosk *app* has
 two modes, and the device row records the mode it is in: `kds` on a
 kitchen screen, `display` on a customer-facing one. A peer that reads

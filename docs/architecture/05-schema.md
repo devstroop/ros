@@ -3,8 +3,8 @@
 > **Status:** Scaffolded — 46 tables across 21 migrations; only the core
 > subset is used by repositories or UI.
 > **Last verified:** 2026-11-04, by source review and the migration lock.
-> **Source:** `src/schema/0001_core.sql` … `0021_unpaid_closures.sql`,
-> `src/schema/migrations.lock.json`.
+> **Source:** `apps/admin/src/schema/0001_core.sql` … `0021_unpaid_closures.sql`,
+> `apps/admin/src/schema/migrations.lock.json`.
 
 ## Conventions
 
@@ -25,7 +25,7 @@ partly by review.
 
 ## Migration policy
 
-- Files are numbered `NNNN_name.sql` in `src/schema/`.
+- Files are numbered `NNNN_name.sql` in `apps/admin/src/schema/`.
 - `migrations.lock.json` is the authority: version 21 and twenty-one
   hashes.
 - `native db new-migration <name>` is the intended authoring path.

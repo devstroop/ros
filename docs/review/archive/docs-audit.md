@@ -82,7 +82,7 @@ architecture 10: authored, integration, generated.
 
 ## D-007 — The RBAC matrix test is tautological
 
-`src/tests.zig`:
+`apps/admin/src/tests.zig`:
 
 ```zig
 const permitted = rbac.allows(role, screen);

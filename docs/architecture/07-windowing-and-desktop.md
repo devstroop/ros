@@ -3,7 +3,7 @@
 > **Status:** Single window implemented; secondary windows and packaging
 > Planned.
 > **Last verified:** 2026-10-20, by source review.
-> **Source:** `src/main.zig`, `app.json`.
+> **Source:** `apps/admin/src/main.zig`, `app.json`.
 
 ## Today
 

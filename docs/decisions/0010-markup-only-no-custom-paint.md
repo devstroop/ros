@@ -71,7 +71,7 @@ Lottie or pie charts.**
 
 ## Evidence
 
-- `src/app.native`, `src/screens/*.native`: markup only.
-- `src/core/theme.zig`: semantic tokens, no hex in markup.
+- `apps/admin/src/app.native`, `src/screens/*.native`: markup only.
+- `packages/ros-core/src/core/theme.zig`: semantic tokens, no hex in markup.
 - `PORT-PLAN.md` §7 Gap C, §3.3 grammar rules.
 - SDK element catalog: `chart` series kinds exclude pie.

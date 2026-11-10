@@ -64,7 +64,7 @@ variants is a silent breakage. Screens are reached by `open_section`
 
 ## Evidence
 
-- `src/core/navigation.zig`: `Role`, `Screen` (43 values), `Stack`.
-- `src/core/rbac.zig`: `allows`, `home`, `nav_sections`.
+- `packages/ros-core/src/core/navigation.zig`: `Role`, `Screen` (43 values), `Stack`.
+- `packages/ros-core/src/core/rbac.zig`: `allows`, `home`, `nav_sections`.
 - `src/core/update.zig:329`: `go`.
 - Tests: kiosk denied navigation, back, role routing.

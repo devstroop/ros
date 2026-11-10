@@ -73,11 +73,11 @@ database or accept a job (see [08-sync](08-sync.md) and
 
 | Layer | Where | Responsibility | Status |
 |---|---|---|---|
-| Shell / entry | `src/main.zig` | Window, GPU surface, `UiApp` wiring, salt generation | Implemented |
-| View | `src/app.native`, `src/screens/*.native` | Declarative markup, template imports, shell gates | Implemented subset |
-| View import closure | `src/app_sources.zig` | Embeds every imported template | Implemented |
+| Shell / entry | `apps/admin/src/main.zig` | Window, GPU surface, `UiApp` wiring, salt generation | Implemented |
+| View | `apps/admin/src/app.native`, `src/screens/*.native` | Declarative markup, template imports, shell gates | Implemented subset |
+| View import closure | `apps/admin/src/app_sources.zig` | Embeds every imported template | Implemented |
 | Core | `src/core/*.zig` | Model, messages, update, navigation, RBAC, theme, buffers | Implemented |
-| Domain | `src/domain/models.zig` | Entity shapes, enums, money/time conventions | Implemented subset |
+| Domain | `packages/ros-core/src/domain/models.zig` | Entity shapes, enums, money/time conventions | Implemented subset |
 | Data | `src/data/*.zig` | SQL constants, reads, decoders, writes, credential hashing, page reader | Partial |
 | Schema | `src/schema/0001..0021_*.sql` | 46 STRICT tables, migration lock | Scaffolded beyond core |
 | Sidecars | `packages/ros-core/src/net/` (in-process sync) | Sync over LAN | Implemented (no separate binary) |
@@ -150,9 +150,9 @@ anchor.
 | I5 | The model never borrows effect scratch memory. | `src/data/page.zig:16`; decode copies into bumps, and a test overwrites the page after decoding |
 | I6 | An order and its lines are written atomically. | `repos.saveOrder` single `dbExec` |
 | I7 | The `Screen` enum is append-only. | `src/core/navigation.zig:47`; markup compares indices |
-| I8 | Every imported template is in `app_sources.zig`. | `src/app_sources.zig`; import fails loudly |
+| I8 | Every imported template is in `app_sources.zig`. | `apps/admin/src/app_sources.zig`; import fails loudly |
 | I9 | A navigation is never refused because the stack is full. | `Stack.push` is a no-op on the current screen and drops the oldest entry at depth 32 ([ADR-0015](../decisions/0015-session-scoped-navigation.md)) |
-| I10 | Every text pair in both palettes clears WCAG AA. | the contrast test in `src/tests.zig`; token table in [ui-components](ui-components.md) |
+| I10 | Every text pair in both palettes clears WCAG AA. | the contrast test in `apps/admin/src/tests.zig`; token table in [ui-components](ui-components.md) |
 
 ## Current boundary of the system
 

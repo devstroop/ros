@@ -7,9 +7,9 @@
 > **Verification:** source review only. The Native SDK CLI is not
 > installed in this workspace, so nothing below was exercised against a
 > running build.
-> **Source of truth:** `src/core/navigation.zig`, `src/core/rbac.zig`,
-> `src/core/model.zig`, `src/core/update.zig`, `src/app.native`,
-> `src/screens/*.native`, `src/tests.zig`.
+> **Source of truth:** `packages/ros-core/src/core/navigation.zig`, `packages/ros-core/src/core/rbac.zig`,
+> `packages/ros-core/src/core/model.zig`, `packages/ros-core/src/core/update.zig`, `apps/admin/src/app.native`,
+> `src/screens/*.native`, `apps/admin/src/tests.zig`.
 > **Related:** [ADR-0003](../decisions/0003-no-router-screen-enum-and-stack.md),
 > [ADR-0004](../decisions/0004-four-roles-one-binary.md),
 > [03-navigation-and-rbac](03-navigation-and-rbac.md),
@@ -226,7 +226,7 @@ only for permissions. See
 ### The one writer
 
 Every navigation in the app goes through one helper in
-`src/core/update.zig`:
+`packages/ros-core/src/core/update.zig`:
 
 ```zig
 /// Move to a screen, refusing destinations the role may not open.
@@ -255,7 +255,7 @@ Three properties of `go` are load-bearing:
 
 The only other writers of `screen_index` are the session transitions,
 which go through `resetSession(model, gate)` and `resetNavigation` in
-`src/core/update.zig`. The reset clears the operator, cart, filters,
+`packages/ros-core/src/core/update.zig`. The reset clears the operator, cart, filters,
 waiter state, last sale, forms, errors and history, then lands on the
 gate:
 
@@ -970,7 +970,7 @@ is recorded as **Proposed**.
 Adding or changing a screen:
 
 - [ ] The new `Screen` variant is **appended** at the end of the enum
-      in `src/core/navigation.zig`, with a `title` and a `nav_section`
+      in `packages/ros-core/src/core/navigation.zig`, with a `title` and a `nav_section`
       (or an explicit `null`).
 - [ ] Its ordinal was read off the enum, not counted by hand.
 - [ ] `rbac.allows` grants it to the roles that may open it, and denies
@@ -979,8 +979,8 @@ Adding or changing a screen:
       table in `rbac.zig` **and** in `rbac.section_screen`.
 - [ ] A template exists at `src/screens/screen-<name>.native` with
       exactly one `<template name="screen-<name>">`.
-- [ ] The file is imported in `src/app.native` **and** listed in
-      `src/app_sources.zig`.
+- [ ] The file is imported in `apps/admin/src/app.native` **and** listed in
+      `apps/admin/src/app_sources.zig`.
 - [ ] The shell has an `<if test="{screen_index == N}">` gate for it, and
       the gate is inside the `show_shell` block.
 
