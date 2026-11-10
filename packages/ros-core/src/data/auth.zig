@@ -115,7 +115,7 @@ pub fn verifyCredential(salt: []const u8, secret: []const u8, stored: []const u8
     if (isLegacy(stored)) {
         var buffer: [legacy_len]u8 = undefined;
         const computed = legacyHash(salt, secret, &buffer) orelse return false;
-        return std.mem.eql(u8, computed, stored);
+        return std.crypto.timing_safe.eql([legacy_len]u8, computed.ptr[0..legacy_len].*, stored.ptr[0..legacy_len].*);
     }
     bcrypt.strVerify(stored, secret, .{ .silently_truncate_password = false }) catch return false;
     return true;
