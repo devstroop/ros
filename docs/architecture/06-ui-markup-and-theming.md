@@ -3,13 +3,13 @@
 > **Status:** Implemented subset — 9 templates render (6 in the shell, 3 as
 > session gates). Theming is implemented (light/dark).
 > **Last verified:** 2026-10-20, by source review.
-> **Source:** `src/app.native`, `src/screens/*.native`, `src/app_sources.zig`,
-> `src/core/theme.zig`, `src/core/model.zig`.
+> **Source:** `apps/admin/src/app.native`, `src/screens/*.native`, `apps/admin/src/app_sources.zig`,
+> `packages/ros-core/src/core/theme.zig`, `packages/ros-core/src/core/model.zig`.
 
 ## The view is markup
 
 There is no widget tree built in Zig. `app.native` declares the shell, and
-each screen is a `<template>` in `src/screens/`. The runtime parses the
+each screen is a `<template>` in `apps/admin/src/screens/`. The runtime parses the
 markup, resolves bindings against the model, and builds widgets. The app
 never calls a paint API.
 
@@ -41,7 +41,7 @@ missing entry fails loudly at the import site, which is intentional: a
 screen that is not compiled in is a screen that does not exist.
 
 `app.native` is embedded with `@embedFile` and watched at
-`src/app.native` for hot reload.
+`apps/admin/src/app.native` for hot reload.
 
 ## Shell structure
 
@@ -171,7 +171,7 @@ There is no else-if; each branch is its own `<if>`.
 
 ## Theming
 
-`src/core/theme.zig` supplies `canvas.DesignTokens` on every rebuild:
+`packages/ros-core/src/core/theme.zig` supplies `canvas.DesignTokens` on every rebuild:
 
 ```zig
 pub fn tokens(model: *const Model) DesignTokens {
@@ -313,7 +313,7 @@ There is no responsive variant yet. The shell assumes a desktop window
 - Colour is never the only status signal: a chip or a badge carries the
   word as well, and both are real text.
 - Every register's text pairs are asserted against WCAG AA in
-  `src/tests.zig`, including the six state chips; a keyboard-only pass
+  `apps/admin/src/tests.zig`, including the six state chips; a keyboard-only pass
   and focus-visible checks remain.
 
 ## Adding a screen: checklist

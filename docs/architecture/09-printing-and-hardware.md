@@ -3,7 +3,7 @@
 > **Status:** Scaffolded — `printer` and `auto_print` tables exist; no print
 > code, no sidecar, no device integration.
 > **Last verified:** 2026-10-20, by source review.
-> **Source:** `src/schema/0009_printing.sql`, `tools/print-sidecar/` (empty),
+> **Source:** `apps/admin/src/schema/0009_printing.sql`, `tools/print-sidecar/` (empty),
 > `PORT-PLAN.md` §7.1 Gap A.
 
 ## Why this is hard

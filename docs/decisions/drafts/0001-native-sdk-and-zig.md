@@ -46,10 +46,10 @@ WebView in the shipped product.
 
 The shape is fixed by `apps/ros/src/main.zig`: `UiApp.create` with
 `.update_fx = update_mod.update`, `.init_fx = update_mod.boot`,
-`.tokens_fn = theme.tokens` and a runtime markup source of `src/app.native`
-plus the embedded closure in `src/app_sources.zig`. `src/core/update.zig` is
-the only function that writes model state; `src/data/repos.zig` is the only
-place SQL is written; `src/core/model.zig` is the only place the view's
+`.tokens_fn = theme.tokens` and a runtime markup source of `apps/admin/src/app.native`
+plus the embedded closure in `apps/admin/src/app_sources.zig`. `packages/ros-core/src/core/update.zig` is
+the only function that writes model state; `packages/ros-core/src/data/repos.zig` is the only
+place SQL is written; `packages/ros-core/src/core/model.zig` is the only place the view's
 surface is declared.
 
 A TypeScript core is explicitly rejected. The SDK's guarantees that make Restaurant OS
@@ -77,8 +77,8 @@ it.
   model. The same code path the runtime uses is the code path the tests
   use.
 - **Cost:** the entire view layer is new code. v1's 104 files under
-  `lib/pages/` become 43 `Screen` variants in `src/core/navigation.zig` and
-  a template per screen in `src/screens/`. None of the Flutter widget work
+  `lib/pages/` become 43 `Screen` variants in `packages/ros-core/src/core/navigation.zig` and
+  a template per screen in `apps/admin/src/screens/`. None of the Flutter widget work
   carries over.
 - **Cost:** the plugin ecosystem is gone. BLE thermal printing, Lottie, XLSX,
   `image_picker`, `fl_chart` pie charts, `googleapis` Drive backup and

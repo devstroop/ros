@@ -73,11 +73,11 @@ mitigation. The attribution gap is visible in the schema:
 `order_status_history.changed_by` is nullable, and it will be null for a
 kitchen advance.
 
-Navigation has one writer. `go()` in `src/core/update.zig` checks
+Navigation has one writer. `go()` in `packages/ros-core/src/core/update.zig` checks
 `rbac.allows` first and refuses without touching the stack or the index,
 pushes second and only then writes `screen_index`, and derives
 `nav_section` from the screen rather than from the caller. The rail is the
-role's own table in `src/core/rbac.zig`, so it can never offer a
+role's own table in `packages/ros-core/src/core/rbac.zig`, so it can never offer a
 destination the role may not open.
 
 ## Consequences
@@ -87,7 +87,7 @@ destination the role may not open.
 - The permission decision is a pure function with a total test. v1's
   defect **A8** has no analogue: `go()` refuses a destination and sets a
   reason the operator can see, and the shell renders it as a banner
-  (`src/app.native` binds `has_error` and `error_message`).
+  (`apps/admin/src/app.native` binds `has_error` and `error_message`).
 - The kiosk roles are fast to start: a device signs in by picking a role,
   with no keypad and no PIN.
 - **Cost:** one binary means one version for all four roles. A bug in the
@@ -99,9 +99,9 @@ destination the role may not open.
 - **Cost:** the kiosk roles still render the role picker, the title bar,
   the nav rail and the status bar. A wall-mounted board should boot
   straight into its own screen. `device.role` in
-  `src/schema/0010_sync.sql` is where a remembered role belongs, and it
+  `apps/admin/src/schema/0010_sync.sql` is where a remembered role belongs, and it
   needs an escape gesture to leave — that is Phase 3 work.
-- **Cost:** `rbac.allows` and the four rail tables in `src/core/rbac.zig`
+- **Cost:** `rbac.allows` and the four rail tables in `packages/ros-core/src/core/rbac.zig`
   are maintained by hand and can drift. A rail entry without a matching
   `allows` arm produces a button that refuses itself when pressed, and the
   refusal is silent in the sense that no screen changes.
@@ -154,7 +154,7 @@ destination the role may not open.
 Before a role or permission change is treated as done:
 
 - [ ] `Role.needs_sign_in()` and `rbac.home(role)` are consistent with the
-      session flow in `src/core/update.zig`.
+      session flow in `packages/ros-core/src/core/update.zig`.
 - [ ] `rbac.allows` grants the screen to the roles that may open it and
       denies it to the ones that may not, and the matrix test walks every
       pair.

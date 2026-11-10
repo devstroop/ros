@@ -64,12 +64,12 @@ Two corollaries are part of the decision, not conveniences:
 ## Consequences
 
 - The whole app is testable without a window: build the tree, dispatch a
-  message the way the runtime does, assert on the model. `src/tests.zig`
+  message the way the runtime does, assert on the model. `apps/admin/src/tests.zig`
   already has 12 such tests, including the permission matrix walked over
   every `(role, screen)` pair.
 - Navigation is model state rather than a route table: a `Screen` enum, a
-  fixed-capacity `Stack` in `src/core/navigation.zig`, and one writer —
-  `go()` in `src/core/update.zig` — that checks `rbac.allows` before it
+  fixed-capacity `Stack` in `packages/ros-core/src/core/navigation.zig`, and one writer —
+  `go()` in `packages/ros-core/src/core/update.zig` — that checks `rbac.allows` before it
   pushes. The v1 defect **A8** (no route guard) has no analogue here.
 - **Cost:** the markup expression grammar is small and closed. Seventeen
   functions, no `else-if` chain, no negation sugar, no ternary, no method
@@ -84,7 +84,7 @@ Two corollaries are part of the decision, not conveniences:
 - **Cost:** tables the markup binds must be file-scope constants. A
   composite literal built inside a function lives on that function's stack
   frame, and returning a slice of it hands the view a pointer to dead
-  memory — the trap `src/core/rbac.zig` documents in a long comment after
+  memory — the trap `packages/ros-core/src/core/rbac.zig` documents in a long comment after
   it bit once already.
 - **Cost:** the model must be default-constructible, because the runtime
   builds it as `.{}`. It cannot own a heap allocator, so its rows live in
@@ -93,12 +93,12 @@ Two corollaries are part of the decision, not conveniences:
   not fit is dropped, not fatal — the bound is the compiler's.
 - **Cost:** page bytes are drain scratch. They are valid through the update
   that receives them and dead after it, so every value the model keeps has
-  to be copied into its bump buffer. `src/data/page.zig` states the rule;
-  `src/data/repos.zig` obeys it.
+  to be copied into its bump buffer. `packages/ros-core/src/data/page.zig` states the rule;
+  `packages/ros-core/src/data/repos.zig` obeys it.
 - **Cost:** `update` has no allocator, so any derived list has to be built
   in the arena the view owns — the `(*const Model, std.mem.Allocator)`
   method form used by `visible_products` and `kitchen_tickets`.
-- **Cost:** `Screen` is an append-only contract. `src/app.native` gates on
+- **Cost:** `Screen` is an append-only contract. `apps/admin/src/app.native` gates on
   literal ordinals (`screen_index == 8`, `10`, `13`, `17`, `41`), so
   inserting a variant in the middle of the enum silently remaps every gate.
   The ordinals need a test; there is not one yet.
@@ -140,7 +140,7 @@ Two corollaries are part of the decision, not conveniences:
 
 Before a change to the app model is treated as done:
 
-- [ ] Every state change is an arm of `update` in `src/core/update.zig`;
+- [ ] Every state change is an arm of `update` in `packages/ros-core/src/core/update.zig`;
       nothing outside it writes a model field.
 - [ ] Every value the view binds is a field, a zero-argument method inside
       the `Model` struct body, or a field of a `for` variable.

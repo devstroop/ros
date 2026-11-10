@@ -115,7 +115,7 @@ CREATE TABLE currency (
   ```
 
 The model mirrors the same convention on the Zig side, in
-`src/domain/models.zig`:
+`packages/ros-core/src/domain/models.zig`:
 
 ```zig
 /// Price in minor units (cents, paise, yen...).
@@ -174,7 +174,7 @@ native db new-migration add_promotions   # appends src/schema/000N_add_promotion
 ```
 
 The CLI generates the file, generates the migrations module from
-`src/schema/`, and updates the lock file.
+`apps/admin/src/schema/`, and updates the lock file.
 
 ### The lock file
 
@@ -208,7 +208,7 @@ lock moves forward.
 
 ### Who runs the migrations
 
-Not the app. The SDK generates a migrations module from `src/schema/` and
+Not the app. The SDK generates a migrations module from `apps/admin/src/schema/` and
 wires it into the runner, so the database is opened **already migrated**
 at boot. The app never opens a connection, never sets a PRAGMA, and
 never runs migration code. This is the "engine-owned SQLite" decision

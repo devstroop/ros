@@ -32,7 +32,7 @@ Rules:
 - Money is integer minor units; time is integer epoch ms.
 - Booleans are integer 0/1 with a `CHECK`.
 - Enumerations are integer codes with a `CHECK`.
-- SQL lives in named constants in `src/data/repos.zig`.
+- SQL lives in named constants in `packages/ros-core/src/data/repos.zig`.
 - Reads copy into model bump buffers; writes are one atomic `dbExec`.
 
 ## Consequences
@@ -76,5 +76,5 @@ Rules:
 
 - `src/schema/0001`–`0010`, `migrations.lock.json` (version 10).
 - `app.json`: `sqlite` capability.
-- `src/data/repos.zig`: named SQL, atomic writes.
+- `packages/ros-core/src/data/repos.zig`: named SQL, atomic writes.
 - `PORT-PLAN.md` §3.5, §8.

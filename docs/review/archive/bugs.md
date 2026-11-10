@@ -52,9 +52,9 @@ Severity: **P0** blocker · **P1** high · **P2** medium · **P3** low.
 
 **Evidence**
 
-- `src/schema/0005_orders.sql` declares `updated_at INTEGER NOT NULL`
+- `apps/admin/src/schema/0005_orders.sql` declares `updated_at INTEGER NOT NULL`
   with no default (line 22).
-- `src/data/repos.zig` `saveOrder` inserts fourteen columns and supplies
+- `packages/ros-core/src/data/repos.zig` `saveOrder` inserts fourteen columns and supplies
   thirteen parameters. `created_at` is supplied; `updated_at` is not
   (`INSERT INTO orders ...`).
 - The generated `.native/cache/sqlite/migrations.zig` contains the same
@@ -89,7 +89,7 @@ schema trigger or default only if every writer should share it.
 
 **Evidence**
 
-- `src/core/update.zig` `login_sql` selects `id, name, role` but filters
+- `packages/ros-core/src/core/update.zig` `login_sql` selects `id, name, role` but filters
   only on `pin_hash` and `active`.
 - `login_checked` copies `id` and `name`, sets `signed_in = true`, and
   navigates to `rbac.home(model.role)`. The `role` column in the result
@@ -125,7 +125,7 @@ admin-PIN-as-waiter.
 
 **Evidence**
 
-- `src/main.zig` generates a random salt on every launch and sets
+- `apps/admin/src/main.zig` generates a random salt on every launch and sets
   `pin_salt_len = 64` immediately. `salt_is_provisional` starts `true`.
 - `boot` asks for the config asynchronously. Until `config_loaded`
   returns, the model contains the boot salt but no database confirmation.
@@ -171,10 +171,10 @@ a retryable error.
 
 **Evidence**
 
-- `src/data/repos.zig` `decodeCompany` assigns
+- `packages/ros-core/src/data/repos.zig` `decodeCompany` assigns
   `model.company_name = reader.textOf(...)`,
   `model.currency_code = ...`, and `model.currency_symbol = ...`.
-- `src/data/page.zig` states that page bytes are drain scratch, valid only
+- `packages/ros-core/src/data/page.zig` states that page bytes are drain scratch, valid only
   through the update that received them; every other decoder copies text
   into a bump buffer.
 - `decodeCompany` has no company buffer and performs no copy.
@@ -203,7 +203,7 @@ ownership rule.
 
 - `orders.dining_table_id` and `orders.customer_id` are nullable foreign
   keys (`0005_orders.sql`, lines 12–13).
-- `placeOrder` sets both to `0` (`src/core/update.zig`).
+- `placeOrder` sets both to `0` (`packages/ros-core/src/core/update.zig`).
 - Reproduction with `PRAGMA foreign_keys=ON`:
   `FOREIGN KEY constraint failed` for an order with `dining_table_id=0`
   and `customer_id=0`.
@@ -545,7 +545,7 @@ setting for admin screens.
 
 **Evidence**
 
-- `src/domain/models.zig` `fromCode` uses
+- `packages/ros-core/src/domain/models.zig` `fromCode` uses
   `std.enums.fromInt(...) catch .pending`.
 - `std.enums.fromInt` returns an optional, so the correct form is
   `orelse`.
@@ -666,7 +666,7 @@ the last tick and rebuild only if a visible screen needs it.
 
 **Evidence**
 
-- `src/app.native` gates on `screen_index == 8`, `10`, `13`, `17`, `41`.
+- `apps/admin/src/app.native` gates on `screen_index == 8`, `10`, `13`, `17`, `41`.
 - `Screen` is append-only by contract; inserting a variant before an
   existing one silently remaps every gate.
 
@@ -966,7 +966,7 @@ payments with a sum check). Add a test that pays twice.
 
 **Evidence**
 
-- `src/data/repos.zig` keys three effects twice: `key_save_company` and
+- `packages/ros-core/src/data/repos.zig` keys three effects twice: `key_save_company` and
   `key_write_order` are both `20`, `key_printers` and `key_write_product`
   are both `21`, `key_tax_slabs` and `key_write_table` are both `22`.
 - The file's own comment says the keys live in their own namespace "so a

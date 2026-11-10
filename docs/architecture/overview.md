@@ -17,10 +17,10 @@ all four:
 
 | Part | Where it lives | What it owns |
 |---|---|---|
-| **Model** | `src/core/model.zig` | Every fact the app knows: session, navigation, company, datasets, cart, error text. Plus the derived bindings the view reads. |
-| **Msg** | `src/core/msg.zig` | The complete vocabulary of things that can happen. One tagged union; every arm is a state change the app understands. |
-| **update** | `src/core/update.zig` | The only place model state changes. `update(model, msg, fx)` maps a message onto new state plus a set of effects. |
-| **markup** | `src/app.native`, `src/screens/*.native` | What the operator sees. It binds model values and dispatches messages. It never changes state. |
+| **Model** | `packages/ros-core/src/core/model.zig` | Every fact the app knows: session, navigation, company, datasets, cart, error text. Plus the derived bindings the view reads. |
+| **Msg** | `packages/ros-core/src/core/msg.zig` | The complete vocabulary of things that can happen. One tagged union; every arm is a state change the app understands. |
+| **update** | `packages/ros-core/src/core/update.zig` | The only place model state changes. `update(model, msg, fx)` maps a message onto new state plus a set of effects. |
+| **markup** | `apps/admin/src/app.native`, `src/screens/*.native` | What the operator sees. It binds model values and dispatches messages. It never changes state. |
 
 The shape, as the README puts it:
 
@@ -211,7 +211,7 @@ from the model, asks for the design tokens, lays the tree out and
 presents it. Two details matter:
 
 * **The import closure is explicit.** Every file the markup imports must
-  also be embedded in `src/app_sources.zig`. A missing entry fails loudly
+  also be embedded in `apps/admin/src/app_sources.zig`. A missing entry fails loudly
   at the import site — "a screen that is not compiled in is a screen that
   does not exist".
 * **The palette is a function of the model.** The runtime asks for
@@ -329,7 +329,7 @@ the view rebuilds ◀── update mutates ◀── results come back as messag
 
 The tag `place_order` must be an arm of `Msg`. It is.
 
-**2. `update` mutates.** `src/core/update.zig`:
+**2. `update` mutates.** `packages/ros-core/src/core/update.zig`:
 
 ```zig
 .place_order => placeOrder(model, fx),
@@ -405,12 +405,12 @@ set.
 
 ## 5. Adding a screen, end to end
 
-The `Screen` enum in `src/core/navigation.zig` is append-only. The markup
+The `Screen` enum in `packages/ros-core/src/core/navigation.zig` is append-only. The markup
 compares `screen_index` against fixed ordinals, so reordering the enum
 would silently remap every gate in `app.native`. The steps below assume
 a new screen called `suppliers`.
 
-**1. Append the variant to `Screen`.** `src/core/navigation.zig`:
+**1. Append the variant to `Screen`.** `packages/ros-core/src/core/navigation.zig`:
 
 ```zig
 pub const Screen = enum {
@@ -442,7 +442,7 @@ pub fn nav_section(self: Screen) ?NavSection {
 }
 ```
 
-**3. Grant the permission.** `src/core/rbac.zig`. `allows` is the whole
+**3. Grant the permission.** `packages/ros-core/src/core/rbac.zig`. `allows` is the whole
 access-control surface, and it is a pure function:
 
 ```zig
@@ -468,17 +468,17 @@ fn go(model: *Model, screen: Screen) void {
     }
 ```
 
-**4. Add the messages.** `src/core/msg.zig`. Any message the view never
+**4. Add the messages.** `packages/ros-core/src/core/msg.zig`. Any message the view never
 dispatches goes in `Msg.view_unbound`.
 
-**5. Add the state and the bindings.** `src/core/model.zig`. Fields for
+**5. Add the state and the bindings.** `packages/ros-core/src/core/model.zig`. Fields for
 the state, methods for everything derived. Private fields go in
 `Model.view_unbound`.
 
-**6. Add the arms.** `src/core/update.zig`. One arm per message, each
+**6. Add the arms.** `packages/ros-core/src/core/update.zig`. One arm per message, each
 answering "the world said this, so what is true now?".
 
-**7. Add the data path, if the screen needs it.** `src/data/repos.zig`:
+**7. Add the data path, if the screen needs it.** `packages/ros-core/src/data/repos.zig`:
 the SQL constant, the loader, the decoder. The decoder copies into the
 model's bump buffer.
 
@@ -495,7 +495,7 @@ child:
     </row>
 ```
 
-**9. Embed it.** `src/app_sources.zig`:
+**9. Embed it.** `apps/admin/src/app_sources.zig`:
 
 ```zig
 pub const sources = [_]canvas.ui_markup.SourceFile{
@@ -505,7 +505,7 @@ pub const sources = [_]canvas.ui_markup.SourceFile{
 };
 ```
 
-**10. Import it and gate it.** `src/app.native`:
+**10. Import it and gate it.** `apps/admin/src/app.native`:
 
 ```html
 <import src="screens/screen-suppliers.native"/>
@@ -520,7 +520,7 @@ live inside the shell's content column, and only the active screen is
 mounted — that is what keeps the widget budget (1024 nodes per view)
 within reach.
 
-**11. Test it.** `src/tests.zig`. Two assertions matter most: that the
+**11. Test it.** `apps/admin/src/tests.zig`. Two assertions matter most: that the
 screen's ordinal is what the markup expects, and that the template
 builds and contains its landmark.
 
@@ -547,11 +547,11 @@ negotiable", and each has a code anchor or a test.
 
 | # | Invariant | README convention | Anchor |
 |---|---|---|---|
-| **I1** | **The markup never mutates state.** It binds values and dispatches messages. Every state change happens in `update`. | 1 | `src/core/update.zig` — `update` is the only writer; the markup grammar has no setter |
-| **I2** | **Everything the view can see is a field or a method on `Model`, and everything derived is a method.** A file-scope function next to the struct is invisible to the markup. `view_unbound` keeps the boundary honest. | 2, 3, 4 | `src/core/model.zig` — `Model.view_unbound`; `src/core/msg.zig` — `Msg.view_unbound`; `src/core/rbac.zig` — the file-scope rail tables |
-| **I3** | **Money is integer minor units. Time is epoch milliseconds, UTC.** No float money, anywhere. | 5 | `src/domain/models.zig`; `src/schema/*.sql`; the money test in `src/tests.zig` |
+| **I1** | **The markup never mutates state.** It binds values and dispatches messages. Every state change happens in `update`. | 1 | `packages/ros-core/src/core/update.zig` — `update` is the only writer; the markup grammar has no setter |
+| **I2** | **Everything the view can see is a field or a method on `Model`, and everything derived is a method.** A file-scope function next to the struct is invisible to the markup. `view_unbound` keeps the boundary honest. | 2, 3, 4 | `packages/ros-core/src/core/model.zig` — `Model.view_unbound`; `packages/ros-core/src/core/msg.zig` — `Msg.view_unbound`; `packages/ros-core/src/core/rbac.zig` — the file-scope rail tables |
+| **I3** | **Money is integer minor units. Time is epoch milliseconds, UTC.** No float money, anywhere. | 5 | `packages/ros-core/src/domain/models.zig`; `src/schema/*.sql`; the money test in `apps/admin/src/tests.zig` |
 | **I4** | **Every table is `STRICT`.** A column's declared type means something. | 6 | `src/schema/0001..0010_*.sql`; `native check` rejects a non-STRICT table |
-| **I5** | **Anything the markup binds is a file-scope constant, and the rules are tests.** A composite literal built inside a function lives on that function's stack frame; returning a slice to it hands the view a pointer to dead memory. | 7, 8 | `src/core/rbac.zig` and `src/core/navigation.zig` — the rail and role-card tables; `src/tests.zig` |
+| **I5** | **Anything the markup binds is a file-scope constant, and the rules are tests.** A composite literal built inside a function lives on that function's stack frame; returning a slice to it hands the view a pointer to dead memory. | 7, 8 | `packages/ros-core/src/core/rbac.zig` and `packages/ros-core/src/core/navigation.zig` — the rail and role-card tables; `apps/admin/src/tests.zig` |
 
 The stack-frame trap in I5 is not hypothetical. The tables the view binds
 at a later frame live on the stack of the function that built them:
@@ -586,7 +586,7 @@ native check        # manifest, markup and schema validation
 native build        # ReleaseFast binary in zig-out/bin/
 ```
 
-* `native dev` watches `src/app.native` (the `watch_path` in `main.zig`).
+* `native dev` watches `apps/admin/src/app.native` (the `watch_path` in `main.zig`).
   Editing a template hot-reloads the view within about two seconds,
   preserving model state and widget ids. A parse failure keeps the last
   good view and records the diagnostic.
@@ -601,7 +601,7 @@ native build        # ReleaseFast binary in zig-out/bin/
 
 ### The test loop
 
-`src/tests.zig` is imported by the `test` block in `src/main.zig`:
+`apps/admin/src/tests.zig` is imported by the `test` block in `apps/admin/src/main.zig`:
 
 ```zig
 test {
@@ -665,16 +665,16 @@ print sidecar prototypes are not part of the three-app tree.
 
 | Gotcha | Why it bites | Where |
 |---|---|---|
-| `Screen` is append-only. | The markup compares `screen_index` against literal ordinals. Inserting a variant in the middle remaps every gate in `app.native` silently. | `src/core/navigation.zig`, `src/app.native` |
-| The `Screen` enum has 43 variants (indices 0–42). | `src/app.native` gates on 8, 10, 13, 17 and 41. | `src/app.native` |
-| A file-scope function next to `Model` is invisible to bindings. | The resolver only sees declarations inside the struct body. The symptom is "each does not name an iterable" at run time. | `src/core/model.zig` |
-| A composite literal built inside a function dies with the frame. | Returning a slice to it hands the view a pointer to dead memory. It presents as a crash that looks like a platform bug. | `src/core/rbac.zig`, `src/core/navigation.zig` |
-| Page bytes are drain scratch. | Keeping a slice into them keeps a pointer to memory that is dead after the update. Copy into the bump buffer. | `src/data/page.zig`, `src/data/repos.zig` |
-| `update` has no allocator. | Any derived list must be built in the arena the view owns — the `(*const Model, std.mem.Allocator)` method form. | `src/core/model.zig` |
-| The model must be default-constructible. | It is built as `.{}`. It cannot own a heap allocator, so its size is a compile-time fact and it uses `Bump`. | `src/core/bump.zig`, `src/main.zig` |
-| A `.native` file not in `app_sources.zig` does not exist. | The import closure is embedded; a missing entry fails loudly at the import site. | `src/app_sources.zig` |
+| `Screen` is append-only. | The markup compares `screen_index` against literal ordinals. Inserting a variant in the middle remaps every gate in `app.native` silently. | `packages/ros-core/src/core/navigation.zig`, `apps/admin/src/app.native` |
+| The `Screen` enum has 43 variants (indices 0–42). | `apps/admin/src/app.native` gates on 8, 10, 13, 17 and 41. | `apps/admin/src/app.native` |
+| A file-scope function next to `Model` is invisible to bindings. | The resolver only sees declarations inside the struct body. The symptom is "each does not name an iterable" at run time. | `packages/ros-core/src/core/model.zig` |
+| A composite literal built inside a function dies with the frame. | Returning a slice to it hands the view a pointer to dead memory. It presents as a crash that looks like a platform bug. | `packages/ros-core/src/core/rbac.zig`, `packages/ros-core/src/core/navigation.zig` |
+| Page bytes are drain scratch. | Keeping a slice into them keeps a pointer to memory that is dead after the update. Copy into the bump buffer. | `packages/ros-core/src/data/page.zig`, `packages/ros-core/src/data/repos.zig` |
+| `update` has no allocator. | Any derived list must be built in the arena the view owns — the `(*const Model, std.mem.Allocator)` method form. | `packages/ros-core/src/core/model.zig` |
+| The model must be default-constructible. | It is built as `.{}`. It cannot own a heap allocator, so its size is a compile-time fact and it uses `Bump`. | `src/core/bump.zig`, `apps/admin/src/main.zig` |
+| A `.native` file not in `app_sources.zig` does not exist. | The import closure is embedded; a missing entry fails loudly at the import site. | `apps/admin/src/app_sources.zig` |
 | `native` is not on the PATH in this workspace; the installed Zig is 0.17.0. | The SDK pins Zig 0.16.0 and 0.17 does not parse it. The statuses in this document come from source review, not from a run. | `README.md` |
-| Counts drift between prose and the tree. | The schema holds 46 tables across 21 migrations and the split suites hold 232 admin tests; the root README has been corrected to match, but any hand-written count will drift again. | `README.md`, `src/schema/`, `src/tests.zig`, `plan/status.md` |
+| Counts drift between prose and the tree. | The schema holds 46 tables across 21 migrations and the split suites hold 232 admin tests; the root README has been corrected to match, but any hand-written count will drift again. | `README.md`, `apps/admin/src/schema/`, `apps/admin/src/tests.zig`, `plan/status.md` |
 | The root `README.md` used to link `docs/architecture/sync.md`, `docs/plan/gaps-from-v1.md`, `docs/plan/roadmap.md`, `docs/plan/backlog.md` and `AGENTS.md`. | Those paths do not exist; the maintained pages are `08-sync.md`, `plan/README.md` and `plan/status.md`. The root README should point at them. | `README.md` |
 
 ---
@@ -687,4 +687,4 @@ middle of the `Screen` enum, which remaps every gate in `app.native` and
 nothing catches it. A single test that asserts the ordinals of
 `admin_dashboard`, `pos`, `orders`, `dining_tables` and `kds_board`
 closes the loop between `core/navigation.zig` and the `<if>` gates in
-`src/app.native`.
+`apps/admin/src/app.native`.

@@ -74,6 +74,6 @@ Supporting rules:
 
 ## Evidence
 
-- `src/core/model.zig`, `src/core/msg.zig`, `src/core/update.zig`.
+- `packages/ros-core/src/core/model.zig`, `packages/ros-core/src/core/msg.zig`, `packages/ros-core/src/core/update.zig`.
 - 12 headless tests, including RBAC, cart arithmetic and a markup build.
 - `Effects.init` with `fx.executor = .fake` is used by the tests.

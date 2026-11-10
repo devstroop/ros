@@ -16,7 +16,7 @@ fractions exactly, so a restaurant that adds a thousand line items in floats
 ends the day with a total that is off by a fraction of a currency unit. The
 discrepancy has to be reconciled by hand against the drawer, and the report
 cannot be reproduced from the stored numbers alone — which is what
-`src/schema/0008_compliance.sql` says an X/Z report has to be able to do.
+`apps/admin/src/schema/0008_compliance.sql` says an X/Z report has to be able to do.
 
 v1 also mixed time shapes: `orders.createdAt INTEGER` and `orders.updatedAt
 INTEGER` alongside `payment.date INTEGER`, while other records carried
@@ -56,10 +56,10 @@ Not every time-like column is an epoch. `business_hours.opens_min` and
 a `TEXT` calendar date. Those are recurring wall-clock quantities, not
 instants, and storing them as epochs would be wrong.
 
-The Zig side mirrors the schema exactly. `src/domain/models.zig` declares
+The Zig side mirrors the schema exactly. `packages/ros-core/src/domain/models.zig` declares
 `price_minor: i64` on `Product` and `CartLine`, `subtotal_minor`,
 `tax_minor`, `discount_minor` and `total_minor` on `Order`.
-`src/core/model.zig` computes `cart_total_minor(model: *const Model) i64`
+`packages/ros-core/src/core/model.zig` computes `cart_total_minor(model: *const Model) i64`
 as the sum of `line.price_minor * line.qty` — an integer sum of integers.
 The only float in the money path is in the markup expression
 `fixed(product.price_minor / 100, 2)`, which is presentation and never
@@ -68,7 +68,7 @@ storage.
 ## Consequences
 
 - A day's takings can be reconstructed exactly from the stored integers.
-  The compliance report in `src/schema/0008_compliance.sql` records
+  The compliance report in `apps/admin/src/schema/0008_compliance.sql` records
   `gross_minor`, `discount_minor`, `tax_minor` and `net_minor` as integers
   and `payment_split_json` as the per-mode split.
 - The rule is a test, not a comment: `apps/ros/src/tests.zig` has
@@ -99,7 +99,7 @@ storage.
   `placed_at` follows that clock. The logical clock in `op_log` exists for
   the sync conflict rule, not for the sale timeline.
 - **Cost:** the order id and order number are currently derived from the
-  wall clock in `src/core/update.zig` (`id` = milliseconds, `order_no` =
+  wall clock in `packages/ros-core/src/core/update.zig` (`id` = milliseconds, `order_no` =
   seconds, with `order_no` `UNIQUE`), so two orders in the same second
   collide. That is a separate defect, tracked by the existing ADR on
   clock-based order ids, but it is a direct consequence of choosing a
@@ -141,7 +141,7 @@ storage.
 Before a schema or model change is treated as done:
 
 - [ ] Every new money column is `INTEGER` and its name ends in `_minor`;
-      no `REAL` money column exists anywhere in `src/schema/`.
+      no `REAL` money column exists anywhere in `apps/admin/src/schema/`.
 - [ ] Every new rate is an integer in basis points, bounded by a `CHECK`.
 - [ ] Every new timestamp is `INTEGER` epoch milliseconds UTC; recurring
       wall-clock values use minutes-from-midnight or a calendar date.

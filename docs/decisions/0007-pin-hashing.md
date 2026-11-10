@@ -76,7 +76,7 @@ per-installation 32-byte salt stored in `app_config`.**
 
 ## Evidence
 
-- `src/data/auth.zig`: `hashPin`, `makeSalt`, `equal`.
-- `src/schema/0001_core.sql`: `employee.pin_hash`.
+- `packages/ros-core/src/data/auth.zig`: `hashPin`, `makeSalt`, `equal`.
+- `apps/admin/src/schema/0001_core.sql`: `employee.pin_hash`.
 - `src/core/update.zig:61`: `login_sql`.
 - Test: "a PIN is hashed, never stored".

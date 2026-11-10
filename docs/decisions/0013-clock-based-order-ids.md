@@ -76,5 +76,5 @@ scheme.
 
 - `src/core/update.zig:418` `placeOrder`.
 - `src/core/update.zig:464` `allocOrderNo`.
-- `src/schema/0005_orders.sql`: `order_no TEXT NOT NULL UNIQUE`.
+- `apps/admin/src/schema/0005_orders.sql`: `order_no TEXT NOT NULL UNIQUE`.
 - No test covers same-second order placement.

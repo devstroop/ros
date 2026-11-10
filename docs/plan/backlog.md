@@ -16,7 +16,7 @@ and session screens, which are reached by drilling in rather than by a tab
 runtime never sees it.
 
 **Ordinal.** `Screen.index()` is `@intFromEnum`, so the declaration order in
-the enum *is* the number the markup compares against. `src/app.native`
+the enum *is* the number the markup compares against. `apps/admin/src/app.native`
 gates on literal ordinals, which is why the enum is append-only. The
 ordinal is in this table so nobody has to count by hand.
 
@@ -24,7 +24,7 @@ ordinal is in this table so nobody has to count by hand.
 
 | Status | Meaning |
 |---|---|
-| **Done** | A template exists, it is mounted in `src/app.native`, and a headless test builds its tree. |
+| **Done** | A template exists, it is mounted in `apps/admin/src/app.native`, and a headless test builds its tree. |
 | **Foundation** | The enum variant, the title, the nav section and the permission grant exist, and the data the screen needs already has a read path in `apps/admin/src/data/repos.zig`. The remaining work is the template. |
 | **Planned** | The enum variant exists and the schema table exists, but the data path or the screen itself has not been written. |
 
@@ -49,13 +49,13 @@ status is a `badge`.
 | `src/screens/screen-login.native` | `show_login` gate | 1 | `login` | `expectByText(tree.root, .text, "Sign in")` |
 | `src/screens/screen-dashboard.native` | `screen_index == 8` | 8 | `admin_dashboard` | none |
 | `src/screens/screen-pos.native` | `screen_index == 10` | 10 | `pos` | `expectByText(tree.root, .text, "Paneer Tikka")` |
-| `src/screens/screen-orders.native` | `screen_index == 13` | 13 | `orders` | none |
+| `apps/admin/src/screens/screen-orders.native` | `screen_index == 13` | 13 | `orders` | none |
 | `src/screens/screen-tables.native` | `screen_index == 17` | 17 | `dining_tables` | none |
 | `src/screens/screen-order-confirmation.native` | `screen_index == 12` | 12 | `order_confirmation` | `expectByText(tree.root, .text, "Order 1700000000")` |
-| `src/screens/screen-kitchen.native` | `screen_index == 41` | 41 | `kds_board` | none |
+| `apps/admin/src/screens/screen-kitchen.native` | `screen_index == 41` | 41 | `kds_board` | none |
 
 All nine are listed in `apps/admin/src/app_sources.zig` and imported at
-the top of `src/app.native`. A template that is not in both places does
+the top of `apps/admin/src/app.native`. A template that is not in both places does
 not exist: the import closure is embedded, and a missing entry fails
 loudly at the import site.
 
@@ -173,7 +173,7 @@ No nav section. These are reached by drilling in, not by a tab.
 
 | Gap | Where | Phase |
 |---|---|---|
-| Three admin rail entries open an empty pane: Catalog (`product_categories`), People (`employees`), System (`settings`) | `src/core/rbac.zig` `section_screen` | 2 |
+| Three admin rail entries open an empty pane: Catalog (`product_categories`), People (`employees`), System (`settings`) | `packages/ros-core/src/core/rbac.zig` `section_screen` | 2 |
 | The waiter signs in and lands on a blank content pane | `waiter_tables` | 3 |
 | The display role lands on a blank content pane | `display_board` | 3 |
 | The customer dataset is decoded but never loaded — `loadAll` omits it | `loadAll` in `data/repos.zig` | 1 |
@@ -197,7 +197,7 @@ none of them is "later".
       every role that may open it and denies it to every role that may not.
       The matrix test still walks every pair.
 - [ ] If it is a rail destination, it appears in the right role's rail
-      table in `src/core/rbac.zig` **and** in `rbac.section_screen`.
+      table in `packages/ros-core/src/core/rbac.zig` **and** in `rbac.section_screen`.
 - [ ] The data it needs has a named SQL constant, a loader and a decoder in
       `apps/admin/src/data/repos.zig`, each with its own `key_*` effect
       constant, and every write is one `dbExec` with all of its statements.
@@ -206,7 +206,7 @@ none of them is "later".
 - [ ] A template exists at `apps/admin/src/screens/screen-<name>.native`
       with exactly one `<template name="screen-<name>">` and exactly one
       element child.
-- [ ] The file is imported in `src/app.native` **and** listed in
+- [ ] The file is imported in `apps/admin/src/app.native` **and** listed in
       `apps/admin/src/app_sources.zig`.
 - [ ] The shell has an `<if test="{screen_index == N}">` gate for it, and
       the gate is inside the `show_shell` block.

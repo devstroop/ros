@@ -228,18 +228,18 @@ paths are given so a reader can check the claim rather than trust it.
 
 **In this repository** (`apps/ros/`):
 
-- `src/core/navigation.zig`: `Role.needs_sign_in()` - the split
+- `packages/ros-core/src/core/navigation.zig`: `Role.needs_sign_in()` - the split
   boundary is already in the code.
-- `src/core/rbac.zig`: `allows`, `home`, `nav_sections` - the
+- `packages/ros-core/src/core/rbac.zig`: `allows`, `home`, `nav_sections` - the
   permission matrix, which becomes three.
-- `src/schema/0010_sync.sql`: `device`, `op_log`, `sync_state` - the
+- `apps/admin/src/schema/0010_sync.sql`: `device`, `op_log`, `sync_state` - the
   wire format this reuses; `device.role`'s CHECK constrains the
   vocabulary the beacon must use.
-- `src/data/auth.zig`: `hashPin` derives the bcrypt salt from the
+- `packages/ros-core/src/data/auth.zig`: `hashPin` derives the bcrypt salt from the
   installation salt, and `deriveSalt` says why.
-- `src/data/repos.zig`: `login_sql` matches the computed hash for
+- `packages/ros-core/src/data/repos.zig`: `login_sql` matches the computed hash for
   equality, and `saveSalt` writes the installation salt once.
-- `src/main.zig`: `auth.makeSalt(init.io, ...)` - the salt is made
+- `apps/admin/src/main.zig`: `auth.makeSalt(init.io, ...)` - the salt is made
   per installation, and each app is its own installation.
 - [`architecture/08`](../architecture/08-sync.md): the
   transport-out, protocol-in shape this refines.

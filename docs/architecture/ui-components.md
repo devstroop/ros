@@ -9,17 +9,17 @@
 > installed in this workspace, so the behaviours below were read from
 > the SDK reference and the app's own source, not exercised against a
 > running build.
-> **Source of truth:** `src/app.native`, `src/screens/*.native`,
-> `src/app_sources.zig`, `src/core/theme.zig`, `src/core/model.zig`,
-> `src/core/msg.zig`, plus the Native SDK's
+> **Source of truth:** `apps/admin/src/app.native`, `src/screens/*.native`,
+> `apps/admin/src/app_sources.zig`, `packages/ros-core/src/core/theme.zig`, `packages/ros-core/src/core/model.zig`,
+> `packages/ros-core/src/core/msg.zig`, plus the Native SDK's
 > [native-ui authoring guide](~/.local/lib/node_modules/@native-sdk/cli/skill-data/).
 > **Related:** [ADR-0010](../decisions/0010-markup-only-no-custom-paint.md),
 > [06-ui-markup-and-theming](06-ui-markup-and-theming.md).
 
 ## The view is markup
 
-There is no widget tree built in Zig. `src/app.native` declares the
-shell, each screen is a `<template>` in `src/screens/`, and the runtime
+There is no widget tree built in Zig. `apps/admin/src/app.native` declares the
+shell, each screen is a `<template>` in `apps/admin/src/screens/`, and the runtime
 parses the markup, resolves the bindings against the model, and builds
 the widgets. The app never calls a paint API.
 
@@ -157,7 +157,7 @@ each state, and the row supplies only the ordinal it already stored as
 
 So the colour is not data, and it is not free: the pairing between a
 state, its word and its two tokens lives in the chain and in
-`status_chips` in `src/tests.zig`, and that test fails if either moves.
+`status_chips` in `apps/admin/src/tests.zig`, and that test fails if either moves.
 `docs/glossary.md` carries the same table for the humans.
 
 ### Message payloads must be bindings
@@ -523,7 +523,7 @@ A `scroll` wraps its multiple children in a `column`. `gap` on the
 
 ### A note on `screen-*` files
 
-Each file in `src/screens/` is a **component file**: templates only, no
+Each file in `apps/admin/src/screens/` is a **component file**: templates only, no
 view root. The shell is the only view root, and the screen templates are
 mounted by `<use>` inside the shell's `<if>` gates. `parts.native` is
 one too - the file a screen imports for a piece it shares with its
@@ -548,7 +548,7 @@ importing file, before its templates:
 ```
 
 **Half two - the embedded source set.** Every file the markup imports
-must also be listed in `src/app_sources.zig`:
+must also be listed in `apps/admin/src/app_sources.zig`:
 
 ```zig
 // src/app_sources.zig
@@ -718,7 +718,7 @@ one more entry to `app_sources.zig` per file.
 
 ## The design tokens
 
-`src/core/theme.zig` is the whole design system, in one file a
+`packages/ros-core/src/core/theme.zig` is the whole design system, in one file a
 designer can read and a developer can diff. The platform's token
 references resolve against the app's **live** tokens on every rebuild
 (`finalizeWithTokens`), so a themed app re-resolves them when the theme
@@ -1032,9 +1032,9 @@ Writing a screen template:
 Wiring a screen in:
 
 - [ ] The `<import src="screens/screen-<name>.native"/>` line is in
-      `src/app.native`.
+      `apps/admin/src/app.native`.
 - [ ] The matching `canvas.ui_markup.SourceFile` entry with its
-      `@embedFile` is in `src/app_sources.zig`.
+      `@embedFile` is in `apps/admin/src/app_sources.zig`.
 - [ ] The shell has an `<if test="{screen_index == N}">` gate using the
       enum's ordinal.
 - [ ] A test builds the tree and finds a landmark text.
@@ -1044,7 +1044,7 @@ Building a component:
 - [ ] The component lives in `src/components/<name>.native` as a
       component file: templates only.
 - [ ] The component is imported by the file that uses it, and listed in
-      `src/app_sources.zig`.
+      `apps/admin/src/app_sources.zig`.
 - [ ] The component's inputs are template args with **literal** defaults
       only - a `{binding}` default is an error.
 - [ ] The component is model-driven: it binds values and dispatches

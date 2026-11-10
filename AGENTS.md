@@ -140,7 +140,7 @@ Other rules that bite:
 - **Every table is `STRICT`.** `native check` rejects anything else.
 - **Migrations are append-only.** Add one with
   `native db new-migration <name>`; never edit a shipped one. The lock file
-  `src/schema/migrations.lock.json` is the authority for what has been
+  `apps/admin/src/schema/migrations.lock.json` is the authority for what has been
   applied.
 - **One named SQL constant per query**, in `data/repos.zig`. A schema change
   is one edit, not a grep.
@@ -198,9 +198,9 @@ test "a role cannot open a screen it may not use" {
 6. Add the SQL to `data/repos.zig` if it needs data.
 7. Write the template in `apps/admin/src/screens/screen-<name>.native`:
    one `<template>`, an HTML comment saying what it is.
-8. Register it in that app's `src/app_sources.zig` and import it in
-   `src/app.native`. If another role may open it, copy the template into
-   that app's `src/screens/` and add it to that app's closure - the copy
+8. Register it in that app's `apps/admin/src/app_sources.zig` and import it in
+   `apps/admin/src/app.native`. If another role may open it, copy the template into
+   that app's `apps/admin/src/screens/` and add it to that app's closure - the copy
    is checked by `scripts/check-copies.sh`.
 9. Gate it in the shell: `<if test="{screen_index == N}"><use template="…"/></if>`.
 10. Add a test: the screen opens, the role is refused if it should be, and
@@ -230,7 +230,7 @@ against real SQLite — that is the point of the check.
 | Who may do what? | `packages/ros-core/src/core/rbac.zig` |
 | What is in the database? | `apps/<role>/src/schema/*.sql` |
 | What is the SQL? | `packages/ros-core/src/data/repos.zig` |
-| What does the operator see? | `apps/<role>/src/app.native`, `src/screens/` |
+| What does the operator see? | `apps/<role>/src/app.native`, `apps/admin/src/screens/` |
 | What colour is the brand? | `packages/ros-core/src/core/theme.zig` |
 | How does the system fit together? | `docs/architecture/` |
 | What was decided, and why? | `docs/decisions/` |
