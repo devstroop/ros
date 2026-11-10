@@ -19,3 +19,21 @@ pub fn send(io: std.Io, host: []const u8, port: u16, bytes: []const u8) !void {
     try writer.interface.writeAll(bytes);
     try writer.interface.flush();
 }
+
+
+/// Send with a small number of retries. Returns the last error if all
+/// attempts fail. A sale is never blocked by this: the caller spools
+/// on failure.
+pub fn sendWithRetry(io: std.Io, host: []const u8, port: u16, bytes: []const u8, attempts: usize) !void {
+    var last_err: anyerror = error.ConnectionFailed;
+    var i: usize = 0;
+    while (i < attempts) : (i += 1) {
+        send(io, host, port, bytes) catch |err| {
+            last_err = err;
+            if (i + 1 < attempts) std.Io.sleep(io, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+            continue;
+        };
+        return;
+    }
+    return last_err;
+}
