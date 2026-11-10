@@ -67,6 +67,8 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .title = "Restaurant OS Admin",
     .width = window_width,
     .height = window_height,
+    .min_width = 960,
+    .min_height = 600,
     .views = &shell_views,
 }};
 const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
