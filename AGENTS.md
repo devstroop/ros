@@ -250,5 +250,5 @@ against real SQLite — that is the point of the check.
 - Do not skip the schema check because "the SQL is obviously fine". The
   check is cheap; the STRICT table is not.
 - Do not invent platform APIs. If something is not in the SDK reference
-  (`../native-zig-showcase/docs/sdk/`), it does not exist: check, and if it
+  (`~/.local/lib/node_modules/@native-sdk/cli/skill-data/`), it does not exist: check, and if it
   is missing, write down the gap instead of guessing.

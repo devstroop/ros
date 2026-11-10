@@ -4,7 +4,7 @@
 > runtime lifecycle, the module map, the data flow, and the mechanics of
 > adding a screen.
 > **Source:** `apps/admin/src/**`, `apps/admin/app.json`, and the Native
-> SDK authoring guides in `native-zig-showcase/docs/sdk/`.
+> SDK authoring guides in `~/.local/lib/node_modules/@native-sdk/cli/skill-data/`.
 > **Method:** read from source. The Native SDK CLI (`native`) is not on the
 > PATH in this workspace, so no build or test run backs the claims here.
 
