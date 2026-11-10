@@ -44,10 +44,14 @@ const discovery = @import("../net/discovery.zig");
 const client = @import("../net/client.zig");
 const repos = @import("../data/repos.zig");
 const auth = @import("../data/auth.zig");
+const job_mod = @import("../print/job.zig");
 
 const Model = model_mod.Model;
 const Msg = msg_mod.Msg;
 const Effects = native_sdk.Effects(Msg);
+
+var shared_io: std.Io = undefined;
+var has_shared_io: bool = false;
 
 /// The channel's key on the effects channel. The database keys are small
 /// and dense; this is far away from them on purpose.
@@ -81,6 +85,49 @@ pub const Threads = struct {
         if (self.receiver) |thread| thread.join();
     }
 };
+
+pub fn storeIo(io: std.Io) void {
+    shared_io = io;
+    has_shared_io = true;
+}
+
+const PrintContext = struct {
+    io: std.Io,
+    host: []const u8,
+    port: u16,
+    order_no: []const u8,
+    total_minor: i64,
+    decimals: u8,
+};
+
+fn printThread(ctx: *PrintContext) void {
+    job_mod.run(ctx.io, ctx.host, ctx.port, ctx.order_no, ctx.total_minor, ctx.decimals, 3) catch {};
+}
+
+pub fn printReceiptToPrinter(address: []const u8, order_no: []const u8, total_minor: i64, decimals: u8) void {
+    var host: []const u8 = address;
+    var port: u16 = 9100;
+    if (std.mem.lastIndexOfScalar(u8, address, ':')) |idx| {
+        host = address[0..idx];
+        port = std.fmt.parseInt(u16, address[idx + 1 ..], 10) catch 9100;
+    }
+    printReceipt(host, port, order_no, total_minor, decimals);
+}
+
+pub fn printReceipt(host: []const u8, port: u16, order_no: []const u8, total_minor: i64, decimals: u8) void {
+    if (!has_shared_io) return;
+    const io = shared_io;
+    const ctx = std.heap.page_allocator.create(PrintContext) catch return;
+    ctx.* = .{
+        .io = io,
+        .host = std.heap.page_allocator.dupe(u8, host) catch return,
+        .port = port,
+        .order_no = std.heap.page_allocator.dupe(u8, order_no) catch return,
+        .total_minor = total_minor,
+        .decimals = decimals,
+    };
+    _ = std.Thread.spawn(.{}, printThread, .{ctx}) catch {};
+}
 
 /// Open the channel and tell the thread it may post.
 ///
