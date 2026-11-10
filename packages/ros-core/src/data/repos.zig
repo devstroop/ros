@@ -256,7 +256,9 @@ pub const report_sql =
     \\       COALESCE(SUM(
     \\         (SELECT COALESCE(SUM(amount_minor), 0)
     \\          FROM payment WHERE payment.order_id = orders.id)
-    \\       ), 0) AS taken_minor
+    \\       ), 0) AS taken_minor,
+    \\       COALESCE((SELECT SUM(-amount_minor) FROM refund
+    \\                WHERE refunded_at >= ?1), 0) AS refunded_minor
     \\FROM orders
     \\WHERE placed_at >= ?1 AND status <> 5;
 ;
