@@ -79,9 +79,9 @@ database or accept a job (see [08-sync](08-sync.md) and
 | Core | `src/core/*.zig` | Model, messages, update, navigation, RBAC, theme, buffers | Implemented |
 | Domain | `src/domain/models.zig` | Entity shapes, enums, money/time conventions | Implemented subset |
 | Data | `src/data/*.zig` | SQL constants, reads, decoders, writes, credential hashing, page reader | Partial |
-| Schema | `src/schema/0001..0017_*.sql` | 46 STRICT tables, migration lock | Scaffolded beyond core |
-| Sidecars | `tools/sync-sidecar`, `tools/print-sidecar` | Intended external transports | Empty directories |
-| CI / scripts | `.github/workflows`, `scripts` | Intended build/test/automation | Empty directories |
+| Schema | `src/schema/0001..0021_*.sql` | 46 STRICT tables, migration lock | Scaffolded beyond core |
+| Sidecars | `packages/ros-core/src/net/` (in-process sync) | Sync over LAN | Implemented (no separate binary) |
+| CI / scripts | `.github/workflows`, `scripts` | Build/test/automation | Implemented |
 
 ## The four roles
 
@@ -165,13 +165,13 @@ Implemented end to end today:
 - order list and status advance;
 - floor table board (read-only);
 - kitchen board with lifecycle advance;
-- 46-table schema, 17 migrations, core repositories;
-- 80 authored headless tests, of which 47 run against an in-memory database.
+- 46-table schema, 21 migrations, core repositories;
+- 232 authored headless tests in admin, 156 database integration tests.
 
 Not implemented, despite appearing as types or tables:
 
-- 14 of the 45 screens have no template;
-- customers, employees, catalog and settings administration;
+- 53 screens, all templated in the admin app;
+- customers, employees, catalog and settings administration (partial);
 - payments, reports, discounts, modifiers, inventory in the UI;
 - display board, waiter shell;
 - sync sidecar and op-log writes;
