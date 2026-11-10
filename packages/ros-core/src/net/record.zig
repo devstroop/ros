@@ -94,6 +94,7 @@ pub const OrderSnapshot = struct {
     /// origin columns existed; the writer's `device_id` is the origin
     /// in that case.
     origin_device: []const u8 = "",
+    order_no: []const u8 = "",
     order_type: i64,
     status: i64,
     dining_table_id: ?i64 = null,

@@ -3726,6 +3726,7 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
     const snapshot = record.OrderSnapshot{
         .id = origin_id,
         .origin_device = origin_device,
+        .order_no = order.order_no,
         .order_type = @intFromEnum(order.order_type),
         .status = @intFromEnum(order.status),
         .dining_table_id = if (order.dining_table_id == 0) null else order.dining_table_id,
@@ -4246,22 +4247,26 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
     const origin_id = snapshot.id;
 
     // The number is local. The bump is conditional on the origin being
-    // new, so a duplicate op does not consume a second number.
-    var sequence_params: [3]native_sdk.EffectDbValue = .{
-        .{ .integer = snapshot.placed_at },
-        .{ .text = origin_device },
-        .{ .integer = origin_id },
-    };
-    statements[count] = .{
-        .sql =
-        \\INSERT INTO sequence (name, value, updated_at)
-        \\SELECT 'order_no', 1, ?1
-        \\WHERE NOT EXISTS (SELECT 1 FROM orders WHERE origin_device = ?2 AND origin_id = ?3)
-        \\ON CONFLICT(name) DO UPDATE SET value = value + 1, updated_at = ?1;
-        ,
-        .params = &sequence_params,
-    };
-    count += 1;
+    // new, so a duplicate op does not consume a second number. A peer
+    // that carries its own number (the modern case) does not need a
+    // number from this database's sequence at all.
+    if (snapshot.order_no.len == 0) {
+        var sequence_params: [3]native_sdk.EffectDbValue = .{
+            .{ .integer = snapshot.placed_at },
+            .{ .text = origin_device },
+            .{ .integer = origin_id },
+        };
+        statements[count] = .{
+            .sql =
+            \\INSERT INTO sequence (name, value, updated_at)
+            \\SELECT 'order_no', 1, ?1
+            \\WHERE NOT EXISTS (SELECT 1 FROM orders WHERE origin_device = ?2 AND origin_id = ?3)
+            \\ON CONFLICT(name) DO UPDATE SET value = value + 1, updated_at = ?1;
+            ,
+            .params = &sequence_params,
+        };
+        count += 1;
+    }
 
     // A reference row this device has not received yet becomes NULL,
     // not a foreign-key failure: the ticket still arrives, and the
@@ -4272,7 +4277,7 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
     // pair is checked first, so a repeated create op - or an op for an
     // order this database already holds as a local sale - writes
     // nothing.
-    var order_params: [14]native_sdk.EffectDbValue = .{
+    var order_params: [15]native_sdk.EffectDbValue = .{
         .{ .integer = snapshot.order_type },
         .{ .integer = snapshot.status },
         nullableIdParam(snapshot.dining_table_id),
@@ -4287,6 +4292,7 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
         .{ .text = op.id },
         .{ .text = origin_device },
         .{ .integer = origin_id },
+        .{ .text = if (snapshot.order_no.len > 0) snapshot.order_no else "" },
     };
     statements[count] = .{
         .sql =
@@ -4296,7 +4302,7 @@ fn applyOrder(fx: *Effects, op: record.Op, snapshot: record.OrderSnapshot, persi
         \\  origin_device, origin_id)
         \\SELECT
         \\  COALESCE((SELECT MIN(id) FROM orders WHERE id < 0), 0) - 1,
-        \\  (SELECT printf('%06d', value) FROM sequence WHERE name = 'order_no'),
+        \\  COALESCE(NULLIF(?15, ''), (SELECT printf('%06d', value) FROM sequence WHERE name = 'order_no')),
         \\  ?1, ?2,
         \\  (SELECT id FROM dining_table WHERE id = ?3),
         \\  (SELECT id FROM customer WHERE id = ?4),
