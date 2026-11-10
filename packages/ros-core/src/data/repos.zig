@@ -398,6 +398,7 @@ pub const table_counts_sql =
     \\UNION ALL SELECT 'order_status_history' AS name, (SELECT COUNT(*) FROM order_status_history) AS n
     \\UNION ALL SELECT 'orders' AS name, (SELECT COUNT(*) FROM orders) AS n
     \\UNION ALL SELECT 'payment' AS name, (SELECT COUNT(*) FROM payment) AS n
+    \\UNION ALL SELECT 'refund' AS name, (SELECT COUNT(*) FROM refund) AS n
     \\UNION ALL SELECT 'printer' AS name, (SELECT COUNT(*) FROM printer) AS n
     \\UNION ALL SELECT 'product' AS name, (SELECT COUNT(*) FROM product) AS n
     \\UNION ALL SELECT 'product_category' AS name, (SELECT COUNT(*) FROM product_category) AS n
