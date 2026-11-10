@@ -1,15 +1,18 @@
 # Sync architecture
 
-> **Status:** Scaffolded — `op_log`, `device` and `sync_state` tables exist;
-> the app writes no ops and no sidecar code exists.
-> **Last verified:** 2026-10-20, by source review.
-> **Source:** `src/schema/0010_sync.sql`, `tools/sync-sidecar/` (empty),
-> `PORT-PLAN.md` §8.4.
-> **Target:** this page describes the shape ADR-0009 chose.
-> [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md) revises it — the
-> op log survives as the wire format, the sidecar does not, and the
-> transport becomes HTTP/1.1 on TCP between the apps themselves. See
-> [12-three-apps-and-ipc](12-three-apps-and-ipc.md).
+> **Status:** Implemented core, revised by ADR-0017. The op log,
+> per-device Lamport clock and vector cursor are in the apps; the
+> sidecar and the LWW sections below record the original design and are
+> kept for context.
+> **Last verified:** 2026-11-04, by source review.
+> **Source:** `packages/ros-core/src/net/`,
+> `packages/ros-core/src/data/repos.zig`.
+> **Design:** [12-three-apps-and-ipc](12-three-apps-and-ipc.md) and
+> [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md) — the op log
+> survives as the wire format, the sidecar does not, and the transport
+> is HTTP/1.1 on TCP between the apps themselves. Late join and
+> compaction are
+> [ADR-0020](../decisions/0020-late-join-and-compaction.md).
 
 ## The problem
 
@@ -92,6 +95,23 @@ This is simple and matches v1. It is also lossy: two edits to different
 fields of the same row cannot both survive. Whether that is acceptable is
 an open product question.
 
+Two refusals are not conflicts, and the receiving half applies them in
+SQL rather than trusting what sent them:
+
+- **A status move is monotonic.** `voided` may end an open ticket and
+  cannot undo a completed one.
+- **`completed` arrives with the money.** A status op that asks to close
+  an order with no `payment` row is refused; the op itself is still
+  recorded, so the peer is not asked to send it again, and the order
+  stays where the kitchen left it. The close is `applyPayment`'s, in the
+  same transaction as the row it carries
+  ([ADR-0024](../decisions/0024-a-ticket-closes-with-its-money.md)).
+
+An `order` row from a snapshot page is not refused for the same reason -
+that row *is* the ticket, and the money may well be on the next page. It
+is the one road a state with no payment behind a closed ticket can still
+travel, and it is named in the ADR rather than closed here.
+
 ## Intended app responsibilities
 
 | Responsibility | Today |
@@ -117,7 +137,7 @@ The order write is the natural first integration point: `saveOrder` and
 | Elect a host | No binary |
 | Detect peers and liveness | No binary |
 | Prune old ops | No policy |
-| Authenticate peers | No policy |
+| Authenticate peers | **The app does it, since ADR-0023** - a shared device token in the `x-ros-token` header of every request for the restaurant's data. The sidecar was never built, so nothing above it moved |
 
 `tools/sync-sidecar/` is an empty directory. There is no language choice,
 no build script, no protocol document beyond this design.
@@ -139,16 +159,33 @@ no build script, no protocol document beyond this design.
 
 ## Security and trust
 
-The design currently has **no authentication or authorisation**:
+The design below was written against a sidecar that was never built, and
+the app answers the wire itself now. Of the list, one thing has since
+been settled and the rest is still true:
 
-- any device with the WebSocket address can connect;
-- `device_id` is self-asserted text;
-- `op_log` accepts any snapshot;
-- there is no pairing flow, shared secret, or TLS;
-- the schema stores `role` as text but nothing enforces it.
+- ~~any device with the WebSocket address can connect~~ - **answered.**
+  The transport is HTTP between the three apps, and `/v1/reference`,
+  `/v1/ops`, `/v1/snapshot` and `/v1/events` answer a peer that presents
+  this installation's pairing token and refuse anyone else with `401`.
+  `/v1/hello` still answers anyone on purpose: it carries the peer card,
+  not the restaurant. [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md);
+- `device_id` is self-asserted text - the installation token names the
+  writer of an op, and it is *not* an authorization: two devices that
+  share the pairing token can both claim to be either. The op's *effect*
+  is what the record schema constrains, not the id;
+- `op_log` accepts any snapshot - a paired peer only, since ADR-0023, and
+  a snapshot is still trusted as its writer's word for the rows it
+  carries. **Open**;
+- there is no pairing flow, shared secret, or TLS - **there is a shared
+  secret and a place to rotate it** (the admin's Control centre), but no
+  flow: the token is typed, or seeded with `ROS_NET_TOKEN`, and every
+  device must be told by hand. There is still no TLS, so whoever can read
+  the wire can read the token too. **Open**;
+- the schema stores `role` as text but nothing enforces it. **Open**.
 
-For a LAN in a restaurant this may be acceptable for v1, but it should be
-an explicit decision, not an omission. See
+For a LAN in a restaurant the pairing token is what makes "a trusted LAN"
+a decision an owner can act on rather than an assumption the code makes
+for them. It is not a substitute for a network the owner controls. See
 [`plan/open-questions.md`](../plan/open-questions.md).
 
 ## What is decided vs not
@@ -163,13 +200,20 @@ Decided (proposed in the ADR):
 Not decided:
 
 - sidecar implementation language and lifecycle;
-- peer authentication;
+- ~~peer authentication~~ - decided by
+  [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md):
+  one shared device token per installation, in a header, rotatable by
+  an operator. What is *not* decided is per-device identity and
+  revocation, and TLS;
 - which tables sync;
 - conflict handling beyond LWW;
 - deletion semantics (tombstones vs snapshots);
-- clock pruning and `op_log` growth;
 - whether the app or sidecar owns schema migration;
 - whether sync is required for a single-device install.
+
+Clock pruning and `op_log` growth are settled separately by
+[ADR-0020](../decisions/0020-late-join-and-compaction.md): the log
+compacts to a snapshot and keeps a 64-clock tail per device.
 
 See [ADR-0009](../decisions/0009-oplog-sync-with-transport-sidecar.md) and
 [phase 6](../plan/phase-6-sync-sidecar.md).

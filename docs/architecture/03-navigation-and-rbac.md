@@ -27,16 +27,23 @@ and, for the session/history boundary,
 
 | Role | Label | Sign-in | Home | Rail |
 |---|---|---|---|---|
-| `admin` | Admin | PIN | `admin_dashboard` | Overview, Sell, Orders, Floor, Catalog, People, System |
-| `waiter` | Waiter | PIN | `waiter_tables` | Service |
+| `admin` | Admin | PIN or password | `admin_dashboard` | Dashboard, POS, Orders, Dining, Menu, Team, Settings |
+| `waiter` | Waiter | PIN or password | `waiter_tables` | Service |
 | `kds` | Kitchen | Device (kiosk) | `kds_board` | Kitchen |
 | `display` | Display | Device (kiosk) | `display_board` | Display |
 
 Kiosk roles are signed in by device: choosing the role sets
-`signed_in = true` and loads the shell data. There is no PIN, no lockout
-and no operator identity for them. This is intentional for a wall-mounted
-board, but it means a kiosk cannot attribute an action to a person. That
-is an open question in [`plan/open-questions.md`](../plan/open-questions.md).
+`signed_in = true` and loads the shell data. There is no credential to
+type, no lockout and no operator identity for them. This is intentional
+for a wall-mounted board, but it means a kiosk cannot attribute an action
+to a person. That is an open question in
+[`plan/open-questions.md`](../plan/open-questions.md).
+
+A role that needs a person opens the people list first: the operator
+names themselves, and their row answers two questions at once - which
+mode this device switches to, and whether they tap a PIN or type a
+password. Nobody is asked to choose the mode twice, and the mode comes
+from the binary's own role table, so the two cannot disagree.
 
 ## The 53 screens
 
@@ -135,8 +142,8 @@ there.
 
 | Role | Allowed screens |
 |---|---|
-| `admin` | Every screen (43/43) |
-| `waiter` | `role_picker`, `login`, `landing`, `waiter_tables`, `waiter_menu`, `waiter_cart`, `waiter_orders`, `orders`, `order_detail`, `order_confirmation`, `customers`, `reset_pin` |
+| `admin` | Every screen (53/53) |
+| `waiter` | `role_picker`, `login`, `landing`, `pos`, `pos_cart`, `payments`, `waiter_tables`, `waiter_menu`, `waiter_cart`, `waiter_orders`, `orders`, `order_detail`, `order_confirmation`, `customers`, `reset_pin` |
 | `kds` | `role_picker`, `login`, `kds_board`, `order_detail` |
 | `display` | `role_picker`, `login`, `display_board`, `order_detail` |
 
@@ -150,9 +157,11 @@ Guarantees:
   no second path that writes `screen_index` except session setup and
   `go_back`.
 
-Waiter can reach `customers` and `order_confirmation`, but neither has a
-wired template. Waiter can also reach `reset_pin`, which has no template.
-The permission matrix is broader than the rendered surface.
+The waiter's matrix and the service shell now agree: the counter POS
+(`pos`, `pos_cart`) and `payments` are mounted there, as are
+`customers`, `order_confirmation` and `reset_pin`. The admin app remains
+the wildcard superset
+([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
 
 ## Nav sections and the rail
 
@@ -190,7 +199,7 @@ pattern in this SDK; see the comment in `rbac.zig`.
 role picker
    │ pick_role(admin|waiter)        pick_role(kds|display)
    ▼                                      ▼
- login (PIN)                          signed in by device
+ login (people → pad or field)        signed in by device
    │ submit_login                         │
    ▼                                      ▼
  signed in ──▶ home ──▶ loadAll ────────▶ home
@@ -207,6 +216,14 @@ on `gate`. Device settings (theme, splits, station filter, salt, device
 token) are kept. The reset is called from `pick_role`, a successful
 `login_checked`, `sign_out`, `pick_role_again`, and setup's success and
 failure paths.
+
+The one thing the reset does not decide is who the gate asks for. A
+successful sign-in clears the picker's pending choice, and `sign_out`
+reads the person who just left back off the staff list through
+`choose_sign_in`, so the gate they land on names them and offers the
+surface their row says they use. A sign-out whose row has gone - the
+person was removed mid-session - has no gate to go back to, and opens
+the picker.
 
 ### `open_section`: a fixed bug worth remembering
 
@@ -231,10 +248,11 @@ surviving sign-out - are fixed. See
    are a blank content pane.~~ FIXED: every screen in the enum is
    mounted, every one of them renders, and every one of them has a
    landmark of its own.
-2. **The waiter's rail leads to a working floor, but the waiter cannot
-   pay for a table.** The floor, the menu, the cart and the order list
-   render; the money does not. The waiter takes the order and the
-   payment is taken at the till.
+2. ~~**The waiter's rail leads to a working floor, but the waiter
+   cannot pay for a table.**~~ FIXED: the waiter role opens `pos`,
+   `pos_cart` and `payments`, and the service app mounts them. The
+   waiter takes the order and the payment on the same device
+   ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
 3. ~~**`pos_cart` is unused.** The POS uses an inline cart pane, not the
    `pos_cart` screen.~~ FIXED: the cart is ONE template, used both as
    the pane beside the menu and as the `pos_cart` screen, so the two

@@ -1,12 +1,16 @@
 # ADR-0017: Three apps, one core, TCP/IP between them
 
-> **Status:** Proposed - needs an owner and a go/no-go
+> **Status:** Accepted - implemented 2026-10-24
 > **Date:** 2026-10-21
 > **Deciders:** Devstroop maintainers, product
 > **Related:** [`0004-four-roles-one-binary.md`](0004-four-roles-one-binary.md)
 > (superseded), [`0009-oplog-sync-with-transport-sidecar.md`](0009-oplog-sync-with-transport-sidecar.md)
 > (revised), [`architecture/12`](../architecture/12-three-apps-and-ipc.md),
 > [`plan/phase-9`](../plan/phase-9-three-apps-and-ipc.md)
+>
+> **Implementation:** The three apps, the TCP/IP wire, the op log,
+> peer discovery and reference data are merged. Late-join compaction,
+> the event stream and packaging remain open in phase 9.
 
 ## Context
 
@@ -117,7 +121,7 @@ raw TCP.**
    The employee row is the one entry in that table that is not yet
    settled: a device can only verify a PIN if the row carries the salt
    it needs, and the salt is currently the **installation's**, which
-   each app owns separately. See [the sign-in problem](../architecture/12-three-apps-and-ipc.md#the-sign-in-problem).
+   each app owns separately. See [the sign-in problem](../architecture/12-three-apps-and-ipc.md#the-sign-in-problem-and-how-it-was-settled).
    The protocol does not change either way - the row replicates as
    reference data - but the row's contents do, and that has to be
    decided before the protocol is frozen.
@@ -193,7 +197,9 @@ raw TCP.**
   device ships: a protocol that three apps and two app versions must
   agree on is not something to change in flight.
 - Decide peer authentication. A trusted LAN is the default and an
-  explicit decision, not an omission.
+  explicit decision, not an omission. **Decided by
+  [ADR-0023](0023-a-peer-presents-a-shared-device-token.md): a shared
+  device token, presented on every request for the restaurant's data.**
 - Decide whether the admin app is the preferred bootstrap peer and the
   reference-data seed, or whether any peer may serve either.
 - Decide how a device that has been offline for a week reconciles.

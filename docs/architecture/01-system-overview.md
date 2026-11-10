@@ -78,8 +78,8 @@ database or accept a job (see [08-sync](08-sync.md) and
 | View import closure | `src/app_sources.zig` | Embeds every imported template | Implemented |
 | Core | `src/core/*.zig` | Model, messages, update, navigation, RBAC, theme, buffers | Implemented |
 | Domain | `src/domain/models.zig` | Entity shapes, enums, money/time conventions | Implemented subset |
-| Data | `src/data/*.zig` | SQL constants, reads, decoders, writes, PIN hashing, page reader | Partial |
-| Schema | `src/schema/0001..0011_*.sql` | 43 STRICT tables, migration lock | Scaffolded beyond core |
+| Data | `src/data/*.zig` | SQL constants, reads, decoders, writes, credential hashing, page reader | Partial |
+| Schema | `src/schema/0001..0017_*.sql` | 46 STRICT tables, migration lock | Scaffolded beyond core |
 | Sidecars | `tools/sync-sidecar`, `tools/print-sidecar` | Intended external transports | Empty directories |
 | CI / scripts | `.github/workflows`, `scripts` | Intended build/test/automation | Empty directories |
 
@@ -90,8 +90,8 @@ a build variant.
 
 | Role | Sign-in | Home | Current shell status |
 |---|---|---|---|
-| Admin | PIN | `admin_dashboard` | Implemented; rail destinations partially rendered |
-| Waiter | PIN | `waiter_tables` | Partial; no waiter template is wired |
+| Admin | PIN or password | `admin_dashboard` | Implemented; rail destinations partially rendered |
+| Waiter | PIN or password | `waiter_tables` | Partial; no waiter template is wired |
 | Kitchen (KDS) | Device (kiosk) | `kds_board` | Implemented |
 | Display | Device (kiosk) | `display_board` | Scaffolded; screen not wired |
 
@@ -105,7 +105,7 @@ Details, including the full permission matrix, are in
 1. `main.zig` creates the `UiApp`, then generates a provisional
    installation salt.
 2. The runtime calls `boot`, which sets `now_ms`, starts a 1s repeating
-   timer and asks for the PIN salt (`repos.loadConfig`).
+   timer and asks for the installation salt (`repos.loadConfig`).
 3. `config_loaded` either adopts the stored salt or creates one (fresh
    install).
 4. The role picker is the first screen (`screen_index = 0`,
@@ -113,17 +113,21 @@ Details, including the full permission matrix, are in
 
 ### Admin sale
 
-1. Pick **Admin** → PIN screen → hashed PIN checked in SQL → dashboard.
+1. Pick **Admin** → choose yourself on the people list → tap the PIN or
+   type the password, masked either way → the row's bcrypt hash is
+   verified in Zig → dashboard.
 2. Dashboard loads company, categories, products, tables, employees,
    orders and order lines (`repos.loadAll`).
-3. Open **Sell** → filter/search menu → add products to cart → choose
+3. Open **POS** → filter/search menu → add products to cart → choose
    dine-in/take-away/delivery → place order.
 4. `repos.saveOrder` writes the order and its lines in one atomic
    `dbExec`, then the app reloads orders and navigates to
    `order_confirmation` (currently a blank pane — no template yet).
-5. The order appears on the order list and the kitchen board; **Advance**
-   moves it pending → preparing → ready → served → completed and writes
-   `order_status_history`.
+5. The order appears on the order list and the kitchen board. The board's
+   button names the move it is about to make - **Start cooking**, **Mark
+   ready**, **Hand off**, **Close ticket** - and takes the ticket
+   New → Cooking → Ready → Served → Closed, writing
+   `order_status_history` at every step.
 
 ### Kiosk kitchen
 
@@ -154,13 +158,14 @@ anchor.
 
 Implemented end to end today:
 
-- role picker, PIN sign-in, kiosk sign-in, sign-out, theme toggle;
+- role picker, people list, PIN and password sign-in, kiosk sign-in,
+  sign-out, theme toggle;
 - dashboard counts and recent orders;
 - POS menu, filters, cart, order types, order placement;
 - order list and status advance;
 - floor table board (read-only);
 - kitchen board with lifecycle advance;
-- 43-table schema, 11 migrations, core repositories;
+- 46-table schema, 17 migrations, core repositories;
 - 80 authored headless tests, of which 47 run against an in-memory database.
 
 Not implemented, despite appearing as types or tables:

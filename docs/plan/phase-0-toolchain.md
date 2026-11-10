@@ -22,7 +22,8 @@ The hard part is not the code; it is the pinned environment.
 - The CLI-synthesised build directory `.native/build/` (generated, not
   owned).
 - `scripts/setup.sh`, `env.sh`, `dev.sh`, `build.sh`, `verify-all.sh`.
-- `.github/workflows/ci.yml` (verify + non-blank smoke).
+- `.github/workflows/ci.yml` (verify, per-app non-blank smoke, sale smoke,
+  package).
 
 ## What is missing
 
@@ -30,7 +31,6 @@ The hard part is not the code; it is the pinned environment.
 |---|---|
 | A non-macOS pin/instruction | `scripts/env.sh` and `setup.sh` assume Homebrew paths at `/opt/homebrew` |
 | A recorded clean-machine proof | The scripts exist; Linux and Windows are unproven |
-| CI coverage of the sale path | The workflow runs check/test and a non-blank smoke only |
 
 Environment facts (verified on this machine on 2026-10-20):
 
@@ -48,7 +48,9 @@ Environment facts (verified on this machine on 2026-10-20):
 1. Generalise `scripts/env.sh`/`setup.sh` beyond Homebrew/macOS (or add a
    `mise.toml`/`.tool-versions`).
 2. Add a Linux bootstrap and prove `native check`/`native test` there.
-3. Extend CI's smoke through a seeded sale (see G-018).
+3. ~~Extend CI's smoke through a seeded sale (see G-018).~~ Done:
+   `scripts/smoke-sale.sh` walks the sale through the admin and kiosk
+   binaries as the `sale-smoke` job.
 4. Record a green run with the CLI version and commit in `status.md`.
 5. Decide whether the app owns a `build.zig` now (`native eject`) or stays
    managed. Managed is fine until a C library is linked.

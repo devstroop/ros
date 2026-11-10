@@ -2,7 +2,7 @@
 
 > **Status:** Partial — core reads and order writes work; most entities have
 > no write path or UI.
-> **Last verified:** 2026-10-21, by source review and the test suite.
+> **Last verified:** 2026-11-04, by source review and the test suite.
 > **Source:** `src/data/repos.zig`, `src/data/page.zig`, `src/data/auth.zig`,
 > `src/core/update.zig`, `src/domain/models.zig`.
 
@@ -86,11 +86,11 @@ into the model rather than borrowed from the page.
 Writes are `fx.dbExec` with one or more statements. The engine runs them
 atomically.
 
-> **As-built warning (2026-10-20):** the order insert described here omits
-> the required `orders.updated_at`, so it fails with a `NOT NULL`
-> constraint. The table/customer ids are also written as `0` rather than
-> `NULL`. See [B-001](../review/bugs.md#b-001--order-insert-omits-ordersupdated_at)
-> and [B-005](../review/bugs.md#b-005--order-foreign-keys-are-written-as-0).
+> **Fixed in the current tree:** the order insert writes
+> `orders.updated_at`, and missing table/customer ids are written as
+> `NULL`. The original defects are recorded as
+> [B-001](../review/archive/bugs.md#b-001--order-insert-omits-ordersupdated_at)
+> and [B-005](../review/archive/bugs.md#b-005--order-foreign-keys-are-written-as-0).
 
 ### Place an order
 
@@ -106,18 +106,63 @@ atomically.
 
 ### Advance an order
 
-`repos.setOrderStatus` runs two statements in one transaction:
+`repos.setOrderStatus` runs its statements in one transaction:
 
-1. `UPDATE orders SET status, updated_at WHERE id`
-2. `INSERT INTO order_status_history (order_id, status, changed_at)`
+1. `INSERT INTO order_status_history ... WHERE EXISTS (the order is in
+   the status the caller held, and the move is one this statement may
+   make)`
+2. `UPDATE orders SET status, updated_at WHERE id = the order AND status
+   = the status the caller held AND the same clause`
+3. the op and the clock, each conditional on the update having written a
+   row
 
-The history and the current status can never disagree.
+Every move is conditional on the status the caller held, so a double tap
+or two devices at the board make one move, the history and the current
+status cannot disagree, and a move that matched nothing writes no op and
+burns no clock.
+
+`completed` is the one status a move may not write on its own: it needs a
+`payment` row behind the order. Money closes a ticket, and it closes it
+inside `repos.takePayment`'s own transaction - the payment row, the
+close and the table release in one batch. The rule lives in the statement
+and not only in `update`, because `update` is one caller of a write path
+that has three: a peer's replay, a device on an older build and a screen
+nobody has read yet all reach the SQL without passing through the
+reducer. The receiving half, `repos.applyOrderStatus`, carries the same
+clause, so an unpaid close cannot arrive over the wire either
+([ADR-0024](../decisions/0024-a-ticket-closes-with-its-money.md)).
 
 ### Settings
 
-`repos.saveConfigValue` upserts `app_config(key, value, updated_at)`.
-This is used for the PIN salt today; the target also uses it for the
-device role and the current shift.
+`app_config(key, value, updated_at)` is written by named statements, one
+per setting, because the settings do not behave the same way:
+
+- `repos.saveSalt` inserts the installation salt `ON CONFLICT DO NOTHING`
+  - the first salt wins. A bcrypt hash carries its own salt and so does
+  not depend on this one, but a digest written before bcrypt was
+  computed against the salt already in the row, and adopting a second
+  one would make that person's credential unverifiable.
+- `repos.saveTheme` upserts the device's palette and contrast
+  `ON CONFLICT DO UPDATE` - the last choice the operator made is the one
+  the next boot reads back.
+- `repos.savePairing` and `repos.setPairing` write the pairing token -
+  the first with `ON CONFLICT DO NOTHING`, the second with `DO UPDATE`.
+  Two statements for one key because there are two different questions:
+  *has this installation ever been given a token?* (seed it and keep the
+  seed), and *has an operator just changed it?* (replace it). Boot seeds
+  the value in `main`, where randomness lives, stores it write-once, and
+  on any later start reads the stored row over the seed - so a stale
+  `ROS_NET_TOKEN` cannot split a restaurant in two
+  ([ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md)).
+
+The device role and the current shift are targets for the same table.
+
+Not everything that looks like a setting is one. The restaurant's brand
+colour is a setting only in the sense that somebody chooses it: it
+belongs to the company rather than to the device, so it is a column on
+`company`, written by `repos.updateCompany` with the rest of the
+restaurant's details, and it reaches the other devices inside the
+reference document instead of by each machine deciding for itself.
 
 ### Not implemented
 
@@ -154,7 +199,7 @@ prevent.
 | Entity | Read | Decode | Write | UI |
 |---|---|---|---|---|
 | company | Yes | Yes | No | Dashboard header / labels |
-| app_config | Yes (salt) | Yes | Yes (upsert) | Login |
+| app_config | Yes (salt, look, pairing) | Yes | Yes (write-once salt and token, upsert look and token) | Login / Appearance / Control centre |
 | product | Yes | Yes | No | POS menu |
 | product_category | Yes | Yes | No | POS filters |
 | dining_table | Yes | Yes | No | Floor board |
@@ -163,19 +208,37 @@ prevent.
 | orders | Yes | Yes | Yes (insert/update) | Orders, KDS, dashboard |
 | order_line | Yes | Yes | Yes (insert) | KDS summary |
 | order_status_history | No read | No | Yes (insert) | None |
-| auth | — | — | — | Login (SHA-256) |
+| auth | — | — | — | Login (bcrypt, verified in Zig against the row) |
 | everything else | No | No | No | None |
 
 ### Query behaviour
 
 - `orders_sql` selects `status <> 5` (not voided), newest first, limit
-  200. Completed orders remain in the list.
+  200. Closed orders remain in the list.
 - `order_lines_sql` selects lines for non-voided orders, so the kitchen
   summary has data without a second round trip.
 - `products_sql` selects active products ordered by name; the POS filters
   by category and search in the model, not in SQL.
-- `config_sql` is hard-coded to `key = 'pin_salt'`. A generic config read
-  is a small future refactor.
+- `report_sql` answers two questions over one set of tickets: what the
+  day's non-voided tickets came to, and what stands paid against them.
+  The second is a correlated sum over `payment` in the same SELECT,
+  because the gap between the two figures is the number an owner acts
+  on - an open ticket is billed and unbought - and a second query would
+  have had to agree about which tickets are in the day.
+  `payment_one_per_order` makes each lookup a seek and each ticket's
+  taken amount one row at most. The screen's third figure, owed, is a
+  subtraction of the first two and is stored nowhere
+  ([ADR-0025](../decisions/0025-a-days-report-counts-bills-and-money.md)).
+- `report_modes_sql` is on a different clock: it selects on `paid_at`,
+  not `placed_at`, and says so in its caption. Money received today for
+  yesterday's ticket belongs to today's drawer and yesterday's billing,
+  and neither figure is wrong about it. Where the day ends is not decided
+  (#157, A19).
+- `config_sql` is hard-coded to `key = 'pin_salt'`, and `pairing_sql` is
+  hard-coded to `key = 'pairing_token'`: one read per setting rather than
+  one generic read of the whole table, which is why boot asks for the
+  salt, the look and the token separately. A generic config read is a
+  small future refactor.
 - `company_sql` has `LIMIT 1`; one company per database is a schema rule,
   not just a UI choice.
 - `loadAll` omits `loadCustomers` and `loadConfig`. Customers are loaded
@@ -186,8 +249,8 @@ prevent.
 The app declares the `sqlite` capability in `app.json`. The SDK compiles
 its SQLite engine into the app, generates a migrations module from
 `src/schema/*.sql`, and opens the database migrated at boot. The
-append-only authority is `src/schema/migrations.lock.json` (version 11,
-10 hashes).
+append-only authority is `src/schema/migrations.lock.json` (version 17,
+17 hashes).
 
 The app does not open the database, set PRAGMAs, or run migrations
 itself. That is deliberate: the engine owns the connection.
@@ -196,15 +259,18 @@ itself. That is deliberate: the engine owns the connection.
 
 | Value | Shape | Rule |
 |---|---|---|
-| Order `id` | `i64` wall clock ms | Not a sequence; two orders in the same millisecond collide |
-| Order `order_no` | wall clock seconds as text | `UNIQUE`; two orders in the same second collide |
-| Order line `id` | order id + line index | Collides if an order is rewritten in the same ms |
+| Order `id` | `i64` wall clock ms, with a per-device floor | The local row key. Local sales are positive; orders received from a peer are negative. Not comparable across databases. |
+| Order origin | `(origin_device, origin_id)` | The stable cross-device name: the device that took the sale and that device's order id. |
+| Order `order_no` | six-digit sequence, assigned by the local database | `UNIQUE`; a retry does not consume a second number. Local to each database. |
+| Order line `id` | `local_order_id * 128 + line index` | Namespaced under the local order. A received line is remapped the same way; the wire line id is not trusted. |
+| Request key | device token + attempt id | `UNIQUE`; a retry is the same sale. |
 | `placed_at`, `created_at`, `updated_at` | epoch ms UTC | Integer, never a string |
-| `pin_salt` | 64 hex chars in `app_config` | Per installation |
+| `pin_salt` | 64 hex chars in `app_config` | Per installation, and per employee: `deriveSalt` mixes the employee's id into the sixteen bytes bcrypt salts with, so two people with the same secret never share a hash. The key literal is a shipped name. |
+| `pairing_token` | up to 64 chars in `app_config` | Per installation and *shared by every device of it*: it says which restaurant a request belongs to, not which machine, and it is the `x-ros-token` a peer has to present for the reference document, the op log or a snapshot. Seeded in `main` (the one place with randomness) or by `ROS_NET_TOKEN`, stored write-once, rotated by an operator typing a new one on the admin's Control centre. A device's secret is on a screen on purpose; a person's is not, and `view_unbound` says so ([ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md)) |
 
-The ID scheme is documented as **provisional** in
-[ADR-0013](../decisions/0013-clock-based-order-ids.md). A dedicated
-sequence or UUID is the target.
+The local identity is settled in
+[ADR-0014](../decisions/0014-order-identity.md); the cross-device half is
+[ADR-0019](../decisions/0019-cross-device-order-identity.md).
 
 ## Error taxonomy
 
@@ -227,7 +293,8 @@ Current tests cover:
 
 - page decoding (NULL fallback, INTEGER, TEXT, end-of-page);
 - integer money in the cart;
-- PIN hashing determinism and salt divergence.
+- credential hashing: the same person and secret give the same hash, two
+  people with the same secret do not, and a legacy digest still verifies.
 
 Target tests (from the port plan) use
 `native_sdk.relational_store.Database.openMemoryMigrated(allocator, migrations)`

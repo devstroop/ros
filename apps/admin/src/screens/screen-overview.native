@@ -9,6 +9,8 @@
      numbers, the open orders, and the shortcuts an owner reaches for.
      Every number is a derived binding - the dashboard stores nothing. -->
 
+<import src="parts.native"/>
+
 <template name="screen-dashboard">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
@@ -46,7 +48,7 @@
     <row gap="8">
       <button variant="primary" on-press="open_pos">New order</button>
       <button variant="secondary" on-press="open_orders">Orders</button>
-      <button variant="secondary" on-press="open_tables">Floor</button>
+      <button variant="secondary" on-press="open_tables">Dining</button>
       <spacer grow="1"/>
       <button variant="ghost" on-press="sign_out">Sign out</button>
     </row>
@@ -74,7 +76,7 @@
         <for each="orders" key="id" as="order">
           <row background="surface" radius="md" padding="8" gap="8" cross="center">
             <text grow="1">{order.order_no}</text>
-            <badge>{order.status_label}</badge>
+            <use template="status-badge" code="{order.status_code}" label="{order.status_label}"/>
             <text>{currency_symbol}{fixed(order.total_minor / currency_divisor, currency_decimal_count)}</text>
           </row>
         </for>
@@ -84,9 +86,13 @@
 </template>
 
 <!-- The report: what the day came to. The owner opens this at the end
-     of the shift and wants one number - the day's takings - and the
-     way the money came in underneath it. The day is the calendar day;
-     an order has no accounting date of its own yet, and that is the
+     of the shift and asks two questions, and they have two answers.
+     What the tickets CAME TO, and what the restaurant TOOK: the gap
+     between them is what the floor still holds, because an open ticket
+     is billed and unbought. The drawer's own figures - how the money
+     came in - are counted by the day the cash arrived, which is not the
+     day the ticket was opened, and the screen says so on each block.
+     An order has no accounting date of its own yet, and that is the
      trading-day policy, which is not this screen's to decide. -->
 
 <template name="screen-reports">
@@ -99,7 +105,7 @@
     <row gap="12">
       <card padding="16" grow="1">
         <column gap="4">
-          <text size="sm" foreground="text_muted">TAKINGS</text>
+          <text size="sm" foreground="text_muted">BILLED</text>
           <text size="display">{currency_symbol}{fixed(report_net_minor / currency_divisor, currency_decimal_count)}</text>
         </column>
       </card>
@@ -123,7 +129,25 @@
       </card>
     </row>
 
-    <text size="lg">How it was paid</text>
+    <row gap="12">
+      <card padding="16" grow="1">
+        <column gap="4">
+          <text size="sm" foreground="text_muted">TAKEN</text>
+          <text size="display">{currency_symbol}{fixed(report_taken_minor / currency_divisor, currency_decimal_count)}</text>
+        </column>
+      </card>
+      <card padding="16" grow="1">
+        <column gap="4">
+          <text size="sm" foreground="text_muted">OWED</text>
+          <text size="display">{currency_symbol}{fixed(report_owed_minor / currency_divisor, currency_decimal_count)}</text>
+        </column>
+      </card>
+    </row>
+
+    <row gap="8" cross="center">
+      <text size="lg">How it was paid</text>
+      <text size="sm" foreground="text_muted">received today, by the day the money arrived</text>
+    </row>
     <if test="{report_modes_count == 0}">
       <column background="surface" radius="md" padding="16">
         <text foreground="text_muted">Nothing has been paid for today.</text>

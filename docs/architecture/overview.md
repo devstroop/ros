@@ -4,7 +4,7 @@
 > runtime lifecycle, the module map, the data flow, and the mechanics of
 > adding a screen.
 > **Source:** `apps/admin/src/**`, `apps/admin/app.json`, and the Native
-> SDK authoring guides in `native-zig-showcase/docs/sdk/`.
+> SDK authoring guides in `~/.local/lib/node_modules/@native-sdk/cli/skill-data/`.
 > **Method:** read from source. The Native SDK CLI (`native`) is not on the
 > PATH in this workspace, so no build or test run backs the claims here.
 
@@ -79,7 +79,8 @@ pub const Model = struct {
         "error_text",
         "company_id",
         "pending_screen",
-        "theme_dark",
+        "theme_palette",
+        "theme_contrast_high",
     };
 ```
 
@@ -132,8 +133,8 @@ randomness from an `Io` and `update` does not have one:
 // The installation salt. It is made here because this is the one
 // place with an `Io` (and therefore with randomness); `boot` writes
 // it to the database if this is a fresh installation.
-auth.makeSalt(init.io, &app_state.model.pin_salt_buf);
-app_state.model.pin_salt_len = app_state.model.pin_salt_buf.len;
+auth.makeSalt(init.io, &app_state.model.salt_buf);
+app_state.model.salt_len = app_state.model.salt_buf.len;
 ```
 
 ---
@@ -201,7 +202,7 @@ pub fn boot(model: *Model, fx: *Effects) void {
 Two things start here: the repeating clock timer (key `100`, arm
 `.tick`) that keeps `model.now_ms` fresh so the kitchen board can say
 how long a ticket has been waiting, and the first database read — the
-`app_config` row that holds the PIN salt.
+`app_config` row that holds the installation salt.
 
 ### 2.2 First frame
 
@@ -219,10 +220,12 @@ presents it. Two details matter:
 
   ```zig
   /// The tokens for the current model state. The runtime asks for these
-  /// on every rebuild, so flipping the theme is a model change and
+  /// on every rebuild, so changing the theme is a model change and
   /// nothing else.
-  pub fn tokens(model: *const Model) canvas.DesignTokens {
-      return if (model.theme_dark) dark() else light();
+  pub fn tokens(model: *const Model) DesignTokens {
+      const chosen = model.theme_palette;
+      if (!model.theme_contrast_high) return register(chosen);
+      return withColors(highContrast(register(chosen).colors, chosen.is_dark()));
   }
   ```
 
@@ -258,7 +261,7 @@ the text edit is `canvas.TextInputEvent`:
 
 ```zig
 pub const Msg = union(enum) {
-    /// The PIN check came back.
+    /// The credential check came back.
     login_checked: native_sdk.EffectDbResult,
     /// The order write came back.
     order_placed: native_sdk.EffectDbResult,
@@ -288,16 +291,16 @@ to be copied — into the model's bump buffers. That rule is the reason
 | `core/update.zig` | `update(model, msg, fx)` and `boot(model, fx)`: the only writers of model state, plus the navigation helper `go`, the cart helpers, and `nextStatus`. |
 | `core/navigation.zig` | The `Role` and `Screen` enums, `Screen.title()` / `Screen.nav_section()`, the role cards, the `NavSection` enum, and the fixed-capacity `Stack`. |
 | `core/rbac.zig` | The permission matrix: `allows(role, screen)`, `home(role)`, the per-role nav rails, and `section_screen(section)`. A pure function with a total test. |
-| `core/theme.zig` | The design tokens: the brand palette, the light and dark token sets, and `tokens(model)` which picks between them. |
+| `core/theme.zig` | The design tokens: the brand palette, the four registers (Light, Dark, Warm, Night), the high-contrast derivation, and `tokens(model)` which picks between them. |
 | `core/bump.zig` | `Bump(comptime capacity)`: the fixed-capacity allocator the model uses for its rows. `alloc`, `dupe`, `dupeC`, `allocSlice`, `reset`, `used`, `free`. |
 | `domain/models.zig` | The entities: `Product`, `Order`, `OrderLine`, `DiningTable`, `Customer`, `Employee`, `CartLine`, `TaxSlab`, `Shift`, and the enums `OrderType`, `OrderStatus`, `ProductType`, `FoodType`, `TableStatus`, `PaymentMode`. |
 | `data/repos.zig` | The data layer: the effect keys, the SQL constants, the loader functions (`loadProducts`, `loadOrders`, `loadAll`, …), the decoders (`decodeProducts`, `decodeOrders`, …), the writers (`saveOrder`, `setOrderStatus`, `saveConfigValue`) and the defensive `enumFromInt` cast. |
 | `data/page.zig` | The reader for the engine's row format: `Reader.init`, `readHeader`, `nextRow`, `indexOf`, `intOf`, `boolOf`, `textOf`, and the `Value` union. |
-| `data/auth.zig` | PIN hashing: `hashPin`, `makeSalt`, `equal`, and `hex_len`. Pure — no clock, no allocation, no effects. |
-| `schema/0001..0010_*.sql` | The database: ten migrations, 43 tables, every one `STRICT`. |
-| `schema/migrations.lock.json` | The migration authority: version 11, eleven per-file hashes, and a `schema_hash`. |
-| `screens/*.native` | Nine screen templates: setup, role picker, login, dashboard, POS, orders, confirmation, tables, kitchen. |
-| `tests.zig` | The rules the app must not break. Twelve tests, written as rules. |
+| `data/auth.zig` | Credential hashing: `hashCredential`, `verifyCredential`, `isLegacy`, `legacyHash`, `makeSalt`, and the per-kind length rules. bcrypt, salted per installation and per employee. Pure — no clock, no allocation, no effects; slow on purpose. |
+| `schema/0001..0021_*.sql` | The database: twenty-one migrations, 46 tables, every one `STRICT`. |
+| `schema/migrations.lock.json` | The migration authority: version 21, twenty-one per-file hashes, and a `schema_hash`. |
+| `screens/*.native` | Ten screen files and `parts.native`, 53 templates: the walk-through and wizard, the picker of modes and of people, the pad and the password field, dashboard, POS, orders, confirmation, floor, kitchen, the people list and its forms, settings. |
+| `tests.zig` | The rules the app must not break - 74 of them, written as rules rather than as coverage. `tests_data.zig` adds 155 against a migrated database. |
 | `app.json` (in `apps/admin/`) | The manifest: identity, permissions, capabilities (`sqlite` among them), the shell window and its GPU surface, and the navigation policy. |
 
 `src/components/` exists and is empty. It is the place for shared
@@ -644,17 +647,17 @@ guessed.
 
 ### Repo-level wrappers
 
-`README.md` refers to three shell wrappers:
+`README.md` names the wrappers:
 
 ```sh
-scripts/verify.sh        # native check + native test for every app
+scripts/verify-all.sh    # native check + native test for every app
 scripts/build.sh         # ReleaseFast build of every app
 scripts/dev.sh           # debug run of the app with markup hot reload
 ```
 
-`scripts/` is currently empty, and so are `tools/sync-sidecar` and
-`tools/print-sidecar`. The wrappers are the intended shape of the loop,
-not a working entry point yet.
+The wrappers are working entry points; `scripts/` also carries
+`check-copies.sh`, `env.sh`, `setup.sh` and `net-diag.sh`. The sync and
+print sidecar prototypes are not part of the three-app tree.
 
 ---
 
@@ -671,7 +674,7 @@ not a working entry point yet.
 | The model must be default-constructible. | It is built as `.{}`. It cannot own a heap allocator, so its size is a compile-time fact and it uses `Bump`. | `src/core/bump.zig`, `src/main.zig` |
 | A `.native` file not in `app_sources.zig` does not exist. | The import closure is embedded; a missing entry fails loudly at the import site. | `src/app_sources.zig` |
 | `native` is not on the PATH in this workspace; the installed Zig is 0.17.0. | The SDK pins Zig 0.16.0 and 0.17 does not parse it. The statuses in this document come from source review, not from a run. | `README.md` |
-| Counts drift between prose and the tree. | The schema holds 43 tables and `src/tests.zig` holds 12 tests; the root README has been corrected to match, but any hand-written count will drift again. | `README.md`, `src/schema/`, `src/tests.zig`, `plan/status.md` |
+| Counts drift between prose and the tree. | The schema holds 46 tables across 21 migrations and the split suites hold 232 admin tests; the root README has been corrected to match, but any hand-written count will drift again. | `README.md`, `src/schema/`, `src/tests.zig`, `plan/status.md` |
 | The root `README.md` used to link `docs/architecture/sync.md`, `docs/plan/gaps-from-v1.md`, `docs/plan/roadmap.md`, `docs/plan/backlog.md` and `AGENTS.md`. | Those paths do not exist; the maintained pages are `08-sync.md`, `plan/README.md` and `plan/status.md`. The root README should point at them. | `README.md` |
 
 ---

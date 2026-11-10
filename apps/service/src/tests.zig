@@ -72,6 +72,33 @@ fn fakeFx() !Effects {
     return fx;
 }
 
+/// The screen ordinals the shell gates, read out of the markup itself.
+fn markupGates(arena: std.mem.Allocator) ![]usize {
+    var out: std.ArrayList(usize) = .empty;
+    errdefer out.deinit(arena);
+    const needle = "screen_index == ";
+    var rest: []const u8 = main.app_markup;
+    while (std.mem.indexOf(u8, rest, needle)) |at| {
+        rest = rest[at + needle.len ..];
+        var digits: usize = 0;
+        while (digits < rest.len and std.ascii.isDigit(rest[digits])) digits += 1;
+        if (digits == 0) break;
+        const ordinal = std.fmt.parseInt(usize, rest[0..digits], 10) catch break;
+        try out.append(arena, ordinal);
+        rest = rest[digits..];
+    }
+    return out.toOwnedSlice(arena);
+}
+
+/// The onboarding screens are mounted by their own condition, before a
+/// role exists, so they are not part of the role's partition.
+fn isSessionScreen(screen: nav.Screen) bool {
+    return switch (screen) {
+        .role_picker, .login, .landing, .setup, .wizard, .create_company, .upgrade => true,
+        else => false,
+    };
+}
+
 // --------------------------------------------------------------- tests
 
 test "the service app runs the waiter role, and only that one" {
@@ -146,6 +173,31 @@ test "the service binary refuses every screen the waiter may not open" {
     }
 }
 
+test "the service shell mounts exactly the screens the waiter may open" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const gates = try markupGates(arena);
+    for (std.enums.values(nav.Screen)) |screen| {
+        if (isSessionScreen(screen)) continue;
+        const gated = std.mem.indexOfScalar(usize, gates, screen.index()) != null;
+        if (rbac.allows(boot, screen) != gated) {
+            std.debug.print(
+                "the service shell and the waiter matrix disagree on {s}: allowed={} gated={}\n",
+                .{ screen.title(), rbac.allows(boot, screen), gated },
+            );
+            return error.PartitionMismatch;
+        }
+    }
+
+    // The counter POS is this app's: the three money screens are
+    // mounted, not merely permitted.
+    for ([_]nav.Screen{ .pos, .pos_cart, .payments }) |screen| {
+        try testing.expect(std.mem.indexOfScalar(usize, gates, screen.index()) != null);
+    }
+}
+
 test "the shell draws the waiter's rail and its home screen" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -166,6 +218,135 @@ test "the shell draws the waiter's rail and its home screen" {
     try testing.expectEqual(@as(usize, 1), model.nav_sections().len);
 
     const tree = try buildTree(arena, &model);
-    _ = try expectByText(tree.root, .text, "NAVIGATION");
+    // The rail is its destinations and the person, and nothing above them.
+    try testing.expect(findByText(tree.root, .text, "NAVIGATION") == null);
     _ = try expectByText(tree.root, .text, "Ravi");
+    // The counter POS is this app's, and the floor is the way in.
+    _ = try expectByText(tree.root, .button, "Counter sale");
+    _ = try expectByText(tree.root, .button, "Payments");
+}
+
+test "the waiter reaches the counter POS and payments from the floor" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    model.role_chosen = true;
+    model.signed_in = true;
+    main.update(&model, .{ .open_section = @intFromEnum(nav.NavSection.service) }, &fx);
+    try testing.expectEqual(nav.Screen.waiter_tables, model.screen());
+
+    main.update(&model, .{ .open_pos = {} }, &fx);
+    try testing.expectEqual(nav.Screen.pos, model.screen());
+
+    // The rail is the way back to the floor, and from there to money.
+    main.update(&model, .{ .open_section = @intFromEnum(nav.NavSection.service) }, &fx);
+    try testing.expectEqual(nav.Screen.waiter_tables, model.screen());
+
+    main.update(&model, .{ .open_payments = {} }, &fx);
+    try testing.expectEqual(nav.Screen.payments, model.screen());
+}
+
+// --------------------------------------------------------- boot pages
+//
+// A query result arrives as one encoded page: a column count, a row
+// count, the column names, then the cells. The boot path reacts to the
+// company page, so these two helpers build it and let the waiting
+// branch be tested without a database.
+
+const CompanyRow = struct { id: i64, name: []const u8 };
+
+fn putU32(buffer: []u8, at: *usize, value: u32) void {
+    std.mem.writeInt(u32, buffer[at.*..][0..4], value, .little);
+    at.* += 4;
+}
+
+fn putI64(buffer: []u8, at: *usize, value: i64) void {
+    std.mem.writeInt(i64, buffer[at.*..][0..8], value, .little);
+    at.* += 8;
+}
+
+fn putText(buffer: []u8, at: *usize, text: []const u8) void {
+    putU32(buffer, at, @intCast(text.len));
+    @memcpy(buffer[at.*..][0..text.len], text);
+    at.* += text.len;
+}
+
+fn putCellInt(buffer: []u8, at: *usize, value: i64) void {
+    buffer[at.*] = 1;
+    at.* += 1;
+    putI64(buffer, at, value);
+}
+
+fn putCellText(buffer: []u8, at: *usize, text: []const u8) void {
+    buffer[at.*] = 3;
+    at.* += 1;
+    putText(buffer, at, text);
+}
+
+fn companyPage(buffer: []u8, company: ?CompanyRow) []const u8 {
+    var at: usize = 0;
+    putU32(buffer, &at, 2);
+    putU32(buffer, &at, if (company == null) 0 else 1);
+    putText(buffer, &at, "id");
+    putText(buffer, &at, "name");
+    if (company) |row| {
+        putCellInt(buffer, &at, row.id);
+        putCellText(buffer, &at, row.name);
+    }
+    return buffer[0..at];
+}
+
+// --------------------------------------------------------------- tests
+
+test "a service that starts before the admin waits, then opens its picker" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    var page_buffer: [256]u8 = undefined;
+
+    // Boot finds no company. The admin is the writer, so this binary
+    // waits instead of showing the setup wizard and creating a second
+    // restaurant whose owner could not even sign in here.
+    const empty = companyPage(&page_buffer, null);
+    main.update(&model, .{ .company_loaded = .{ .key = 1, .kind = .page, .bytes = empty } }, &fx);
+    try testing.expect(model.waiting_for_reference);
+    try testing.expect(model.show_waiting());
+    try testing.expect(!model.show_role_picker());
+    try testing.expect(!model.show_setup());
+    try testing.expectEqualStrings("Waiting for the restaurant", model.screen_title());
+
+    // The reference document arrives: the company is here, and the
+    // waiter's picker can open.
+    const with_company = companyPage(&page_buffer, .{ .id = 1, .name = "Test Diner" });
+    main.update(&model, .{ .company_loaded = .{ .key = 2, .kind = .page, .bytes = with_company } }, &fx);
+    try testing.expect(!model.waiting_for_reference);
+    try testing.expect(!model.show_waiting());
+    try testing.expect(model.show_role_picker());
+    try testing.expectEqual(@as(i64, 1), model.company_id);
+
+    // Even if the message arrives, the setup is not this binary's to
+    // run.
+    main.update(&model, .{ .setup_submit = {} }, &fx);
+    try testing.expect(model.setup_error.len > 0);
+}
+
+test "a waiting terminal says where the restaurant comes from" {
+    var fx = try fakeFx();
+    defer fx.deinit();
+
+    var model = main.initialModel();
+    var page_buffer: [256]u8 = undefined;
+    const empty = companyPage(&page_buffer, null);
+    main.update(&model, .{ .company_loaded = .{ .key = 1, .kind = .page, .bytes = empty } }, &fx);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const tree = try buildTree(arena, &model);
+    _ = try expectByText(tree.root, .text, "Waiting for the restaurant");
+    _ = try expectByText(tree.root, .text, "No setup is needed here.");
+    try testing.expect(findByText(tree.root, .text, "Set up your restaurant") == null);
 }

@@ -1,0 +1,21 @@
+-- 0020_employee_credential.sql - the kind of secret a person signs in with.
+--
+-- A PIN and a password are two different things that have been typed into
+-- one box. A PIN is short, numeric and tapped on a till in front of a
+-- queue; a password is long, mixed and typed on a keyboard. The till
+-- cannot offer the right way to say it until it knows which one that
+-- person uses, so the kind is a fact about the person: it rides on their
+-- row, not on the device, which changes hands, and not on the role, which
+-- says what they may open rather than how they prove who they are.
+--
+-- Zero is a PIN, which is what every row of a database written before this
+-- column existed means: the digest in `pin_hash` was made from digits. The
+-- CHECK that an enumeration usually carries is not available to a column
+-- added after the table - SQLite refuses it - so the app's own
+-- `CredentialKind.fromInt` is what decides that a number nobody wrote is
+-- not a kind, and falls back to the PIN.
+--
+-- Append-only, and the column carries a default, so an older database
+-- upgrades in place and everyone already on it signs in exactly as before.
+
+ALTER TABLE employee ADD COLUMN auth_kind INTEGER NOT NULL DEFAULT 0;

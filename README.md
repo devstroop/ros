@@ -5,9 +5,7 @@ A restaurant operating system, written in Zig on the
 waiter service and the kitchen and customer boards**, in three apps over
 one shared package.
 
-This is a ground-up rewrite of Eatery v1 (the Flutter app that lived in
-`../eatery`). v1 taught us a lot about what a restaurant actually needs and
-where it went wrong; Restaurant OS keeps the product and rebuilds the machinery on a
+Restaurant OS keeps the product and rebuilds the machinery on a
 native GPU canvas, an engine-owned SQLite store and a typed effect channel.
 
 ```sh
@@ -30,12 +28,12 @@ exactly where the seams hurt:
 | v1 problem | Restaurant OS answer |
 |---|---|
 | Money in `REAL` columns, rounded by the UI | **Money is `i64` minor units, everywhere.** No float money, ever. |
-| PINs readable in the database | PINs are **salted SHA-256**; the plaintext never touches the disk |
-| Permissions buried in a router `redirect:` | Permissions are a **pure function** (`core/rbac.zig`); the current matrix test is tautological and is being replaced with a real table |
+| PINs readable in the database | A credential is a **bcrypt hash**, salted with the person's own id; the plaintext never touches the disk, and a person chooses a PIN or a password |
+| Permissions buried in a router `redirect:` | Permissions are a **pure function** (`core/rbac.zig`), with a test that walks every role against every screen |
 | A router, a navigator, and a riverpod graph | **One model, one `update`.** Navigation is model state. |
 | A second SQLite engine vendored into the app | **The platform's own store** — engine-owned, live queries, migrations included |
-| Sync transport tangled into the domain | The app writes an **operation log**; a sidecar owns the socket |
-| A 39-table schema with no type discipline | **43 STRICT tables**, one migration per concern, checked at build time |
+| Sync transport tangled into the domain | The app writes an **operation log**; the sync core owns the socket, in process ([ADR-0017](docs/decisions/0017-three-apps-over-tcp-ip.md)) |
+| A 39-table schema with no type discipline | **46 STRICT tables** across twenty-one migrations, one concern per migration, checked at build time |
 | Business logic and widgets in one tree | **Model / Msg / update** in Zig, declarative markup for the view, nothing in between |
 
 The full comparison, the capability gaps and the reasoning behind every
@@ -173,17 +171,25 @@ ros/
 ## Status
 
 The foundation is in place and building: the app model, the permission
-matrix, the design tokens, the schema (43 tables), the repository layer,
-the PIN sign-in, the role picker, first-run setup, the dashboard, the
-point of sale, the order list, the floor, the kitchen board, the customer
-display, the waiter shell, the settings screens and the catalogue and
-people forms. 49 authored tests cover the model, navigation, markup and
-the SQL against an in-memory database.
+matrix, the four registers and the restaurant's own colour, the schema
+(46 tables across twenty-one migrations), the repository layer, the
+sign-in, the picker, first-run setup, the dashboard, the point of sale,
+the order list, the floor, the kitchen board, the customer display, the
+waiter shell, the settings screens and the catalogue and people forms.
+Three binaries — `admin`, `service`, `kiosk` — share one core and talk to
+each other over the LAN. The admin app's two suites hold 232 tests, the
+service and kiosk suites 10 and 8, and `packages/ros-core` 46; together
+they cover the model, navigation, markup, the wire and the SQL against
+the database engine, and `scripts/verify-all.sh` runs all of them. The
+money and back-office tracks are merged.
 
-The sign-in now checks the employee's stored role and waits for the
-database to confirm the installation salt, and every effect key names
-one effect. What is still missing is the money: tax, discount and
-payment are not implemented, and an order can complete unpaid.
+A person signs in as themselves. The picker names them, their own row
+says whether the till offers a numeric pad or a password field, and
+neither shows the secret. The sign-in checks the stored role against the
+mode the device runs, waits for the database to confirm the installation
+salt, and verifies the bcrypt hash the row carries — so a replicated row
+is enough to sign in from. What is still missing is the paper: no
+receipt, no KOT, and an order can still be closed unpaid.
 
 The rest of the product is on the phase board in
 [`docs/plan/README.md`](docs/plan/README.md), with the as-built screen

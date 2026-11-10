@@ -27,8 +27,10 @@ and no transition system. A navigation is three things and nothing else:
 Eatery v1 had 77 `GoRoute` entries with a `redirect:` callback that owned
 the permission check. That callback was the one place that knew what a
 role could open, and it was untested. Restaurant OS moves the same decision into a
-pure function (`core/rbac.zig`) that a test is meant to walk in full (the
-current matrix test is tautological; see the documentation audit),
+pure function (`core/rbac.zig`) that a test walks in full — every role
+against every screen, with the pairs that must be allowed and the pairs
+that must be refused named, and a shell-partition test per app that
+compares the markup's gates against it -
 and leaves the drawing of the result to the markup.
 
 The consequence that matters in practice: **the view never decides where
@@ -265,9 +267,12 @@ fn resetNavigation(model: *Model, gate: Screen) void {
 }
 ```
 
-A PIN role's sign-out resets to `login`; a kiosk role's sign-out resets
-to the role picker. A successful sign-in resets to the role's home, so
-the sign-in screen is never behind the first screen of the session.
+A person role's sign-out resets to the sign-in gate, which keeps asking
+the person who just left - the row is read again, so the surface is
+theirs and not the screen's memory. A kiosk role's sign-out, and a
+sign-out by a person whose row has since been removed, resets to the
+role picker. A successful sign-in resets to the role's home, so the
+sign-in screen is never behind the first screen of a session.
 
 ### How the stack is reached from the markup
 
@@ -317,13 +322,16 @@ pub const Role = enum {
     display,
 ```
 
-One binary, four dispatch modes. The role decides the home screen, the
-rail and the allowed screens.
+Three binaries, four dispatch modes between them: admin carries Admin,
+service carries Waiter, kiosk carries Kitchen and Display. A binary runs
+only the roles it was built for, and the picker offers those and no
+others. The role decides the home screen, the rail and the allowed
+screens.
 
 | Role | Label | Sign-in | Home screen | Rail sections | Allowed screens |
 |---|---|---|---|---|---|
-| `admin` | Admin | PIN | `admin_dashboard` | Overview, Sell, Orders, Floor, Catalog, People, System | 43 (all) |
-| `waiter` | Waiter | PIN | `waiter_tables` | Service | 12 |
+| `admin` | Admin | PIN or password | `admin_dashboard` | Dashboard, POS, Orders, Dining, Menu, Team, Settings | 53 (all) |
+| `waiter` | Waiter | PIN or password | `waiter_tables` | Service | 15 |
 | `kds` | Kitchen | none (device) | `kds_board` | Kitchen | 4 |
 | `display` | Display | none (device) | `display_board` | Display | 4 |
 
@@ -338,6 +346,7 @@ pub fn allows(role: Role, screen: Screen) bool {
         .admin => true,
         .waiter => switch (screen) {
             .role_picker, .login, .landing,
+            .pos, .pos_cart, .payments,
             .waiter_tables, .waiter_menu, .waiter_cart, .waiter_orders,
             .orders, .order_detail, .order_confirmation,
             .customers, .reset_pin,
@@ -363,7 +372,7 @@ The sets, written out:
 | Role | Allowed screens |
 |---|---|
 | `admin` | every screen in the enum |
-| `waiter` | `role_picker`, `login`, `landing`, `waiter_tables`, `waiter_menu`, `waiter_cart`, `waiter_orders`, `orders`, `order_detail`, `order_confirmation`, `customers`, `reset_pin` |
+| `waiter` | `role_picker`, `login`, `landing`, `pos`, `pos_cart`, `payments`, `waiter_tables`, `waiter_menu`, `waiter_cart`, `waiter_orders`, `orders`, `order_detail`, `order_confirmation`, `customers`, `reset_pin` |
 | `kds` | `role_picker`, `login`, `kds_board`, `order_detail` |
 | `display` | `role_picker`, `login`, `display_board`, `order_detail` |
 
@@ -384,22 +393,17 @@ Four guarantees fall out of the matrix, and each one is a test:
 
 ### Allowed is not the same as rendered
 
-The matrix is broader than the mounted surface. `waiter` may open
-`waiter_tables`, `waiter_menu`, `waiter_cart`, `waiter_orders`,
-`customers`, `reset_pin` and `landing` - none of which has a template.
-The waiter signs in, lands on `waiter_tables`, and the content pane is
-empty. The `display` role lands on `display_board`, which also has no
-template.
+The matrix is the permission; the shell is the mount. The service app
+mounts every screen the waiter may open except the onboarding screens,
+which are mounted by their own condition before a role exists. The
+admin app mounts every screen because admin is the wildcard. The kiosk
+mounts both boards and the order detail.
 
-The same gap exists on the admin rail: `Catalog` opens
-`product_categories`, `People` opens `employees` and `System` opens
-`settings` - three of the seven admin rail entries lead to an empty
-pane.
-
-This is a coverage gap, not a permission gap: `rbac.allows` is doing its
-job, and the shell has not caught up. A screen-coverage test that
-asserts "every allowed screen is either mounted or explicitly listed as
-unavailable" does not exist yet.
+Each app's suite walks every `(role, screen)` pair and compares the
+matrix with the shell's `screen_index` gates. A screen cannot be
+permitted but unmounted, or mounted but refused, without a test saying
+so. The counter POS is the service app's
+([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
 
 ## How a denied navigation is handled
 
@@ -471,26 +475,29 @@ pub fn nav_sections(model: *const Model) []const nav.NavItem {
 
 ```zig
 // src/core/rbac.zig
+// The label comes from `NavSection`, not from a string typed here: the
+// rail and the glossary then cannot disagree about what a destination is
+// called.
 const admin_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.overview), .label = "Overview" },
-    .{ .id = @intFromEnum(nav.NavSection.sell), .label = "Sell" },
-    .{ .id = @intFromEnum(nav.NavSection.orders), .label = "Orders" },
-    .{ .id = @intFromEnum(nav.NavSection.floor), .label = "Floor" },
-    .{ .id = @intFromEnum(nav.NavSection.catalog), .label = "Catalog" },
-    .{ .id = @intFromEnum(nav.NavSection.people), .label = "People" },
-    .{ .id = @intFromEnum(nav.NavSection.system), .label = "System" },
+    .{ .id = @intFromEnum(nav.NavSection.overview), .label = nav.NavSection.overview.label() },
+    .{ .id = @intFromEnum(nav.NavSection.sell), .label = nav.NavSection.sell.label() },
+    .{ .id = @intFromEnum(nav.NavSection.orders), .label = nav.NavSection.orders.label() },
+    .{ .id = @intFromEnum(nav.NavSection.floor), .label = nav.NavSection.floor.label() },
+    .{ .id = @intFromEnum(nav.NavSection.catalog), .label = nav.NavSection.catalog.label() },
+    .{ .id = @intFromEnum(nav.NavSection.people), .label = nav.NavSection.people.label() },
+    .{ .id = @intFromEnum(nav.NavSection.system), .label = nav.NavSection.system.label() },
 };
 
 const waiter_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.service), .label = "Service" },
+    .{ .id = @intFromEnum(nav.NavSection.service), .label = nav.NavSection.service.label() },
 };
 
 const kitchen_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.kitchen), .label = "Kitchen" },
+    .{ .id = @intFromEnum(nav.NavSection.kitchen), .label = nav.NavSection.kitchen.label() },
 };
 
 const display_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.display), .label = "Display" },
+    .{ .id = @intFromEnum(nav.NavSection.display), .label = nav.NavSection.display.label() },
 };
 
 /// The screens a role can reach from the shell rail, in rail order.
@@ -525,19 +532,28 @@ pub const NavItem = struct {
 ```
 
 The shell draws them in a `for`, marks the current one, and dispatches
-`open_section` with the row's id:
+`open_section` with the row's id. The rail carries no heading over the
+list and no count beside it: the sections are the only rows that
+navigate, and the person signed in is anchored to the foot of it by a
+`spacer`, past a separator, because they are not a destination.
 
 ```xml
 <!-- src/app.native -->
-<column width="200" gap="2" padding="12" background="surface">
-  <text size="sm" foreground="text_muted">NAVIGATION</text>
-  <for each="nav_sections" key="id" as="section">
-    <list-item selected="{section.id == nav_section}" on-press="open_section:{section.id}">{section.label}</list-item>
-  </for>
-  <separator/>
-  <text size="sm" foreground="text_muted">{operator_label}</text>
-</column>
+<split grow="1" gap="2" value="{rail_split}" on-resize="rail_resized">
+  <column width="200" gap="2" padding="12" background="surface">
+    <for each="nav_sections" key="id" as="section">
+      <list-item selected="{section.id == nav_section}" on-press="open_section:{section.id}">{section.label}</list-item>
+    </for>
+    <spacer grow="1"/>
+    <separator/>
+    <text size="sm" foreground="text_muted">{operator_label}</text>
+  </column>
 ```
+
+`gap="2"` is the divider band the split draws between the two panes. At
+its default 9px the hairline floats in transparent space and reads as a
+gap between the rail and its own border; two pixels puts the line against
+the surface.
 
 `nav_section` is the model field that holds the current section's index
 (`model.nav_section`, set by `sectionIndex(screen)`), so the
@@ -682,7 +698,7 @@ and that difference cascades.
 
 ```zig
 // src/core/navigation.zig
-/// Kiosk roles sign in by device, not by PIN.
+/// Kiosk roles sign in by being the device, not by a credential.
 pub fn needs_sign_in(self: Role) bool {
     return switch (self) {
         .admin, .waiter => true,
@@ -693,13 +709,13 @@ pub fn needs_sign_in(self: Role) bool {
 
 | | `admin` / `waiter` | `kds` / `display` |
 |---|---|---|
-| Session start | role picker, then PIN entry | role picker only |
-| `signed_in` set by | `login_checked` (a matching PIN hash) | `pick_role` |
+| Session start | the picker of people, then the pad or the password field | the picker of device modes only |
+| `signed_in` set by | `login_checked` (the row's own hash verified) | `pick_role` |
 | Operator identity | `employee_id` + `employee_name` | none (`operator_label` reads "Not signed in") |
 | Home screen | `admin_dashboard` / `waiter_tables` | `kds_board` / `display_board` |
 | Data loaded | after a successful sign-in | immediately on role pick |
 | Allowed screens | 43 / 12 | 4 / 4 |
-| Lockout, PIN change, reset | yes | none |
+| Lockout, credential reset | yes | none |
 
 The update arm is where the difference is visible:
 
@@ -709,15 +725,12 @@ The update arm is where the difference is visible:
     model.role = role;
     model.role_chosen = true;
     model.login_error = "";
-    model.error_text = "";
-    if (role.needs_sign_in()) {
-        go(model, .login);
-    } else {
-        // Kiosk roles are signed in by device.
-        model.signed_in = true;
-        go(model, rbac.home(role));
-        repos.loadAll(fx);
-    }
+    model.role = role;
+    model.role_chosen = true;
+    if (role.needs_sign_in()) return;
+    // Kiosk roles are signed in by device.
+    model.signed_in = true;
+    repos.loadAll(model, fx);
 },
 ```
 
@@ -731,66 +744,96 @@ honest and worth stating plainly:
 - a kiosk cannot reach anything that moves money, which is the actual
   mitigation.
 
-The PIN path is the mirror image, and the salt is the reason two
-restaurants with the same PIN do not share a digest:
+The person path is the mirror image, and the salt is derived per
+employee so two people with the same secret do not share a hash
+([ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)):
 
 ```zig
 .submit_login => {
-    if (model.pin_salt().len == 0) {
-        model.login_error = "Still starting up - try again in a moment";
+    if (model.login_locked()) {
+        model.login_error = "Too many wrong tries - try again in a moment";
         return;
     }
-    if (model.pin.text().len == 0) {
-        model.login_error = "Enter your PIN";
+    if (model.credential.text().len == 0) {
+        model.login_error = missingSecret(model.credential_kind);
         return;
     }
-    auth.hashPin(model.pin_salt(), model.pin.text(), &model.login_hash);
+    // Nobody is signing in without a person: the picker chose who, and
+    // the secret says they are that person.
+    if (model.sign_in_employee_id == 0) {
+        model.login_error = "Choose who you are first";
+        return;
+    }
     fx.dbQuery(.{
         .key = repos.key_login,
-        .sql = login_sql,
-        .params = &.{.{ .text = model.login_hash[0..] }},
+        // The hash is not computed here: the row's own hash is verified
+        // against the secret, and that is ONE slow hash.
+        .sql = repos.login_sql,
+        .params = &.{.{ .integer = model.sign_in_employee_id }},
         .on_result = Effects.dbMsg(.login_checked),
     });
 },
 ```
 
-The plaintext PIN never reaches the database, and the view binds a
-derived method rather than the buffer:
+The credential never reaches the database at all - the row is fetched by
+id and verified in Zig - and the view never reaches it either. The field
+binds a masked derived method rather than the buffer, and the buffer is
+named in `Model.view_unbound`:
 
 ```zig
-/// The sign-in PIN as typed. The view binds this, never the buffer.
-pub fn pin_text(model: *const Model) []const u8 {
-    return model.pin.text();
+/// What the sign-in screen shows of the secret being typed: the
+/// secret when the eye has opened it, and one bullet per character
+/// when it has not. The view binds this, never the buffer.
+pub fn credential_display(model: *const Model) []const u8 {
+    return model.masked(model.credential.text());
 }
 ```
 
-### What a kiosk device looks like today
+A PIN does not use the field. The same buffer is filled by taps on a
+numeric pad, and the row's `auth_kind` decides which of the two surfaces
+the screen draws.
 
-A kiosk device is the same binary with a different role, and it still
-shows the role picker, the title bar, the nav rail and the status bar.
-The role picker itself announces the difference:
+### What the picker shows, per binary
+
+One heading - "Who is using this device?" - and two different answers.
+The kiosk binary has no people on it at all: nobody types a credential
+into a wall-mounted board, so it lists the two device modes. Admin and
+service list the people who work there, and each row says in its own
+badge how that person signs in.
 
 ```xml
-<for each="roles" key="id" as="role">
-  <card padding="16">
-    <column gap="4" main="center">
-      <text size="lg">{role.title}</text>
-      <text foreground="text_muted" wrap="true">{role.blurb}</text>
-      <row gap="8" cross="center">
-        <badge>{role.kind}</badge>
-        ...
+<if test="{show_people}">
+  <for each="employees" key="id" as="employee">
+    <card padding="16">
+      <column gap="4" main="center">
+        <text size="lg">{employee.name}</text>
+        <text foreground="text_muted" wrap="true">{employee.role_label}</text>
+        <row gap="8" cross="center">
+          <badge>Sign in with {employee.credential_label}</badge>
+          <spacer grow="1"/>
+          <button variant="primary" on-press="pick_employee:{employee.id}">Sign in</button>
+        </row>
+      </column>
+    </card>
+  </for>
+</if>
 ```
 
-with the `kind` field carrying "PIN sign-in" or "Kiosk":
+The device rows are a file-scope constant, and they carry the "Kiosk"
+badge that says no credential is wanted:
 
 ```zig
-const role_cards = [_]RoleCard{
-    .{ .id = @intFromEnum(Role.admin), .title = "Admin", .blurb = "Full point of sale, management, configuration and reports.", .kind = "PIN sign-in" },
-    .{ .id = @intFromEnum(Role.waiter), .title = "Waiter", .blurb = "Order taking, table management and the floor plan.", .kind = "PIN sign-in" },
+const device_cards = [_]RoleCard{
     .{ .id = @intFromEnum(Role.kds), .title = "Kitchen", .blurb = "Live kitchen tickets, station by station. No sign-in.", .kind = "Kiosk" },
     .{ .id = @intFromEnum(Role.display), .title = "Display", .blurb = "Customer-facing order status. No sign-in.", .kind = "Kiosk" },
 };
 ```
+
+Choosing a person is not a sign-in; it names one. Their row's stored role
+becomes the device's mode - so the picker never asks twice, and the mode
+comes from the binary's own role table, which is what keeps the two lists
+from disagreeing - and the next screen is the pad or the field, by their
+`auth_kind`.
 
 ## PLAN: several windows over one model
 
@@ -917,7 +960,7 @@ is recorded as **Proposed**.
 | Sending a `NavSection` ordinal where the handler expects a row index | For `waiter`, `kds` and `display` the payload exceeds the rail length and the move is silently refused - a rail button that does nothing | Make the payload and the lookup agree: resolve the id to a `NavSection` and check it against the role's rail |
 | Adding a rail entry without adding the screen to `rbac.allows` | The rail shows a destination the role may not open; pressing it sets `error_text` and stays put | The rail table and the permission matrix move together; the matrix test walks every pair |
 | Assuming a kiosk is signed in | `signed_in` is false until `pick_role` sets it for `kds`/`display`; the shell does not mount and the app looks frozen | `Role.needs_sign_in()` is the switch; only `pick_role` and `login_checked` set `signed_in` |
-| Trusting a bound colour token for a status colour | The colour attributes take token **names as literals**; a bound token is rejected. `OrderStatus.tone()` returns a token name and cannot be bound | Use a static token, or move the dynamic styling into Zig |
+| Trusting a bound colour token for a status colour | The colour attributes take token **names as literals**; a bound token is rejected. A Zig helper that returns a token name - `OrderStatus` had one - cannot be bound either | Use a static token, pick it per state with an `<if>` chain, or move the dynamic styling into Zig |
 | Giving a split pane a definite `width` while the split owns the fraction | The pane and the fraction make two claims on the same dimension; the divider and the pane can disagree | Put `min-width` on the pane and let the model-owned fraction size it |
 | Pushing a screen without checking the return value | At depth 32 the history is silently truncated and the way back is lost | `push` returns `false` at the bound; `go` already checks it |
 | Expecting `go_back` to be reachable by the operator | No template binds `go_back`; a kiosk that drilled in has no way back | Add an explicit affordance, and document the escape for kiosk roles |

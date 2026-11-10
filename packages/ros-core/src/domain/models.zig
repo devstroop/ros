@@ -33,7 +33,9 @@ pub const OrderType = enum(i64) {
     }
 };
 
-/// Order lifecycle. The transition table lives in `domain/orders.zig`.
+/// Order lifecycle. The transition table lives in `nextStatus`, in
+/// `core/update.zig`. The ordinals are the database's `status` column and
+/// never change; only the words below do.
 pub const OrderStatus = enum(i64) {
     pending = 0,
     preparing = 1,
@@ -42,31 +44,45 @@ pub const OrderStatus = enum(i64) {
     completed = 4,
     voided = 5,
 
+    /// What the ticket is called on a board. These are the words the
+    /// floor uses, not the words the workflow engine uses: a cook says
+    /// "new" and "cooking", and a closed ticket has taken its money.
     pub fn label(self: OrderStatus) []const u8 {
         return switch (self) {
-            .pending => "Pending",
-            .preparing => "Preparing",
+            .pending => "New",
+            .preparing => "Cooking",
             .ready => "Ready",
             .served => "Served",
-            .completed => "Completed",
+            .completed => "Closed",
             .voided => "Voided",
         };
     }
 
-    /// The badge tone for the status, expressed in theme tokens.
-    pub fn tone(self: OrderStatus) []const u8 {
+    /// What pressing the board's button from here actually does. The
+    /// caption names the move, so a tap is never a mystery. An empty
+    /// label means there is no move left to make - the ticket is closed
+    /// or voided - and the board hides the button rather than showing a
+    /// blank one.
+    pub fn actionLabel(self: OrderStatus) []const u8 {
         return switch (self) {
-            .pending => "warning",
-            .preparing => "info",
-            .ready => "success",
-            .served => "accent",
-            .completed => "text_muted",
-            .voided => "destructive",
+            .pending => "Start cooking",
+            .preparing => "Mark ready",
+            .ready => "Hand off",
+            .served => "Close ticket",
+            .completed, .voided => "",
         };
     }
 
+    /// True while there is a move left to make.
+    pub fn advanceable(self: OrderStatus) bool {
+        return self.actionLabel().len > 0;
+    }
+
+    /// The state a stored ordinal names. A number the database cannot
+    /// produce reads as a new ticket: the safest thing to do with a
+    /// state this app does not recognise is to treat it as unfinished.
     pub fn fromCode(code: i64) OrderStatus {
-        return std.enums.fromInt(OrderStatus, code) catch .pending;
+        return std.enums.fromInt(OrderStatus, code) orelse .pending;
     }
 };
 
@@ -154,8 +170,9 @@ pub const Company = struct {
     tax_number: []const u8,
 };
 
-/// A staff member. The PIN hash never enters this struct: the login
-/// check happens in SQL, and only the id and display name come back.
+/// A staff member. The credential hash never enters this struct: the
+/// login check happens in SQL, and only the id and display name come
+/// back.
 pub const Employee = struct {
     id: i64,
     name: []const u8,
@@ -163,6 +180,11 @@ pub const Employee = struct {
     /// The role, as text.
     role_label: []const u8,
     active: bool,
+    /// How this person signs in. Defaults to a PIN, which is what every
+    /// row written before the column existed is.
+    auth_kind: CredentialKind = .pin,
+    /// That, as the screen says it. The list binds a field, not a method.
+    credential_label: []const u8 = CredentialKind.pin.label(),
 };
 
 pub const ProductCategory = struct {
@@ -259,6 +281,31 @@ pub const EmployeeRole = enum(i64) {
     /// untrusted, and a role the app does not know is not a role.
     pub fn fromInt(code: i64) ?EmployeeRole {
         return std.enums.fromInt(EmployeeRole, code);
+    }
+};
+
+/// How a person proves who they are at a till. A PIN is short, numeric and
+/// tapped on a screen in front of a queue; a password is longer, mixed and
+/// typed. The kind is the person's, not the device's: the same manager taps
+/// a code at the counter and types one at the office machine.
+pub const CredentialKind = enum(i64) {
+    pin = 0,
+    password = 1,
+
+    pub fn label(self: CredentialKind) []const u8 {
+        return switch (self) {
+            .pin => "PIN",
+            .password => "Password",
+        };
+    }
+
+    /// The stored kind, from the number the database holds. Null when the
+    /// number is not a kind this app knows - the added column has no CHECK
+    /// to lean on, because SQLite refuses one on a column added after the
+    /// table - so this is the only thing standing between a corrupt row and
+    /// a till that offers the wrong surface.
+    pub fn fromInt(code: i64) ?CredentialKind {
+        return std.enums.fromInt(CredentialKind, code);
     }
 };
 
@@ -379,8 +426,16 @@ pub const Order = struct {
     order_no: []const u8,
     order_type: OrderType,
     status: OrderStatus,
+    /// The same state as the database's ordinal. The markup can compare
+    /// a number and cannot name a bound colour token, so this is what
+    /// `status-badge` picks its literal colours from.
+    status_code: i64,
     /// Labels resolved at decode time: the markup binds fields.
     status_label: []const u8,
+    /// The caption of the button that moves this order to the next state.
+    /// Empty when there is no next state, and `advanceable` is false.
+    advance_label: []const u8,
+    advanceable: bool,
     type_label: []const u8,
     dining_table_id: i64,
     customer_id: i64,
@@ -391,6 +446,14 @@ pub const Order = struct {
     total_minor: i64,
     placed_at: i64,
     notes: []const u8,
+    /// The device that took the sale. It is the first half of the
+    /// order's cross-device identity; `id` above is only this database's
+    /// local key. An empty value means "this device" for a row that
+    /// predates the origin columns.
+    origin_device: []const u8 = "",
+    /// The order's id on `origin_device`. Together with the device it
+    /// names the same sale on every database.
+    origin_id: i64 = 0,
 };
 
 /// A printable report of the day's takings. Kept so a device can print

@@ -17,7 +17,7 @@ restaurant.
   orders, shortcuts.
 - Orders list + advance.
 - Dining table board.
-- Shell rail with Overview, Sell, Orders, Floor, Catalog, People, System.
+- Shell rail with Dashboard, POS, Orders, Dining, Menu, Team, Settings.
 - 43-table schema covering catalog, floor, customers, inventory, ops,
   compliance and printing.
 

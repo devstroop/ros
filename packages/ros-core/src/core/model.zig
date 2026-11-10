@@ -29,12 +29,92 @@ const rbac = @import("rbac.zig");
 const domain = @import("../domain/models.zig");
 const bump = @import("../bump.zig");
 const auth = @import("../data/auth.zig");
+const cursor = @import("../net/cursor.zig");
+const protocol = @import("../net/protocol.zig");
 
 const canvas = native_sdk.canvas;
 
 pub const Role = nav.Role;
 pub const Screen = nav.Screen;
 pub const Stack = nav.Stack;
+
+/// The recent ops this device can serve to a peer without a database
+/// read on the loop thread. The op log is the truth; this is a bounded
+/// window over it, reset when it fills.
+pub const sync_cache_slots = 8;
+
+/// Compact after this many new ops. The counter is durable, so a device
+/// that restarts every day still compacts.
+pub const sync_compact_after_ops: u32 = 128;
+
+/// Keep this many clocks of the log per device. A peer that is further
+/// behind than this tail gets a snapshot instead of a replay.
+pub const sync_retain_clocks: u64 = 64;
+
+/// The largest op-log page a `/v1/ops` query asks for. The body is
+/// capped by the frame size; the client asks again for the rest.
+pub const sync_ops_page_rows: usize = 64;
+
+/// The largest snapshot page a `/v1/snapshot` query asks for. One page
+/// is a header plus at most this many encoded op lines.
+pub const sync_snapshot_page_rows: usize = 16;
+
+/// A short request waiting on a database read. The net thread handles
+/// one short request at a time, so there is at most one.
+pub const SyncPending = enum {
+    none,
+    ops,
+    snapshot,
+};
+
+pub const SyncCacheMeta = struct {
+    device: [cursor.max_device_id_len]u8 = undefined,
+    device_len: usize = 0,
+    clock: u64 = 0,
+    offset: usize = 0,
+    len: usize = 0,
+};
+
+/// The devices this one has heard from. The list is in memory because
+/// a peer is a fact about the room, not a row the restaurant keeps: a
+/// device that goes quiet for fifteen seconds is gone.
+pub const max_peers = 8;
+
+pub const Peer = struct {
+    device: [cursor.max_device_id_len]u8 = undefined,
+    device_len: usize = 0,
+    role: protocol.DeviceRole = .admin,
+    host: [64]u8 = undefined,
+    host_len: usize = 0,
+    tcp: u16 = 0,
+    last_seen_ms: i64 = 0,
+    /// A manual address is never pruned: the operator said it is there.
+    manual: bool = false,
+    /// The fetch key of the event stream this peer is holding open, or
+    /// zero when there is none. The key is the stream's identity: the
+    /// terminal names it, and a peer that moves gets a fresh one.
+    event_key: u64 = 0,
+    /// The ops pull currently in flight for this peer, or zero. An
+    /// event that arrives while it is in flight waits for it to land
+    /// rather than racing it for the same fetch key.
+    sync_key: u64 = 0,
+    /// An event arrived during that pull, so one more pull is due as
+    /// soon as the current answer is applied.
+    sync_pending: bool = false,
+    /// A snapshot bootstrap in flight for this peer, and the page it
+    /// asked for. Zero means no snapshot.
+    snapshot_key: u64 = 0,
+    snapshot_after: i64 = 0,
+    snapshot_version: u64 = 0,
+
+    pub fn id(self: *const Peer) []const u8 {
+        return self.device[0..self.device_len];
+    }
+
+    pub fn address(self: *const Peer) []const u8 {
+        return self.host[0..self.host_len];
+    }
+};
 
 // ------------------------------------------------------------ the binary
 
@@ -75,7 +155,7 @@ pub fn allows_role(role: Role) bool {
 pub const products_buffer = 96 * 1024;
 pub const tables_buffer = 24 * 1024;
 pub const employees_buffer = 16 * 1024;
-pub const orders_buffer = 48 * 1024;
+pub const orders_buffer = 64 * 1024;
 pub const customers_buffer = 32 * 1024;
 pub const categories_buffer = 16 * 1024;
 pub const order_lines_buffer = 48 * 1024;
@@ -83,10 +163,11 @@ pub const company_buffer = 1024;
 /// The most lines one cart may carry.
 pub const max_cart_lines = 50;
 
-/// How many wrong PINs the till takes before it stops taking them.
+/// How many wrong credentials the till takes before it stops taking
+/// them.
 pub const max_login_failures = 5;
 
-/// How long the till stops taking PINs for, in milliseconds.
+/// How long the till stops taking credentials for, in milliseconds.
 pub const login_lockout_ms = 60_000;
 
 /// The decimals of a currency code, for the currencies a restaurant is
@@ -132,12 +213,13 @@ fn tenTo(exponent: i64) i64 {
 
 /// Where the installation salt stands.
 ///
-/// The salt is the one piece of state a PIN hash cannot be checked
-/// without, and there is exactly one right answer to "which salt?" - the
-/// one in the database. These four states say how sure the app is about
-/// that, because the difference between "the database has no salt" and
-/// "the database has not answered yet" is the difference between
-/// installing a salt and guessing one.
+/// The salt is the one piece of state a hash from before bcrypt cannot
+/// be checked without - a bcrypt string carries its own salt and needs
+/// nothing else. There is exactly one right answer to "which salt?" -
+/// the one in the database. These four states say how sure the app is
+/// about that, because the difference between "the database has no
+/// salt" and "the database has not answered yet" is the difference
+/// between installing a salt and guessing one.
 pub const SaltState = enum {
     /// The database has not answered yet. The salt in the model is a
     /// guess: nothing may be hashed with it.
@@ -152,6 +234,69 @@ pub const SaltState = enum {
     /// The database holds this salt. A sign-in may hash with it.
     confirmed,
 };
+
+/// The palette the operator chose, in the order Settings offers them.
+///
+/// The ordinal is stored in `app_config` as soon as the choice is made,
+/// so it is a contract with rows already on disk: add a palette at the
+/// end, and never renumber one that has been written.
+pub const Palette = enum(u8) {
+    light = 0,
+    dark = 1,
+    warm = 2,
+    night = 3,
+
+    /// The word the Settings button reads.
+    pub fn label(self: Palette) []const u8 {
+        return switch (self) {
+            .light => "Light",
+            .dark => "Dark",
+            .warm => "Warm",
+            .night => "Night",
+        };
+    }
+
+    /// True for the palettes drawn on a dark ground. The title bar's
+    /// glyph turns on this and nothing else: it is the half of the day
+    /// the tap is about to bring.
+    pub fn is_dark(self: Palette) bool {
+        return self == .dark or self == .night;
+    }
+
+    /// Where the title bar's one button lands from here: the dark
+    /// palette from a light ground, the light palette from a dark one.
+    /// Warm and Night are the Settings screen's business, but the glyph
+    /// still has to promise the move it makes.
+    pub fn otherHalf(self: Palette) Palette {
+        return if (self.is_dark()) .light else .dark;
+    }
+
+    /// The palette a stored ordinal names. An ordinal this build does
+    /// not know reads as the house light one - never a black screen.
+    pub fn fromCode(code: i64) Palette {
+        const info = @typeInfo(Palette).@"enum";
+        const narrowed = std.math.cast(info.tag_type, code) orelse return .light;
+        return std.enums.fromInt(Palette, narrowed) orelse .light;
+    }
+};
+
+/// The restaurant's own colour, read from the text the form holds.
+///
+/// `#rrggbb` and nothing else: six hex digits after the hash, either
+/// case. Anything else is not a colour but a typo, and the answer is
+/// null so the caller can choose - the form refuses the typing, the
+/// theme falls back to the register's own accent. A brand is a choice
+/// the owner makes once and can take back by emptying the field, which
+/// is why "no colour set" and "colour unreadable" are the same answer.
+pub fn parseBrand(text: []const u8) ?u24 {
+    if (text.len != 7 or text[0] != '#') return null;
+    var value: u24 = 0;
+    for (text[1..]) |char| {
+        const digit = std.fmt.charToDigit(char, 16) catch return null;
+        value = value * 16 + digit;
+    }
+    return value;
+}
 
 /// The tax on a price, in minor units.
 ///
@@ -171,6 +316,72 @@ fn taxOn(price_minor: i64, rate_bps: i64, inclusive: bool) i64 {
     return @divTrunc(price_minor * rate_bps + 5000, 10000);
 }
 
+/// A rate typed by a person, scaled by a hundred.
+///
+/// "24.50" is 2450, "24.5" is 2450 and "24" is 2400. This is the parser
+/// for a percentage or a basis-point rate, where the hundred belongs to
+/// the number itself; money goes through `parseAmount`, which uses the
+/// currency's own precision instead of assuming two decimals. It is the
+/// same reader with two decimals written down, because a rate that was
+/// read by its own copy once turned "24.5" into 2900: the lone fraction
+/// digit was placed in the tens and then scaled again.
+pub fn parsePrice(text: []const u8) ?i64 {
+    return parseAmount(text, 2);
+}
+
+/// A money amount typed by a person, in the currency's own minor units.
+///
+/// The reader every typed amount goes through. The company
+/// carries `currency_decimals`, the display divides by it
+/// (`Model.currency_divisor`), and an amount read at a fixed two decimals
+/// would mean something else: a yen restaurant prices "24" as 2400,
+/// and a Kuwaiti one loses the third digit of every amount. So money goes
+/// through here, with the currency's precision as an argument, and a
+/// fraction finer than the currency can hold is refused rather than
+/// quietly rounded - a mistyped price must not become a different price.
+///
+/// A rate is not money. A discount percentage and a tax slab's rate are
+/// both written to two decimals whatever the till's currency is, because
+/// the hundred belongs to the percent and not to the company; they come
+/// through `parsePrice`, which is this reader with two written down.
+pub fn parseAmount(text: []const u8, decimals: i64) ?i64 {
+    if (decimals < 0 or decimals > max_amount_decimals) return null;
+    const digits_max: u8 = @intCast(decimals);
+    const trimmed = std.mem.trim(u8, text, " ");
+    if (trimmed.len == 0) return null;
+    var whole: i64 = 0;
+    var fraction: i64 = 0;
+    var after_dot = false;
+    var digits: u8 = 0;
+    for (trimmed) |char| {
+        if (char == '.') {
+            if (after_dot) return null;
+            after_dot = true;
+            continue;
+        }
+        if (!std.ascii.isDigit(char)) return null;
+        if (after_dot) {
+            // Finer than the currency can say. Refused, not dropped.
+            if (digits == digits_max) return null;
+            digits += 1;
+            fraction = fraction * 10 + (char - '0');
+        } else {
+            const digit: i64 = char - '0';
+            if (whole > @divTrunc(std.math.maxInt(i64) - digit, 10)) return null;
+            whole = whole * 10 + digit;
+        }
+    }
+    var divisor: i64 = 1;
+    var i: i64 = 0;
+    while (i < decimals) : (i += 1) divisor *= 10;
+    while (digits < digits_max) : (digits += 1) fraction *= 10;
+    return whole * divisor + fraction;
+}
+
+/// How many fraction digits an amount may carry. Guards the divisor loop
+/// against a nonsense `currency_decimals` read out of a database.
+const max_amount_decimals = 8;
+
 pub const Model = struct {
     /// Fields the view never binds directly. Keep this list honest:
     /// it is the boundary between "the model" and the interface.
@@ -183,23 +394,63 @@ pub const Model = struct {
         "db_ready",
         "busy",
         "company_id",
-        "theme_dark",
+        "theme_palette",
+        "theme_contrast_high",
+        "theme_chosen",
         "salt_state",
         "last_issued_order_id",
+        "last_seen_order_no",
+        "board_primed",
+        "payment_check_id",
         "advance_order_id",
+        "add_line_pending",
+        "voiding_order_id",
+        "void_reason_buf",
         "login_hash",
         "login_hash_len",
         "login_legacy_hash",
+        "salt_buf",
+        "salt_len",
+        // The pairing token is a device's secret rather than a person's.
+        // It is listed because the raw buffer and its length are not for
+        // markup; the Settings card reads `pairing_token_text`, and it is
+        // meant to - the way a second till learns the token is by somebody
+        // reading it out to it. A person's credential stays unreadable.
+        "pairing_buf",
+        "pairing_len",
+        "pairing_entry",
+        // A credential is the one value the view must never be able to
+        // read whole. Every field here is either the secret itself or
+        // the choice that decides how the secret is typed; the view
+        // sees the masked method and the label instead.
+        "credential",
+        "credential_kind",
+        "credential_revealed",
+        "setup_credential",
+        "setup_credential2",
+        "setup_credential_kind",
+        "form_reset_credential_buf",
+        "form_reset_credential2_buf",
+        "form_reset_credential_kind",
         "net_host_buf",
         "net_host_len",
         "net_port",
         "net_bound",
         "net_requests",
         "net_dropped",
+        "net_refused",
         "peer_status",
         "peer_outcome",
         "peer_body_buf",
         "peer_body_len",
+        "sync_clock",
+        "sync_cursor",
+        "sync_applied",
+        "sync_skipped",
+        "sync_rejected",
+        "event_key_next",
+        "net_events",
+        "net_stream_drops",
     };
 
     // ------------------------------------------------------------ session
@@ -208,15 +459,17 @@ pub const Model = struct {
     /// the operator's: `admin` and `service` run one role, and only the
     /// kiosk can be moved between its two board modes.
     role: Role = boot_role,
-    /// False until a role is chosen at the role picker.
+    /// False until the picker has been answered - by a person, or by a
+    /// board on a kiosk.
     role_chosen: bool = false,
     /// True once a sign-in succeeded (kiosk roles sign in by device).
     signed_in: bool = false,
-    /// The signed-in employee. The PIN hash never lives here.
+    /// The signed-in employee. Neither the secret nor its hash lives
+    /// here.
     employee_id: i64 = 0,
     /// The employee the sign-in screen is asking about, before
-    /// anybody has signed in. The picker chooses the person; the PIN
-    /// proves they are that person.
+    /// anybody has signed in. The picker chooses the person; their
+    /// credential proves they are that person.
     sign_in_employee_id: i64 = 0,
     /// The name of the person the sign-in screen is asking about.
     sign_in_employee_name_buf: [64]u8 = undefined,
@@ -243,6 +496,82 @@ pub const Model = struct {
     peer_outcome: []const u8 = "none",
     peer_body_buf: [4096]u8 = undefined,
     peer_body_len: usize = 0,
+
+    /// The Lamport clock this device writes at. A writer bumps it to
+    /// `max(own, highest seen) + 1`; it never moves backward.
+    sync_clock: u64 = 0,
+    /// The highest clock applied from each source device. A scalar
+    /// cursor silently drops a peer's ops when two clocks disagree,
+    /// which is the normal case; this one remembers every source.
+    sync_cursor: cursor.Vector = .{},
+    /// Ops applied, skipped as already seen, and refused as malformed.
+    sync_applied: u32 = 0,
+    sync_skipped: u32 = 0,
+    sync_rejected: u32 = 0,
+    /// The recent op lines, in the order they were written or applied.
+    /// This is a recent window for diagnostics, not the source of
+    /// `/v1/ops`: a peer pulls from the durable log, so a restart does
+    /// not lose the middle of a range.
+    sync_cache_buf: bump.Bump(24 * 1024) = .{},
+    sync_cache_meta: [sync_cache_slots]SyncCacheMeta = [_]SyncCacheMeta{.{}} ** sync_cache_slots,
+    sync_cache_count: usize = 0,
+
+    /// Compaction state. The log keeps a tail per device; the floor is
+    /// the highest clock that was deleted, and a peer below it needs a
+    /// snapshot. The snapshot clocks are what the last snapshot covers.
+    sync_ops_since_compact: u32 = 0,
+    sync_compacting: bool = false,
+    sync_snapshot_version: u64 = 0,
+    sync_snapshot_at: i64 = 0,
+    sync_snapshot_clocks: cursor.Vector = .{},
+    sync_op_floor: cursor.Vector = .{},
+    sync_compactions: u32 = 0,
+    sync_snapshot_ops: u32 = 0,
+    sync_snapshots: u32 = 0,
+
+    /// The compaction in flight. The committed fields above move only
+    /// after the transaction reports success, so a failed compaction
+    /// cannot make a peer ask for a snapshot that was never written.
+    sync_compaction_version: u64 = 0,
+    sync_compaction_at: i64 = 0,
+    sync_compaction_ops: u32 = 0,
+    sync_compaction_clocks: cursor.Vector = .{},
+    sync_compaction_floor: cursor.Vector = .{},
+
+    /// The short request waiting on a database read, if any. The net
+    /// thread serialises short requests, so one slot is enough.
+    sync_pending: SyncPending = .none,
+    sync_pending_conn: u32 = 0,
+    sync_pending_after: i64 = 0,
+
+    /// The devices heard on the LAN. A beacon updates a row; a tick
+    /// forgets one that has gone quiet.
+    peers: [max_peers]Peer = [_]Peer{.{}} ** max_peers,
+    peer_count: usize = 0,
+    /// The manual address from `ROS_PEER`, if the operator gave one.
+    manual_peer_host_buf: [64]u8 = undefined,
+    manual_peer_host_len: usize = 0,
+    manual_peer_port: u16 = 0,
+    /// When the next sync pull is due.
+    sync_poll_at_ms: i64 = 0,
+    /// The next fetch key handed to an event stream. Keys are allocated
+    /// once and never reused, so a terminal can name the stream it ends
+    /// even after the peer list has moved.
+    event_key_next: u64 = 0,
+    /// Event-stream lines received, and streams that ended in a way the
+    /// poll fallback had to cover.
+    net_events: u32 = 0,
+    net_stream_drops: u32 = 0,
+    /// Requests turned away because the peer did not present this device's
+    /// pairing token. The number is the operator's only sign that a till
+    /// was configured with the wrong token, or with none.
+    net_refused: u32 = 0,
+    /// The reference snapshot the admin publishes, and the version the
+    /// peer last applied. A peer keeps its rows when the admin is away.
+    reference_version: u64 = 0,
+    reference_applying: u64 = 0,
+    reference_snapshot_buf: bump.Bump(30 * 1024) = .{},
+    reference_snapshot_len: usize = 0,
 
     // --------------------------------------------------------- navigation
 
@@ -271,6 +600,9 @@ pub const Model = struct {
     company_address_field: []const u8 = "",
     company_phone_field: []const u8 = "",
     company_tax_field: []const u8 = "",
+    /// The colour the restaurant trades under, as `#rrggbb`. Empty means
+    /// the register's own accent: a new company has no opinion yet.
+    company_brand_field: []const u8 = "",
     currency_code: []const u8 = "USD",
     currency_symbol: []const u8 = "$",
     /// True when the menu's prices already include tax.
@@ -324,8 +656,12 @@ pub const Model = struct {
     /// The forms the settings and the catalogue edit.
     form_currency_code_buf: canvas.TextBuffer(8) = .{},
     form_currency_symbol_buf: canvas.TextBuffer(8) = .{},
-    form_reset_pin_buf: canvas.TextBuffer(8) = .{},
-    form_reset_pin2_buf: canvas.TextBuffer(8) = .{},
+    form_reset_credential_buf: canvas.TextBuffer(auth.max_secret_len) = .{},
+    form_reset_credential2_buf: canvas.TextBuffer(auth.max_secret_len) = .{},
+    /// The kind the owner is setting. Writing a new credential always
+    /// writes its kind with it, so nobody can be left with a password
+    /// they never chose or a PIN they cannot type.
+    form_reset_credential_kind: domain.CredentialKind = .pin,
     form_reset_employee_id: i64 = 0,
     form_reset_employee_name: []const u8 = "",
     form_category_name_buf: canvas.TextBuffer(64) = .{},
@@ -353,6 +689,9 @@ pub const Model = struct {
 
     /// The order the order-detail screen is showing.
     selected_order_id: i64 = 0,
+    /// Why the operator is voiding the order being shown. A void with
+    /// no reason is not an audit trail; the update refuses it.
+    void_reason_buf: canvas.TextBuffer(96) = .{},
 
     // ------------------------------------------------- the settings data
 
@@ -397,6 +736,10 @@ pub const Model = struct {
     form_address_buf: canvas.TextBuffer(128) = .{},
     form_phone_buf: canvas.TextBuffer(32) = .{},
     form_tax_buf: canvas.TextBuffer(32) = .{},
+    /// `#rrggbb` and no more: the field cannot take a tenth character,
+    /// so a brand that is too long cannot be typed, only mistyped
+    /// inside the seven.
+    form_brand_buf: canvas.TextBuffer(7) = .{},
 
     // ------------------------------------------------------ the kitchen
 
@@ -406,9 +749,15 @@ pub const Model = struct {
     /// is "every station").
     stations_list: []const domain.KdsStation = &.{},
     station_filter_field: i64 = 0,
-    /// The last order the board has seen. A newer one is a new sale,
-    /// and the kitchen hears about it.
-    last_seen_order_id: i64 = 0,
+    /// The last order number the board has seen. The number is the
+    /// database's local sequence, which rises for every order whether
+    /// this device wrote it or a peer's op delivered it. A local row id
+    /// cannot do this job: a remote order has a negative id, so the
+    /// highest id never moves when a waiter's ticket arrives.
+    last_seen_order_no: i64 = 0,
+    /// True once the board has been read at least once. The first read
+    /// is the shift's starting point, not a new sale.
+    board_primed: bool = false,
 
     // --------------------------------------------------------- the waiter
 
@@ -468,6 +817,10 @@ pub const Model = struct {
     report_discount_field: i64 = 0,
     /// The day's net, in minor units.
     report_net_field: i64 = 0,
+    /// The money standing against the day's orders, in minor units. It
+    /// is a second column of the same query because it is a second fact:
+    /// an open ticket is billed and unbought.
+    report_taken_field: i64 = 0,
     /// True while a payment is on its way to the database. The view
     /// binds it: the button that takes the money is disabled while it
     /// holds, so a second tap cannot take the money twice.
@@ -476,6 +829,13 @@ pub const Model = struct {
     /// there is none. The board's button is disabled while it holds, so
     /// a second tap cannot move the order twice.
     advance_order_id: i64 = 0,
+    /// The order being voided, so the result handler can tell a void
+    /// from an ordinary status move and leave the detail screen.
+    voiding_order_id: i64 = 0,
+    /// True while a waiter's plate is on its way to the database. A
+    /// second tap would build its snapshot from a ticket that does not
+    /// have the first plate yet, and the kitchen would lose one.
+    add_line_pending: bool = false,
     /// The order that was just placed: the confirmation screen shows
     /// it and the payment is taken against it.
     active_table_name_field: []const u8 = "",
@@ -485,6 +845,11 @@ pub const Model = struct {
     last_order_total_minor: i64 = 0,
     last_order_items_count: i64 = 0,
     last_order_at: i64 = 0,
+    /// The order whose payment is waiting for the board to confirm it.
+    /// A payment statement that found a late plate writes nothing but
+    /// still returns success; this makes the till check the board
+    /// before it tells the cashier the sale is done.
+    payment_check_id: i64 = 0,
     /// True while a sale is on its way to the database. The view binds
     /// it: the button that places the order is disabled while it holds,
     /// so a second tap cannot submit the same cart twice.
@@ -497,6 +862,10 @@ pub const Model = struct {
     last_issued_order_id: i64 = 0,
     /// The payment mode the cashier picked.
     payment_mode_field: i64 = 0,
+    /// The cash the customer handed over, as typed. It is kept while
+    /// the confirmation is open so the change is visible before the
+    /// cashier takes the money.
+    cash_tendered_buf: canvas.TextBuffer(16) = .{},
     /// Why the payment failed, or empty.
     payment_error: []const u8 = "",
 
@@ -505,11 +874,20 @@ pub const Model = struct {
     /// True when the database has no company yet: the app opens on the
     /// setup screen instead of the role picker.
     needs_setup: bool = false,
+    /// True when this terminal has no restaurant of its own and is
+    /// waiting for the admin app's reference data. Only the admin app
+    /// writes the first company; a service or kiosk that started
+    /// first waits instead of inventing a second restaurant.
+    waiting_for_reference: bool = false,
     /// The setup form's fields.
     setup_company_name: canvas.TextBuffer(64) = .{},
     setup_admin_name: canvas.TextBuffer(64) = .{},
-    setup_pin: canvas.TextBuffer(8) = .{},
-    setup_pin2: canvas.TextBuffer(8) = .{},
+    /// The owner's own credential, typed twice so a slip of a key is
+    /// caught before it locks them out, and of whichever kind they
+    /// chose below.
+    setup_credential: canvas.TextBuffer(auth.max_secret_len) = .{},
+    setup_credential2: canvas.TextBuffer(auth.max_secret_len) = .{},
+    setup_credential_kind: domain.CredentialKind = .pin,
     /// The company's record, the parts the quick setup does not ask
     /// for: where the restaurant is, how to reach it, and its tax
     /// number.
@@ -523,12 +901,20 @@ pub const Model = struct {
 
     // ---------------------------------------------------------- sign-in
 
-    /// The PIN being typed. The view binds a derived method, never the
-    /// buffer itself.
-    pin: canvas.TextBuffer(8) = .{},
-    /// The installation salt, hex. Empty until the database answers.
-    pin_salt_buf: [64]u8 = undefined,
-    pin_salt_len: usize = 0,
+    /// The secret being typed, whichever kind it is. The view binds a
+    /// derived method, never the buffer.
+    credential: canvas.TextBuffer(auth.max_secret_len) = .{},
+    /// How the person signing in proves who they are. It is theirs -
+    /// the picker sets it from their row - and not the device's.
+    credential_kind: domain.CredentialKind = .pin,
+    /// True when a secret field is showing the secret in the clear. The
+    /// eye turns it and nothing else does; the default is covered.
+    credential_revealed: bool = false,
+    /// The installation salt, hex. Empty until the database answers. It
+    /// salts every credential hash this installation makes, and it is
+    /// stored under the key the first version chose.
+    salt_buf: [64]u8 = undefined,
+    salt_len: usize = 0,
     /// Where the installation salt stands.
     salt_state: SaltState = .unknown,
     /// This installation's token, hex. It is a name, not a secret: it
@@ -537,29 +923,43 @@ pub const Model = struct {
     /// retry of their own.
     device_token_buf: [auth.token_len]u8 = undefined,
     device_token_len: usize = 0,
+    /// The pairing token: what a peer presents to say it belongs to this
+    /// restaurant, and what this device presents to say the same of
+    /// itself. Unlike the name above, this one is a secret - but it is a
+    /// device's secret rather than a person's, and it has to be legible on
+    /// screen, because the way a second till gets it is by somebody reading
+    /// it out to it. It buys a place on the wire and nothing else: the wire
+    /// is still plaintext, and ADR-0023 says so in as many words.
+    pairing_buf: [protocol.max_token_bytes]u8 = undefined,
+    pairing_len: usize = 0,
+    /// What the operator is typing as a new token, before it is saved. A
+    /// rotation cannot be a random draw, because `update` has no `Io` and
+    /// therefore no randomness - so revoking a token that got out is a
+    /// person typing another one, and the field is where they type it.
+    pairing_entry: canvas.TextBuffer(protocol.max_token_bytes) = .{},
     /// The order id of the sale the cart is waiting to become. Zero
     /// until the cart is submitted; after that it belongs to the sale
     /// until the sale lands, so a retry is the same sale and not a
     /// second one.
     cart_attempt_id: i64 = 0,
-    /// The hash of the PIN being checked. Lives in the model so the
-    /// query parameter has a stable home.
+    /// The hash of the credential being checked. Lives in the model so
+    /// the query parameter has a stable home.
     login_hash: [auth.hash_length]u8 = undefined,
     /// The length of the hash in `login_hash`. The buffer is larger
     /// than the string, so the length is what says where it ends.
     login_hash_len: usize = 0,
-    /// The OLD hash of the same PIN - a SHA-256 digest. It is what the
-    /// sign-in looks up as well, so a restaurant whose employees signed
-    /// in before bcrypt can still sign in; the next sign-in rewrites
-    /// the row in the new form.
+    /// The OLD hash of the same credential - a SHA-256 digest. It is
+    /// what the sign-in looks up as well, so a restaurant whose
+    /// employees signed in before bcrypt can still sign in; the next
+    /// sign-in rewrites the row in the new form.
     login_legacy_hash: [auth.legacy_len]u8 = undefined,
     /// Storage for the signed-in operator's name.
     operator_buf: bump.Bump(1024) = .{},
     /// Why the last sign-in failed, or empty.
     login_error: []const u8 = "",
-    /// How many wrong PINs this session has seen.
+    /// How many wrong credentials this session has seen.
     login_failures: i64 = 0,
-    /// The moment the till stops accepting PINs, in epoch
+    /// The moment the till stops accepting credentials, in epoch
     /// milliseconds. Zero when it is not locked.
     login_locked_until: i64 = 0,
 
@@ -596,8 +996,15 @@ pub const Model = struct {
     failed_screen: nav.Screen = .admin_dashboard,
     /// The last error worth showing the operator, or empty.
     error_text: []const u8 = "",
-    /// Dark palette instead of the house light one.
-    theme_dark: bool = false,
+    /// The palette the operator chose, and whether it is pushed to its
+    /// high-contrast form. Both are chrome, not data: nothing else in
+    /// the model reads them.
+    theme_palette: Palette = .light,
+    theme_contrast_high: bool = false,
+    /// True once the operator has set either of them this session. The
+    /// stored choice is read at boot, and a read that lands late would
+    /// undo a tap that came first.
+    theme_chosen: bool = false,
 
     // ---------------------------------------------------- derived values
     //
@@ -616,6 +1023,147 @@ pub const Model = struct {
     /// How many devices have been in this restaurant.
     pub fn device_count(model: *const Model) usize {
         return model.devices_list.len;
+    }
+
+    /// The peers heard on the LAN, in the order they were first seen.
+    pub fn peer_devices(model: *const Model) []const Peer {
+        return model.peers[0..model.peer_count];
+    }
+
+    /// How many peers this device has heard from.
+    pub fn peer_devices_count(model: *const Model) usize {
+        return model.peer_count;
+    }
+
+    /// The peer with this device id, or null.
+    pub fn findPeer(model: *Model, device: []const u8) ?*Peer {
+        for (model.peers[0..model.peer_count]) |*peer| {
+            if (std.mem.eql(u8, peer.id(), device)) return peer;
+        }
+        return null;
+    }
+
+    /// The peer holding the event stream with this fetch key, or null.
+    /// The key, not the peer's index, is the identity: the list can be
+    /// compacted while a stream is still open.
+    pub fn findPeerByEventKey(model: *Model, key: u64) ?*Peer {
+        if (key == 0) return null;
+        for (model.peers[0..model.peer_count]) |*peer| {
+            if (peer.event_key == key) return peer;
+        }
+        return null;
+    }
+
+    /// The peer whose ops pull is the fetch with this key, or null.
+    pub fn findPeerBySyncKey(model: *Model, key: u64) ?*Peer {
+        if (key == 0) return null;
+        for (model.peers[0..model.peer_count]) |*peer| {
+            if (peer.sync_key == key) return peer;
+        }
+        return null;
+    }
+
+    pub fn findPeerBySnapshotKey(model: *Model, key: u64) ?*Peer {
+        if (key == 0) return null;
+        for (model.peers[0..model.peer_count]) |*peer| {
+            if (peer.snapshot_key == key) return peer;
+        }
+        return null;
+    }
+
+    /// Remember a beacon. The device id is the key: the same peer
+    /// broadcasting again updates its address and role rather than
+    /// adding a second row.
+    pub fn observePeer(model: *Model, hello: protocol.Hello, now_ms: i64) void {
+        if (hello.device.len == 0 or hello.host.len == 0 or hello.tcp == 0) return;
+        // A device is not its own peer. The token is the installation's
+        // name, and the beacon carries it back to us.
+        if (model.device_token_len > 0 and
+            std.mem.eql(u8, hello.device, model.device_token_buf[0..model.device_token_len]))
+        {
+            return;
+        }
+
+        if (model.findPeer(hello.device)) |peer| {
+            // A moved peer's old stream is pointed at the old address.
+            // Drop the key so the next poll opens one where the peer is
+            // now; the old stream ends on its own timeout.
+            if (peer.tcp != hello.tcp or !std.mem.eql(u8, peer.address(), hello.host)) {
+                peer.event_key = 0;
+            }
+            peer.role = hello.role;
+            peer.host_len = @min(hello.host.len, peer.host.len);
+            @memcpy(peer.host[0..peer.host_len], hello.host[0..peer.host_len]);
+            peer.tcp = hello.tcp;
+            peer.last_seen_ms = now_ms;
+            return;
+        }
+
+        var slot: *Peer = undefined;
+        if (model.peer_count < max_peers) {
+            slot = &model.peers[model.peer_count];
+            model.peer_count += 1;
+        } else {
+            // The list is full: the peer we have not heard from the
+            // longest gives up its row. A manual address never does.
+            var victim: ?*Peer = null;
+            for (model.peers[0..model.peer_count]) |*peer| {
+                if (peer.manual) continue;
+                if (victim == null or peer.last_seen_ms < victim.?.last_seen_ms) victim = peer;
+            }
+            slot = victim orelse return;
+        }
+
+        const device_len = @min(hello.device.len, slot.device.len);
+        const host_len = @min(hello.host.len, slot.host.len);
+        slot.* = .{
+            .device_len = device_len,
+            .role = hello.role,
+            .host_len = host_len,
+            .tcp = hello.tcp,
+            .last_seen_ms = now_ms,
+        };
+        @memcpy(slot.device[0..device_len], hello.device[0..device_len]);
+        @memcpy(slot.host[0..host_len], hello.host[0..host_len]);
+    }
+
+    /// Add the address the operator typed. It is not pruned: a manual
+    /// peer is a promise, not a rumour.
+    pub fn observeManualPeer(model: *Model, host: []const u8, tcp: u16, now_ms: i64) void {
+        if (host.len == 0 or tcp == 0) return;
+
+        // A manual entry replaces a discovered entry at the same
+        // address, so the pull does not happen twice.
+        for (model.peers[0..model.peer_count]) |*peer| {
+            if (peer.tcp == tcp and std.mem.eql(u8, peer.address(), host)) {
+                peer.manual = true;
+                peer.last_seen_ms = now_ms;
+                return;
+            }
+        }
+
+        var id_buffer: [cursor.max_device_id_len]u8 = undefined;
+        const id = std.fmt.bufPrint(&id_buffer, "manual:{s}:{d}", .{ host, tcp }) catch return;
+        model.observePeer(.{
+            .device = id,
+            .role = .admin,
+            .host = host,
+            .tcp = tcp,
+            .app_version = "",
+        }, now_ms);
+        if (model.findPeer(id)) |peer| peer.manual = true;
+    }
+
+    /// Forget peers that have gone quiet. A manual address stays.
+    pub fn prunePeers(model: *Model, cutoff_ms: i64) void {
+        var write: usize = 0;
+        for (model.peers[0..model.peer_count]) |peer| {
+            if (peer.manual or peer.last_seen_ms >= cutoff_ms) {
+                model.peers[write] = peer;
+                write += 1;
+            }
+        }
+        model.peer_count = write;
     }
 
     /// What the sync sidecar has left behind.
@@ -640,6 +1188,10 @@ pub const Model = struct {
 
     /// The title of the current screen.
     pub fn screen_title(model: *const Model) []const u8 {
+        // The waiting state is not a `Screen`: the terminal is between
+        // the boot read and the admin's reference data, and the status
+        // bar should say that, not name the picker underneath.
+        if (model.waiting_for_reference) return "Waiting for the restaurant";
         return model.screen().title();
     }
 
@@ -710,20 +1262,15 @@ pub const Model = struct {
     pub fn display_cards(model: *const Model, arena: std.mem.Allocator) []const DisplayCard {
         var count: usize = 0;
         for (model.orders) |order| {
-            switch (order.status) {
-                .pending, .preparing, .ready, .served => count += 1,
-                .completed, .voided => {},
-            }
+            if (orderIsOpen(order.status)) count += 1;
         }
         const out = arena.alloc(DisplayCard, count) catch return &.{};
         var index: usize = 0;
         for (model.orders) |order| {
-            switch (order.status) {
-                .pending, .preparing, .ready, .served => {},
-                .completed, .voided => continue,
-            }
+            if (!orderIsOpen(order.status)) continue;
             out[index] = .{
                 .label = displayLabel(model, order.dining_table_id, order.order_no),
+                .status_code = order.status_code,
                 .status_label = order.status_label,
                 .type_label = order.type_label,
                 .order_no = order.order_no,
@@ -913,6 +1460,10 @@ pub const Model = struct {
         return model.form_tax_buf.text();
     }
 
+    pub fn form_company_brand(model: *const Model) []const u8 {
+        return model.form_brand_buf.text();
+    }
+
     /// The settings menu. This method lives INSIDE the struct on
     /// purpose: the binding resolver only sees the declarations in the
     /// struct body, and a method at file scope is invisible to the
@@ -937,17 +1488,32 @@ pub const Model = struct {
     }
 
     /// The product name in the product form.
-    /// The PIN being typed for the reset.
-    pub fn form_reset_pin(model: *const Model) []const u8 {
-        return model.form_reset_pin_buf.text();
+    /// The credential being typed for the reset, masked or not.
+    pub fn form_reset_credential(model: *const Model) []const u8 {
+        return model.masked(model.form_reset_credential_buf.text());
     }
 
-    /// The PIN being confirmed for the reset.
-    pub fn form_reset_pin2(model: *const Model) []const u8 {
-        return model.form_reset_pin2_buf.text();
+    /// The credential being confirmed for the reset, masked or not.
+    pub fn form_reset_credential2(model: *const Model) []const u8 {
+        return model.masked(model.form_reset_credential2_buf.text());
     }
 
-    /// Whose PIN is being reset.
+    /// The kind the reset form is setting, as the toggle row counts it.
+    pub fn form_reset_credential_kind_id(model: *const Model) i64 {
+        return @intFromEnum(model.form_reset_credential_kind);
+    }
+
+    /// What the reset form calls the kind it is setting.
+    pub fn form_reset_credential_label(model: *const Model) []const u8 {
+        return model.form_reset_credential_kind.label();
+    }
+
+    /// The reset form's own rule for the kind it is setting.
+    pub fn form_reset_credential_hint(model: *const Model) []const u8 {
+        return kindHint(model.form_reset_credential_kind);
+    }
+
+    /// Whose credential is being reset.
     pub fn form_reset_employee(model: *const Model) []const u8 {
         return model.form_reset_employee_name;
     }
@@ -1123,6 +1689,13 @@ pub const Model = struct {
         return order.status_label;
     }
 
+    /// The same state as an ordinal, so the detail screen's chip is
+    /// coloured the way the list's is.
+    pub fn selected_order_status_code(model: *const Model) i64 {
+        const order = model.selected_order() orelse return -1;
+        return order.status_code;
+    }
+
     /// The kind of sale the order being shown is.
     pub fn selected_order_type(model: *const Model) []const u8 {
         const order = model.selected_order() orelse return "";
@@ -1139,6 +1712,28 @@ pub const Model = struct {
     pub fn selected_order_total(model: *const Model) i64 {
         const order = model.selected_order() orelse return 0;
         return order.total_minor;
+    }
+
+    /// Whether the order being shown can still be paid. A closed
+    /// ticket has already taken its money; offering the button again
+    /// is an invitation to charge the guest twice.
+    pub fn selected_order_can_pay(model: *const Model) bool {
+        const order = model.selected_order() orelse return false;
+        if (order.paid) return false;
+        return order.status != .completed and order.status != .voided;
+    }
+
+    /// Whether the order being shown can still be voided. A paid order
+    /// is money that has changed hands; undoing that is a refund, not a
+    /// void, and a refund has to put the money back on the same tender.
+    pub fn selected_order_can_void(model: *const Model) bool {
+        const order = model.selected_order() orelse return false;
+        return order.status != .completed and order.status != .voided;
+    }
+
+    /// The reason the operator is typing for the void.
+    pub fn void_reason(model: *const Model) []const u8 {
+        return model.void_reason_buf.text();
     }
 
     /// The reservations.
@@ -1257,6 +1852,21 @@ pub const Model = struct {
     /// What the day's orders came to, tax and discounts taken off.
     pub fn report_net_minor(model: *const Model) i64 {
         return model.report_net_field;
+    }
+
+    /// The money actually taken for the day's orders. It is not the
+    /// figure above, and the gap between them is the point: an open
+    /// ticket is billed and unbought.
+    pub fn report_taken_minor(model: *const Model) i64 {
+        return model.report_taken_field;
+    }
+
+    /// What the day's tickets came to and nobody has paid for. A
+    /// payment row is the bill, not the tender - the change was never
+    /// revenue - so a closed ticket owes nothing and this cannot go
+    /// negative on money this app took.
+    pub fn report_owed_minor(model: *const Model) i64 {
+        return model.report_net_field - model.report_taken_field;
     }
 
     /// How the money came in, one row per mode.
@@ -1469,7 +2079,18 @@ pub const Model = struct {
     }
 
     /// The total of the order just placed, in minor units.
+    ///
+    /// The board's copy of the order is the truth while it is loaded: a
+    /// plate added on another device updates the order there, and the
+    /// confirmation's total and the change worked out from it have to
+    /// follow. The stored total is the fallback for a sale whose board
+    /// has already moved on.
     pub fn last_order_total(model: *const Model) i64 {
+        if (model.last_order_id != 0) {
+            for (model.orders) |order| {
+                if (order.id == model.last_order_id) return order.total_minor;
+            }
+        }
         return model.last_order_total_minor;
     }
 
@@ -1487,6 +2108,49 @@ pub const Model = struct {
     /// The payment mode the cashier picked.
     pub fn payment_mode(model: *const Model) i64 {
         return model.payment_mode_field;
+    }
+
+    /// True when the cashier is taking cash. Only then does the
+    /// confirmation screen ask how much the customer handed over.
+    pub fn payment_is_cash(model: *const Model) bool {
+        return model.payment_mode_field == @intFromEnum(domain.PaymentMode.cash);
+    }
+
+    /// The cash the customer handed over, as typed.
+    pub fn cash_tendered(model: *const Model) []const u8 {
+        return model.cash_tendered_buf.text();
+    }
+
+    /// The money that goes back to the customer, in minor units.
+    ///
+    /// An empty or unreadable tender shows no change: the screen only
+    /// prints a figure it can stand behind. The payment itself refuses
+    /// a tender below the total rather than inventing one.
+    pub fn cash_change(model: *const Model) i64 {
+        const total = model.last_order_total();
+        if (total <= 0) return 0;
+        const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
+        if (text.len == 0) return 0;
+        const tendered = parseAmount(text, model.currency_decimal_count()) orelse return 0;
+        if (tendered <= total) return 0;
+        return tendered - total;
+    }
+
+    /// True when the customer handed over less than the bill.
+    pub fn cash_short(model: *const Model) bool {
+        const total = model.last_order_total();
+        if (total <= 0) return false;
+        const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
+        if (text.len == 0) return false;
+        const tendered = parseAmount(text, model.currency_decimal_count()) orelse return false;
+        return tendered < total;
+    }
+
+    /// True when the typed tender is not an amount at all.
+    pub fn cash_tender_invalid(model: *const Model) bool {
+        const text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
+        if (text.len == 0) return false;
+        return parseAmount(text, model.currency_decimal_count()) == null;
     }
 
     /// Why the last payment failed, or empty.
@@ -1559,15 +2223,30 @@ pub const Model = struct {
         return model.setup_admin_name.text();
     }
 
-    /// The setup form's PIN. The buffer is the edit model; the view
-    /// binds the text.
-    pub fn setup_pin_text(model: *const Model) []const u8 {
-        return model.setup_pin.text();
+    /// The setup form's credential. The buffer is the edit model; the
+    /// view binds the text, masked or not.
+    pub fn setup_credential_text(model: *const Model) []const u8 {
+        return model.masked(model.setup_credential.text());
     }
 
-    /// The setup form's confirmation PIN.
-    pub fn setup_pin2_text(model: *const Model) []const u8 {
-        return model.setup_pin2.text();
+    /// The setup form's confirmation credential.
+    pub fn setup_credential2_text(model: *const Model) []const u8 {
+        return model.masked(model.setup_credential2.text());
+    }
+
+    /// The kind the setup form is choosing, as the toggle row counts it.
+    pub fn setup_credential_kind_id(model: *const Model) i64 {
+        return @intFromEnum(model.setup_credential_kind);
+    }
+
+    /// What the setup form calls the kind it is choosing.
+    pub fn setup_credential_label(model: *const Model) []const u8 {
+        return model.setup_credential_kind.label();
+    }
+
+    /// The setup form's own rule for the kind it is choosing.
+    pub fn setup_credential_hint(model: *const Model) []const u8 {
+        return kindHint(model.setup_credential_kind);
     }
 
     /// The setup form's currency code.
@@ -1590,8 +2269,6 @@ pub const Model = struct {
         return model.setup_error;
     }
 
-    /// Whether the setup form is complete enough to submit: a company
-    /// name, an operator name, a PIN, and the same PIN twice.
     /// True when the setup form is NOT ready to be submitted.
     ///
     /// The button binds this, so the operator cannot press a button
@@ -1600,31 +2277,39 @@ pub const Model = struct {
         return !model.setup_can_submit();
     }
 
+    /// Whether the setup form is complete enough to submit: a company
+    /// name, an operator name, a credential that suits the kind chosen
+    /// for it, and that credential twice.
     pub fn setup_can_submit(model: *const Model) bool {
         const name = std.mem.trim(u8, model.setup_company_name.text(), " ");
         const admin = std.mem.trim(u8, model.setup_admin_name.text(), " ");
-        const pin = model.setup_pin.text();
-        const pin2 = model.setup_pin2.text();
+        const secret = model.setup_credential.text();
+        const again = model.setup_credential2.text();
         if (name.len == 0 or admin.len == 0) return false;
-        if (!model.pin_is_acceptable(pin)) return false;
-        return std.mem.eql(u8, pin, pin2);
+        if (!model.credential_is_acceptable(model.setup_credential_kind, secret)) return false;
+        return std.mem.eql(u8, secret, again);
     }
 
-    /// True when a PIN is worth accepting.
+    /// True when a secret is worth accepting as the kind it is being
+    /// set to.
     ///
-    /// Six digits or more, and digits only. A four-digit PIN is ten
-    /// thousand guesses, and a stolen database is worth ten thousand
-    /// guesses: the hash can be slow, but it cannot be slow enough to
-    /// make a small space safe.
-    pub fn pin_is_acceptable(_: *const Model, pin: []const u8) bool {
-        if (pin.len < auth.min_pin_len) return false;
-        for (pin) |digit| {
-            if (digit < '0' or digit > '9') return false;
-        }
-        return true;
+    /// A PIN is six digits at least, and digits only. Four digits is ten
+    /// thousand guesses and six is a million; the hash is slow, but it
+    /// cannot be slow enough to make a small space safe, so the shape of
+    /// a PIN has to carry what the operator's care did not.
+    /// A password is eight characters at least and anything otherwise:
+    /// length is the whole of what a password buys.
+    pub fn credential_is_acceptable(_: *const Model, kind: domain.CredentialKind, secret: []const u8) bool {
+        if (secret.len > auth.max_secret_len) return false;
+        return switch (kind) {
+            .pin => secret.len >= auth.min_pin_len and
+                secret.len <= auth.max_pin_len and
+                digitsOnly(secret),
+            .password => secret.len >= auth.min_password_len,
+        };
     }
 
-    /// True when the till is refusing PINs for a while.
+    /// True when the till is refusing credentials for a while.
     pub fn login_locked(model: *const Model) bool {
         return model.login_locked_until > model.now_ms;
     }
@@ -1635,16 +2320,32 @@ pub const Model = struct {
         return @divTrunc(model.login_locked_until - model.now_ms, 1000);
     }
 
+    /// True when the pad or the field may take a credential.
+    ///
+    /// The markup gates the whole surface on this, because a pad that
+    /// goes on taking digits while the till is locked tells the person
+    /// nothing is wrong - the refusal only ever arrived on the attempt.
+    /// The countdown next to it is `login_locked_seconds`.
+    pub fn credential_surface_open(model: *const Model) bool {
+        return !model.login_locked();
+    }
+
     /// True when the last sign-in attempt failed.
     pub fn login_failed(model: *const Model) bool {
         return model.login_error.len > 0;
     }
 
     /// True before a role has been chosen: the role picker is showing.
-    /// A fresh installation shows the setup screen first, so the picker
-    /// waits for it.
+    /// A fresh admin installation shows the setup screen first, and a
+    /// service or kiosk waits for the admin's reference data, so the
+    /// picker waits for whichever one applies.
     pub fn show_role_picker(model: *const Model) bool {
-        return !model.role_chosen and !model.needs_setup;
+        return !model.role_chosen and !model.needs_setup and !model.waiting_for_reference;
+    }
+
+    /// True when this terminal started before the admin app did.
+    pub fn show_waiting(model: *const Model) bool {
+        return model.waiting_for_reference;
     }
 
     /// The picker's device half: the two board modes, which sign in by
@@ -1654,8 +2355,9 @@ pub const Model = struct {
     }
 
     /// The picker's people half: the people who work here, each of whom
-    /// signs in with a PIN. The admin and service apps show it; the
-    /// kiosk does not, because nobody types a PIN into a board.
+    /// signs in with the credential their own row names. The admin and
+    /// service apps show it; the kiosk does not, because nobody types a
+    /// credential into a board.
     pub fn show_people(_: *const Model) bool {
         return app_kind != .kiosk;
     }
@@ -1699,12 +2401,27 @@ pub const Model = struct {
     pub fn open_order_count(model: *const Model) usize {
         var count: usize = 0;
         for (model.orders) |order| {
-            switch (order.status) {
-                .pending, .preparing, .ready, .served => count += 1,
-                .completed, .voided => {},
-            }
+            if (orderIsOpen(order.status)) count += 1;
         }
         return count;
+    }
+
+    /// The orders that are still open, newest first. The waiter's
+    /// "Open orders" screen lists these; the admin board keeps the
+    /// closed tickets below them for the receipt.
+    pub fn open_orders(model: *const Model, arena: std.mem.Allocator) []const domain.Order {
+        var count: usize = 0;
+        for (model.orders) |order| {
+            if (orderIsOpen(order.status)) count += 1;
+        }
+        const out = arena.alloc(domain.Order, count) catch return &.{};
+        var index: usize = 0;
+        for (model.orders) |order| {
+            if (!orderIsOpen(order.status)) continue;
+            out[index] = order;
+            index += 1;
+        }
+        return out[0..index];
     }
 
     /// How many tables are occupied right now.
@@ -1728,9 +2445,64 @@ pub const Model = struct {
         return model.company_name_field;
     }
 
-    /// The installation salt, as a slice.
-    pub fn pin_salt(model: *const Model) []const u8 {
-        return model.pin_salt_buf[0..model.pin_salt_len];
+    /// The glyph the theme button wears: the theme the tap is about to
+    /// bring, so the control names the move rather than the state it
+    /// leaves. Both names are built-in icons - the markup binds an icon
+    /// name, and only a name.
+    pub fn theme_icon(model: *const Model) []const u8 {
+        return if (model.theme_palette.is_dark()) "sun" else "moon";
+    }
+
+    /// The palettes Settings offers, in that order.
+    pub fn palettes(_: *const Model) []const PaletteOption {
+        return &palette_options;
+    }
+
+    /// The chosen palette, as the ordinal the buttons compare against.
+    pub fn palette_code(model: *const Model) i64 {
+        return @intFromEnum(model.theme_palette);
+    }
+
+    /// Whether the chosen palette is in its high-contrast form.
+    pub fn contrast_high(model: *const Model) bool {
+        return model.theme_contrast_high;
+    }
+
+    /// The installation salt, as a slice. It is stored under the key the
+    /// first version chose, which named the only thing it salted.
+    pub fn salt(model: *const Model) []const u8 {
+        return model.salt_buf[0..model.salt_len];
+    }
+
+    /// The pairing token this device presents, and checks a peer against.
+    /// Empty until somebody has paired the device: an empty token asks for
+    /// nothing and gets the refusal.
+    pub fn pairing(model: *const Model) []const u8 {
+        return model.pairing_buf[0..model.pairing_len];
+    }
+
+    /// The same bytes, spelled for the operator who has to read them out to
+    /// the next device. This is the one secret on the screen on purpose.
+    pub fn pairing_token_text(model: *const Model) []const u8 {
+        return model.pairing();
+    }
+
+    /// The token being typed, before it is saved.
+    pub fn pairing_entry_text(model: *const Model) []const u8 {
+        return model.pairing_entry.text();
+    }
+
+    /// True when the Save button would only save nothing. The field is
+    /// trimmed the way every other name field is: a token of spaces is not
+    /// a token, and pressing Save on one teaches the operator the wrong
+    /// thing about what just happened to their peers.
+    pub fn pairing_incomplete(model: *const Model) bool {
+        return std.mem.trim(u8, model.pairing_entry.text(), " ").len == 0;
+    }
+
+    /// How many requests have been turned away for want of the token.
+    pub fn refused_count(model: *const Model) u32 {
+        return model.net_refused;
     }
 
     /// The name of the person the sign-in screen is asking about.
@@ -1773,9 +2545,63 @@ pub const Model = struct {
         return model.cart_len == 0;
     }
 
-    /// The sign-in PIN as typed. The view binds this, never the buffer.
-    pub fn pin_text(model: *const Model) []const u8 {
-        return model.pin.text();
+    /// What the sign-in screen shows of the secret being typed: the
+    /// secret when the eye has opened it, and one bullet per character
+    /// when it has not. The view binds this, never the buffer.
+    pub fn credential_display(model: *const Model) []const u8 {
+        return model.masked(model.credential.text());
+    }
+
+    /// The masked face of a secret. The length is shown and the value
+    /// is not: an operator can see they have typed six characters, and
+    /// the person behind them cannot see what they were.
+    pub fn masked(model: *const Model, secret: []const u8) []const u8 {
+        if (model.credential_revealed) return secret;
+        var count: usize = 0;
+        for (secret) |byte| {
+            // A lead byte starts a character; a continuation byte does
+            // not. Counting leads is exact and cannot fail on a buffer
+            // that was clamped mid-sequence.
+            if (byte & 0xc0 != 0x80) count += 1;
+        }
+        return bullets[0 .. count * bullet_len];
+    }
+
+    /// True when the person signing in taps a code rather than types
+    /// one. The two are different surfaces and the model decides which.
+    pub fn sign_in_by_pin(model: *const Model) bool {
+        return model.credential_kind == .pin;
+    }
+
+    /// True when the person signing in types a password.
+    pub fn sign_in_by_password(model: *const Model) bool {
+        return model.credential_kind == .password;
+    }
+
+    /// The line under the sign-in heading, which says what it is asking
+    /// for in the words the person would use.
+    pub fn credential_prompt(model: *const Model) []const u8 {
+        return switch (model.credential_kind) {
+            .pin => "enter your PIN",
+            .password => "enter your password",
+        };
+    }
+
+    /// The eye's word: what pressing it would do.
+    pub fn reveal_label(model: *const Model) []const u8 {
+        if (model.credential_revealed) return "Hide";
+        return "Show";
+    }
+
+    /// The digits a PIN is tapped from, in the order a pad lays them
+    /// out. The pad draws these; it is not ten buttons written out.
+    pub fn pin_digits(_: *const Model) []const DigitOption {
+        return &pin_digit_options;
+    }
+
+    /// How a person can prove who they are, as the forms offer it.
+    pub fn credential_kinds(_: *const Model) []const CredentialKindOption {
+        return &credential_kind_options;
     }
 
     /// True when the cart is the screen being shown, rather than the
@@ -1876,7 +2702,9 @@ pub const Model = struct {
             out[index] = .{
                 .id = order.id,
                 .order_no = order.order_no,
+                .status_code = order.status_code,
                 .status_label = order.status_label,
+                .advance_label = order.advance_label,
                 .summary = summariseOrder(model, order, arena),
                 .waiting_label = waitingLabel(model, order, arena),
             };
@@ -1886,13 +2714,21 @@ pub const Model = struct {
     }
 
     /// How many tickets are on the kitchen board.
+    ///
+    /// This is the length of the list beside it and nothing else, so the
+    /// station the cook picked applies to both. A badge that counted
+    /// every open ticket while the board showed one station's is the
+    /// orders badge's old mistake (#146).
     pub fn ticket_count(model: *const Model) usize {
         var count: usize = 0;
         for (model.orders) |order| {
             switch (order.status) {
-                .pending, .preparing, .ready => count += 1,
-                .served, .completed, .voided => {},
+                .pending, .preparing, .ready => {
+                    if (!orderOnStation(model, order.id, model.station_filter_field)) continue;
+                },
+                .served, .completed, .voided => continue,
             }
+            count += 1;
         }
         return count;
     }
@@ -1953,9 +2789,22 @@ pub const KitchenDish = struct {
 /// of the app, and this version must not write to it. A test counts
 /// the tables in the migrations and says when the two disagree, so a
 /// new migration that adds a table cannot slip past.
-pub const known_table_count: i64 = 44;
+pub const known_table_count: i64 = 46;
 
 /// One food marking, as the product form offers it.
+/// One palette, as the Settings screen offers it.
+pub const PaletteOption = struct {
+    id: usize,
+    label: []const u8,
+};
+
+const palette_options = [_]PaletteOption{
+    .{ .id = @intFromEnum(Palette.light), .label = Palette.light.label() },
+    .{ .id = @intFromEnum(Palette.dark), .label = Palette.dark.label() },
+    .{ .id = @intFromEnum(Palette.warm), .label = Palette.warm.label() },
+    .{ .id = @intFromEnum(Palette.night), .label = Palette.night.label() },
+};
+
 pub const FoodTypeOption = struct {
     id: usize,
     label: []const u8,
@@ -1980,6 +2829,65 @@ const employee_role_options = [_]RoleOption{
     .{ .id = @intFromEnum(domain.EmployeeRole.kitchen), .label = domain.EmployeeRole.kitchen.label() },
     .{ .id = @intFromEnum(domain.EmployeeRole.display), .label = domain.EmployeeRole.display.label() },
 };
+
+/// One key on the PIN pad. The id is the digit's own value, so the
+/// message a tap sends says which key was pressed and nothing else.
+pub const DigitOption = struct {
+    id: usize,
+    label: []const u8,
+};
+
+/// The pad's keys, in reading order: `1` at the top left, `0` last, the
+/// way a keypad has always laid them out.
+const pin_digit_options = [_]DigitOption{
+    .{ .id = 1, .label = "1" },
+    .{ .id = 2, .label = "2" },
+    .{ .id = 3, .label = "3" },
+    .{ .id = 4, .label = "4" },
+    .{ .id = 5, .label = "5" },
+    .{ .id = 6, .label = "6" },
+    .{ .id = 7, .label = "7" },
+    .{ .id = 8, .label = "8" },
+    .{ .id = 9, .label = "9" },
+    .{ .id = 0, .label = "0" },
+};
+
+/// One way of proving who you are, as a form offers it.
+pub const CredentialKindOption = struct {
+    id: usize,
+    label: []const u8,
+};
+
+const credential_kind_options = [_]CredentialKindOption{
+    .{ .id = @intFromEnum(domain.CredentialKind.pin), .label = domain.CredentialKind.pin.label() },
+    .{ .id = @intFromEnum(domain.CredentialKind.password), .label = domain.CredentialKind.password.label() },
+};
+
+/// What a kind costs to satisfy, said to whoever is typing it. The rule
+/// itself is `credential_is_acceptable`; this is the same rule in the
+/// form's own words, so the two cannot disagree by accident.
+fn kindHint(kind: domain.CredentialKind) []const u8 {
+    return switch (kind) {
+        .pin => "6 digits",
+        .password => "8 characters or more",
+    };
+}
+
+/// True when a secret holds nothing but digits, which is what a PIN is.
+/// Empty is not a PIN: it has no digits.
+fn digitsOnly(secret: []const u8) bool {
+    if (secret.len == 0) return false;
+    for (secret) |byte| {
+        if (byte < '0' or byte > '9') return false;
+    }
+    return true;
+}
+
+/// The mask a covered field wears. A bullet is three bytes of UTF-8, and
+/// there are as many of them as the longest secret has characters, so a
+/// masked field is a slice rather than a copy.
+const bullet_len = 3;
+const bullets = [bullet_len]u8{ 0xe2, 0x80, 0xa2 } ** auth.max_secret_len;
 
 /// One tile on the overview: a screen the owner can reach from the
 /// front page.
@@ -2009,7 +2917,7 @@ pub const SettingsItem = struct {
 };
 
 const settings_menu = [_]SettingsItem{
-    .{ .id = @intFromEnum(Screen.settings_company), .title = "Company", .detail = "Name, address, tax number" },
+    .{ .id = @intFromEnum(Screen.settings_company), .title = "Company", .detail = "Name, address, tax number, colour" },
     .{ .id = @intFromEnum(Screen.settings_printers), .title = "Printers", .detail = "Receipt and kitchen printers" },
     .{ .id = @intFromEnum(Screen.settings_tax), .title = "Tax slabs", .detail = "The rates and the slabs" },
     .{ .id = @intFromEnum(Screen.settings_currency), .title = "Currency", .detail = "Currency and region" },
@@ -2025,10 +2933,21 @@ pub const DisplayCard = struct {
     /// The table the order is on, or the order number when the order
     /// is not for a table.
     label: []const u8,
+    /// The order's own state ordinal, for `status-badge` to colour from.
+    status_code: i64,
     status_label: []const u8,
     type_label: []const u8,
     order_no: []const u8,
 };
+
+/// Whether an order is still the restaurant's to finish. A served
+/// order is open until it is paid for: the guest is still at the table.
+fn orderIsOpen(status: domain.OrderStatus) bool {
+    return switch (status) {
+        .pending, .preparing, .ready, .served => true,
+        .completed, .voided => false,
+    };
+}
 
 /// The name of the table an order is on. A take-away order has no
 /// table, so it falls back to the order number.
@@ -2043,7 +2962,13 @@ fn displayLabel(model: *const Model, table_id: i64, order_no: []const u8) []cons
 pub const Ticket = struct {
     id: i64,
     order_no: []const u8,
+    /// The order's own state ordinal, for `status-badge` to colour from.
+    status_code: i64,
     status_label: []const u8,
+    /// The move the board's button is about: "Start cooking", "Mark
+    /// ready", "Hand off". Only open tickets reach the board, so this is
+    /// never empty.
+    advance_label: []const u8,
     summary: []const u8,
     waiting_label: []const u8,
 };

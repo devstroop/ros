@@ -1,8 +1,8 @@
 # Screen backlog
 
-**Status:** Living document. 45 screens, tracked one by one.
-**Source of truth:** `apps/admin/src/core/navigation.zig` (the `Screen`
-enum), `apps/admin/src/app.native` (the mount gates) and
+**Status:** Living document. 53 screens, tracked one by one.
+**Source of truth:** `packages/ros-core/src/core/navigation.zig` (the
+`Screen` enum), `apps/admin/src/app.native` (the mount gates) and
 `apps/admin/src/screens/` (the templates).
 
 ## How to read this page
@@ -71,14 +71,13 @@ No nav section. These are reached by drilling in, not by a tab.
 
 | Screen | Ord | Route-ish id | Role | Status | Platform elements | Data source |
 |---|---|---|---|---|---|---|
-| `setup` | 3 | `onboarding/setup` | first run | Partial (working tree; B-031/B-032) | `column`, `card`, `text-field`, `text`, `button` | `company`, `employee`, `product`, `dining_table` (one `setupCompany` transaction) |
-| `role_picker` | 0 | `session/role-picker` | all four | Done | `column`, `card`, `text`, `badge`, `button` | none — the four role cards are a file-scope constant in `core/navigation.zig` |
-| `login` | 1 | `session/login` | admin, waiter | Done | `column`, `card`, `text-field`, `text`, `button` | `employee` (the check is the SQL in `core/update.zig`), `app_config` (the PIN salt) |
-| `landing` | 2 | `session/landing` | all four | Planned | `column`, `text`, `button` | `company`, `app_config` |
-| `setup` | 3 | `session/setup` | admin | Planned | `column`, `row`, `text-field`, `button` | `app_config`, `company` |
-| `wizard` | 4 | `session/wizard` | admin | Planned | `column`, `row`, `text-field`, `select`, `button` | `company`, `employee`, `dining_table_category`, `dining_table`, `product_category`, `product` |
-| `create_company` | 5 | `session/create-company` | admin | Planned | `column`, `text-field`, `select`, `dropdown-menu`, `button` | `company`, `currency` |
-| `reset_pin` | 6 | `session/reset-pin` | admin, waiter | Planned | `column`, `text-field`, `button`, `alert` | `employee`, `app_config` |
+| `setup` | 3 | `session/setup` | admin, first run | Done | `column`, `card`, `row`, `text-field`, `text`, `toggle-button`, `button` | `company`, `employee`, `product`, `dining_table` (one `setupCompany` transaction, salt included) |
+| `role_picker` | 0 | `session/role-picker` | all four | Done | `column`, `card`, `text`, `badge`, `button`, `spacer` | the device modes are a file-scope constant in `core/navigation.zig`; the people come from `employee` |
+| `login` | 1 | `session/login` | admin, waiter | Done | `column`, `card`, `grid`, `row`, `text-field`, `text`, `button` | `employee` (the row's own bcrypt hash, checked in `core/update.zig`), `app_config` (the installation salt a pre-bcrypt digest needs) |
+| `landing` | 2 | `session/landing` | all four | Done | `column`, `text` | `company` (the name it shows) |
+| `wizard` | 4 | `session/wizard` | admin | Done | `column`, `card`, `row`, `text-field`, `text`, `toggle-button`, `button`, `spacer` | `company`, `employee`, `dining_table_category`, `dining_table`, `product_category`, `product` |
+| `create_company` | 5 | `session/create-company` | admin | Done | `column`, `card`, `row`, `text-field`, `text`, `spacer` | `company`, `currency` |
+| `reset_credential` | 6 | `session/reset-credential` | admin, waiter | Done | `column`, `card`, `row`, `text-field`, `text`, `toggle-button`, `button` | `employee` (the hash and the kind are written together) |
 | `upgrade` | 7 | `session/upgrade` | admin | Planned | `column`, `text`, `button` | `subscription` |
 
 ## Admin
@@ -88,12 +87,12 @@ No nav section. These are reached by drilling in, not by a tab.
 | `admin_dashboard` | 8 | `overview/dashboard` | admin | Done | `column`, `row`, `card`, `text`, `badge`, `button` | `orders`, `dining_table`, `product`, `company` |
 | `control_center` | 9 | `overview/control-center` | admin | Planned | `column`, `row`, `card`, `text`, `badge`, `button` | `app_config`, `device`, `sync_state`, `orders` |
 
-## Sell
+## POS
 
 | Screen | Ord | Route-ish id | Role | Status | Platform elements | Data source |
 |---|---|---|---|---|---|---|
-| `pos` | 10 | `sell/pos` | admin | Done | `split`, `column`, `row`, `search-field`, `toggle-button`, `scroll`, `grid`, `card`, `text`, `button` | `product`, `product_category` |
-| `pos_cart` | 11 | `sell/cart` | admin | Planned | `column`, `row`, `card`, `text`, `text-field`, `badge`, `button` | `product`, `modifier_group`, `modifier`, `discount` |
+| `pos` | 10 | `sell/pos` | admin, service | Done | `split`, `column`, `row`, `search-field`, `toggle-button`, `scroll`, `grid`, `card`, `text`, `button` | `product`, `product_category` |
+| `pos_cart` | 11 | `sell/cart` | admin, service | Planned | `column`, `row`, `card`, `text`, `text-field`, `badge`, `button` | `product`, `modifier_group`, `modifier`, `discount` |
 | `order_confirmation` | 12 | `sell/order-confirmation` | admin | Partial | `column`, `row`, `card`, `text`, `badge`, `button` | `orders`, `order_line`, `payment` |
 
 ## Orders and money
@@ -102,7 +101,7 @@ No nav section. These are reached by drilling in, not by a tab.
 |---|---|---|---|---|---|---|
 | `orders` | 13 | `orders/orders` | admin, waiter | Done | `column`, `row`, `card`, `text`, `badge`, `button`, `scroll` | `orders` |
 | `order_detail` | 14 | `orders/order-detail` | admin, waiter, kds, display | Foundation | `column`, `drawer`, `timeline`, `timeline-item`, `table`, `table-row`, `table-cell`, `badge`, `text`, `button` | `orders`, `order_line`, `order_line_modifier`, `order_status_history`, `payment` |
-| `payments` | 15 | `orders/payments` | admin | Planned | `grid`, `button`, `text-field`, `badge`, `dialog` | `payment`, `orders`, `order_discount` |
+| `payments` | 15 | `orders/payments` | admin, service | Planned | `grid`, `button`, `text-field`, `badge`, `dialog` | `payment`, `orders`, `order_discount` |
 
 ## Floor
 

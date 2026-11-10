@@ -1,11 +1,17 @@
 # Phase 9 — Three apps over TCP/IP
 
-> **Status:** Planned. The decision is
-> [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md) (Proposed); the
-> design is [`architecture/12`](../architecture/12-three-apps-and-ipc.md).
+> **Status:** In progress. Slices 9.0–9.8 are merged; 9.9 packaging is
+> implemented (ad-hoc CI, identity/notarisation supported) and awaits
+> the clean-machine release sign-off.
+> **Decision:** [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md)
+> (Accepted 2026-10-24); the design is
+> [`architecture/12`](../architecture/12-three-apps-and-ipc.md). Bootstrap
+> and compaction are [ADR-0020](../decisions/0020-late-join-and-compaction.md).
+> Peer authentication is
+> [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md).
 > **Estimate:** 42 engineer-days
 > **Depends on:** Phase 3 (the POS slice), Phase 5 (the admin
-> surfaces), ADR-0017 accepted, **and the PIN salt settled**
+> surfaces), ADR-0017 accepted, **and how a person signs in settled**
 > **Supersedes:** [Phase 6](phase-6-sync-sidecar.md) — the op log and the
 > transport are the same work, and the sidecar is not being built
 > **Exit criterion:** three apps on three machines converge, the kitchen
@@ -62,10 +68,13 @@ the mDNS, the WebSocket and the host election.
 | Apply | No path that applies an incoming op |
 | Discovery | No beacon, no peer list, no manual address |
 | Reference data | No push, no version |
-| Push | No event stream |
 | Bootstrap | No snapshot, no replay |
-| Security | No peer authentication |
+| Security | ~~No peer authentication~~ **Done**: one pairing token per restaurant, in the `x-ros-token` header of every request that carries its data ([ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md)). Still open: TLS, and a token that cannot revoke one device |
 | Tests | No two-device test of any kind |
+
+The push stream (9.6) is done: `/v1/events` is held open, and the
+five-second poll remains the fallback. The rows above are the remaining
+gaps.
 
 ## The slices
 
@@ -190,7 +199,8 @@ there is still one app to fall back on.
    is the recorded follow-up of an *accepted* decision (ADR-0016 says
    the per-employee salt is the fix, "when the sign-in can identify the
    employee before it hashes"), it stands on its own as a security
-   property - a cracked database gives up one PIN, not every PIN - and
+   property - two rows that hold the same code hold different hashes,
+   so nothing in the database is shared between them - and
    it makes the sign-in better for the same product: a person picks
    their own name instead of a role. Landed on its own, it is a
    security fix; held until the three apps are decided, it is a
@@ -199,12 +209,15 @@ there is still one app to fall back on.
    [ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)
    and [#95](https://github.com/devstroop/ros/issues/95) - the
    sign-in identifies the employee before it hashes, so the employee row
-   is self-verifying and no shared secret has to cross the wire. The
+   is self-verifying and no shared secret has to cross the wire. (The
+   row needs nothing; the *transport* turned out to need a secret of its
+   own, which is a different question - see
+   [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md).) The
    picker that makes this possible sits in place of the role picker: a
    person is on the picker with the mode they work in, and the two
    device modes sign in by being the device. It landed on `develop` on
    its own in [#117](https://github.com/devstroop/ros/pull/117). See
-   [`architecture/12`](../architecture/12-three-apps-and-ipc.md#the-sign-in-problem).
+   [`architecture/12`](../architecture/12-three-apps-and-ipc.md#the-sign-in-problem-and-how-it-was-settled).
 
 **Done when:** one app, one loop thread, one net thread, one request
 answered, one test per direction; and the salt landed on `develop` in
@@ -258,10 +271,12 @@ beats a fabricated one.
 
 Two limits are deliberate and written down rather than papered over:
 
-- **One connection at a time.** The listener reads a request, waits for
-  the answer, writes it and closes before accepting the next. That is
-  enough for three devices exchanging short requests; `/v1/events` (9.6)
-  holds a connection open, and that needs a thread per connection.
+- **Short requests are one at a time; event streams are not.** The
+  listener reads a short request, waits for the answer, writes it and
+  closes before accepting the next. `/v1/events` is the exception: it is
+  held open on its own thread (9.6), so the listener keeps accepting
+  while the stream is up. The event thread only writes bytes; it never
+  touches the model or the database.
 - **The device id is the installation token**, stable for the life of the
   process and not across restarts. 9.3 replaces it with the `device` row.
 
@@ -313,14 +328,39 @@ received when the admin app is away.
 **Done when:** a catalogue edit in the admin app reaches the service and
 kiosk apps, and a peer that misses it gets it on reconnect.
 
-### 9.6 — Push (3 days)
+### 9.6 — Push (3 days) — **DONE**
 
-`GET /v1/events`, held open by the server, read by the client with
+`GET /v1/events` is held open by the server, read by the client with
 `fx.fetch` in `.stream` mode. The kitchen board updates when the order
 is placed, not on the next poll.
 
+**As built.** A `Shared.event_seq` counter is the only state the stream
+carries. A thread per connection watches it every 20ms and writes
+`{"seq":N}\n` in a chunked NDJSON response, plus a 15s heartbeat. The
+line is a notification, not an op: the receiver pulls `/v1/ops` from
+the cursor it holds, so a missed line costs latency, not correctness.
+The client keeps one stream per peer (`event_key`), and a line triggers
+an immediate pull. If a pull is already in flight, `sync_pending` makes
+the answer schedule exactly one follow-up; a stream that ends or times
+out clears its key and the five-second poll reopens it. A successful
+local order, payment or status write calls `notify()`, and so does a
+successful remote `sync_applied`, which also reloads the board.
+
+**Evidence.** The real-socket test holds `/v1/events` open while a
+normal `/v1/hello` request is served, and measures the wake from
+`notify()` to the next chunk at **21ms** in the local run (the test
+asserts under 250ms). The admin suite drives the client with the fake
+executor: opening the stream, a line pulling the peer's ops, the
+pending-pull race, a failed stream counting and reopening, and a clean
+close not counting. The real SDK `.stream` fetch test reads the chunked
+NDJSON from a live `ros-core` server, so the wire and the line message
+are proven together. `scripts/verify-all.sh` is green: admin 213/213,
+kiosk 8/8, net-spike 13/13, service 10/10, ros-core 43/43.
+
 **Done when:** an order placed on the service app appears on the kiosk
-app's board without a poll tick in between.
+app's board without a poll tick in between. The event path is the
+normal path; the five-second poll remains the fallback and the
+convergence guarantee.
 
 ### 9.7 — Bootstrap, compaction and the three-device proof (6 days)
 
@@ -328,6 +368,37 @@ A device that joins replays the log; a compacted log answers with a
 snapshot. The op log grows, so it is summarised. Then the proof: three
 apps, three machines, one restaurant, with the admin app closed in the
 middle of it.
+
+**As built.** `/v1/ops` is served from durable `op_log`, paged and
+filtered by a JSON vector cursor. A SQLite trigger keeps
+`ops_since_compact`; after 128 new ops the app compacts in one
+transaction, keeps the last 64 clocks per device and records the deleted
+range as `sync_op_floor`. A requester whose cursor does not cover the
+floor gets `409 {"error":"snapshot required","snapshot":"/v1/snapshot"}`.
+`/v1/snapshot` pages over `sync_snapshot_op` with `after`/`next`/`done`;
+the header carries the per-device clocks, and the receiver adopts them
+with a per-device maximum only after the last page. Snapshot lines are
+synthetic create/status/payment ops applied through the live idempotent
+path with `persist=false`, so they write no op-log rows and move no
+cursor per line. Both reads are async on the loop thread with one
+pending answer slot; a competing request gets 503.
+
+**Evidence.** `apps/admin/src/tests_data.zig` proves the floor and the
+retained tail (67 ops compact to floor `dev-a:3` with 64 kept), a
+snapshot page carrying the header and order lines, a fresh device that
+applies all 67 lines and ends with 65 orders, 65 lines and one payment
+but zero op-log rows, a device whose cursor is a week stale (128-op
+snapshot, then the durable tail to 133 orders), and three devices where
+the admin closes after its first order while kiosk and till keep taking,
+moving and paying orders for sixty simulated minutes and converge on 61
+orders and 60 payments, with both peer logs compacted during the hour.
+`apps/admin/src/tests.zig` proves a 409 turns into a snapshot fetch from
+`after=0`, and the compaction test drives the real `/v1/ops` and
+`/v1/snapshot` request paths, including the 409 and the 200 above the
+floor. An op page that fills before its sixty-four-row limit sends the
+lines that fit and the next pull resumes above the last clock; a single
+line that cannot fit at all is 413. `packages/ros-core` tests the header
+round-trip and refusal of an unknown format.
 
 **Done when:** the kitchen keeps cooking and the till keeps selling
 with the admin app closed; a device that has been off for a week
@@ -351,18 +422,53 @@ binary or three. The split is a packaging and a safety decision on top
 of a fabric that already works, so it belongs at the end of the fabric
 and not in the middle of it. See [the order of the slices](#the-order-of-the-slices).
 
+**As built.** The three shells are `admin`, `service` and `kiosk`. The
+counter POS is the service app's (#112): the waiter role opens `pos`,
+`pos_cart` and `payments`, and the service shell mounts all three with
+"Counter sale" and "Payments" entry points on the tables screen. The
+admin app remains the wildcard superset, so a single machine can still
+run the till from it. Each app's suite walks every `(role, screen)` pair
+against the shell's gates: admin 154/154, service 10/10, kiosk 8/8, with
+the package matrix at 43/43. See
+[ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md).
+
 **Done when:** three binaries build; each refuses the screens its role
 may not open, by the same code path and the same test as today; the
-permission matrix test walks all three; and a restaurant running the
-three apps serves a customer exactly as it did when it ran one.
+permission matrix test walks all three and the partition agrees with
+it; a waiter can take money on the service app; and a restaurant
+running the three apps serves a customer exactly as it did when it ran
+one.
 
 ### 9.9 — Packaging (4 days, overlaps Phase 8)
 
-Three signed artifacts, three installs, three updates. The Local
-Network permission prompt is part of the kiosk's install, by hand.
+**As built.** [`scripts/package.sh`](../../scripts/package.sh) builds the
+three apps in ReleaseFast and produces
+`dist/ros-admin-<version>-macos.dmg`,
+`dist/ros-service-<version>-macos.dmg` and
+`dist/ros-kiosk-<version>-macos.dmg`. It packages with
+`native package --signing none`, injects each app's own
+`NSLocalNetworkUsageDescription`, signs again (ad-hoc by default;
+Developer ID, hardened runtime and a secure timestamp when
+`ROS_SIGNING_IDENTITY` is set), optionally notarises and staples, then
+builds and verifies the DMG. `--check` re-verifies the checksums and the
+app inside each mounted DMG. CI's **Package (macOS)** job runs `--ci` and
+`--check` and uploads the three DMGs plus `checksums.txt`.
+
+The kiosk's text names the kitchen and the two peers it syncs with; the
+install checklist explains the manual Local Network grant. The update
+path per app - admin often, service deliberately, kiosk rarely - is
+written down in
+[`docs/operations/release.md`](../operations/release.md), together with
+the manual replace-and-backup flow and the SDK's signed-feed path. The
+bundle ids stay `com.devstroop.ros.*`: the design's `dev.eatery.v2.*`
+names were placeholders, and the id is the app-data and Local Network
+key. Each app has its own icon.
 
 **Done when:** three signed builds install on clean machines and the
-kiosk asks for the Local Network permission in its own words.
+kiosk asks for the Local Network permission in its own words. Packaging
+and the kiosk text are proven in CI; the clean-machine install is a
+manual release sign-off, and Developer ID/notarisation need the release
+credentials.
 
 ## Exit criterion
 
@@ -396,20 +502,29 @@ kiosk asks for the Local Network permission in its own words.
 
 ## Unknowns
 
-- **The PIN salt is decided**: per-employee, by
-  [#95](https://github.com/devstroop/ros/issues/95). It is the
-  first thing slice 9.0 implements, because the sign-in does not work
-  across the apps until it lands.
-- Is the counter POS the `admin` app or the `service` app? The matrix
-  today gives `pos` and `payments` to `admin` only, which puts the till
-  on the dedicated machine.
-- Does the waiter ever take money? The matrix says no.
+- ~~Can a person sign in on a device that is not the admin's?~~ Yes,
+  and the protocol carries no secret to make it work. The salt is per
+  employee, so a replicated row verifies itself
+  ([#95](https://github.com/devstroop/ros/issues/95),
+  [ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)), and
+  the person chooses a PIN or a password with that row
+  ([ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)).
+- ~~Is the counter POS the `admin` app or the `service` app?~~ The
+  service app; the waiter opens `pos`, `pos_cart` and `payments`
+  ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
+- ~~Does the waiter ever take money?~~ Yes, on the service app. The
+  payment is device-owned and idempotent by request key
+  ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
 - How are peers authenticated?
-- How long are ops retained, and what is the compaction rule?
+- ~~How long are ops retained, and what is the compaction rule?~~ 128
+  new ops trigger compaction, 64 clocks per device are kept, and a
+  cursor below the floor gets a snapshot
+  ([ADR-0020](../decisions/0020-late-join-and-compaction.md)).
 - What happens to a device that is removed from the restaurant?
 - Must the Flutter app interoperate during a mixed rollout?
 
-The first three are tracked in
+Peer authentication and the remaining operational
+questions are tracked in
 [`open-questions.md`](open-questions.md). See also
 [`architecture/12`](../architecture/12-three-apps-and-ipc.md) and
 [`architecture/08`](../architecture/08-sync.md).

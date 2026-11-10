@@ -91,13 +91,15 @@
   <split grow="1" value="{menu_split}" on-resize="menu_resized">
     <column gap="8" padding="16" grow="1">
       <row gap="8" cross="center">
-        <search-field
-          text="{search_text}"
-          placeholder="Search the menu"
-          label="Search the menu"
-          on-input="search_edit"
-          grow="1"
-        />
+        <column gap="4" grow="1">
+          <text size="sm" foreground="text_muted">Search the menu</text>
+          <search-field
+            text="{search_text}"
+            placeholder="Search the menu"
+            label="Search the menu"
+            on-input="search_edit"
+          />
+        </column>
       </row>
 
       <row gap="4" cross="center">
@@ -110,7 +112,7 @@
       <scroll grow="1">
         <grid columns="4" gap="8">
           <for each="visible_products" key="id" as="product">
-            <card padding="8" on-press="add_to_cart:{product.id}">
+            <card padding="8" on-press="add_to_cart:{product.id}" label="{product.name}">
               <column gap="2">
                 <text wrap="true">{product.name}</text>
                 <text size="sm" foreground="text_muted">{currency_symbol}{fixed(product.price_minor / currency_divisor, currency_decimal_count)}</text>
@@ -125,13 +127,13 @@
   </split>
 </template>
 
-<!-- The catalogue: everything on the menu. A row opens the product
+<!-- The menu: every dish the restaurant sells. A row opens the product
      form, so a price can be corrected without leaving the list. -->
 
 <template name="screen-catalogue-list">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
-      <text size="heading" grow="1">Catalogue</text>
+      <text size="heading" grow="1">Menu</text>
       <text foreground="text_muted">{product_count} on the menu</text>
       <button size="sm" on-press="open_categories">Categories</button>
       <button size="sm" variant="primary" on-press="new_product">New</button>
@@ -171,18 +173,24 @@
 
     <card padding="16" width="460">
       <column gap="8">
-        <text-field
-          text="{form_product_name}"
-          placeholder="Paneer Tikka"
-          label="Name"
-          on-input="form_product_name_edit"
-        />
-        <text-field
-          text="{form_product_price}"
-          placeholder="245.00"
-          label="Price"
-          on-input="form_product_price_edit"
-        />
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Name</text>
+          <text-field
+            text="{form_product_name}"
+            placeholder="Paneer Tikka"
+            label="Name"
+            on-input="form_product_name_edit"
+          />
+        </column>
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Price</text>
+          <text-field
+            text="{form_product_price}"
+            placeholder="245.00"
+            label="Price"
+            on-input="form_product_price_edit"
+          />
+        </column>
         <row gap="4" cross="center">
           <text size="sm" foreground="text_muted" grow="1">Category</text>
           <for each="categories" key="id" as="category">
@@ -238,6 +246,29 @@
           <toggle-button selected="{mode.id == payment_mode}" on-toggle="set_payment_mode:{mode.id}">{mode.label}</toggle-button>
         </for>
       </row>
+      <if test="{payment_is_cash}">
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Cash received</text>
+          <text-field
+            text="{cash_tendered}"
+            placeholder="Exact amount"
+            label="Cash received"
+            on-input="cash_tendered_edit"
+          />
+        </column>
+        <if test="{cash_change > 0}">
+          <row cross="center">
+            <text grow="1" foreground="text_muted">Change</text>
+            <text size="lg">{currency_symbol}{fixed(cash_change / currency_divisor, currency_decimal_count)}</text>
+          </row>
+        </if>
+        <if test="{cash_short}">
+          <text foreground="destructive">Not enough cash for this bill</text>
+        </if>
+        <if test="{cash_tender_invalid}">
+          <text foreground="destructive">The cash received is not an amount this currency can say</text>
+        </if>
+      </if>
       <row gap="8">
         <button variant="ghost" on-press="back_to_pos">Another order</button>
         <button variant="primary" grow="1" disabled="{payment_pending}" on-press="take_payment">Take {currency_symbol}{fixed(last_order_total / currency_divisor, currency_decimal_count)}</button>
@@ -259,12 +290,15 @@
 
     <card padding="16" width="460">
       <column gap="8">
-        <text-field
-          text="{form_category_name}"
-          placeholder="Starters"
-          label="Name"
-          on-input="form_category_name_edit"
-        />
+        <column gap="4">
+          <text size="sm" foreground="text_muted">Name</text>
+          <text-field
+            text="{form_category_name}"
+            placeholder="Starters"
+            label="Name"
+            on-input="form_category_name_edit"
+          />
+        </column>
         <row gap="8">
           <spacer grow="1"/>
           <button variant="primary" on-press="save_category">Save</button>

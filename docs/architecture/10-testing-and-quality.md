@@ -1,10 +1,17 @@
 # Testing and quality
 
-> **Status:** Partial — 15 authored headless tests plus a 12-test database
-> suite; 28/28 pass in the working tree. CI exists but its smoke is
-> non-blank only; the payment path has no tests for double payment.
-> **Last verified:** 2026-10-20, by source review.
-> **Source:** `src/tests.zig`, `main.zig` (`test` block), `PORT-PLAN.md` §3.8.
+> **Status:** Healthy — `scripts/verify-all.sh` is green: admin
+> **232/232** (75 handwritten rules, 156 against a migrated database, and
+> one test block that imports both), service **10/10**, kiosk **8/8**,
+> `ros-core` **46/46**, net-spike **13/13**. CI adds a headless paint
+> check per app and the sale walkthrough. Still uncovered: the clock
+> tick's own arithmetic, a salt race between two first boots, resizes
+> below the minimum, and the Flutter interop.
+> **Last verified:** 2026-11-04, by running `scripts/verify-all.sh` on
+> Linux.
+> **Source:** `apps/*/src/tests*.zig`, `packages/ros-core/src`,
+> `scripts/verify-all.sh`, `scripts/smoke-sale.sh`,
+> `.github/workflows/ci.yml`.
 
 ## Philosophy
 
@@ -22,15 +29,20 @@ The architecture exists partly to make testing cheap:
 A rule that lives only in a comment is a rule that breaks. The tests in
 `src/tests.zig` are written as rules, not as coverage for its own sake.
 
-## Current tests (15 authored)
+## Current tests
+
+`native test apps/admin` reports **232** for the admin target - 75 in
+`tests.zig`, 156 in `tests_data.zig`, one generated - and the service and
+kiosk targets add 10 and 8 of their own. The table below is the subset
+this page names, not the whole list.
 
 | # | Test | What it pins |
 |---|---|---|
-| 1 | The role picker is the first screen and lists the four roles | Initial model and first render |
-| 2 | Picking a role that needs a sign-in lands on the PIN screen | Session gate |
-| 3 | Picking a kiosk role signs the device in and opens its board | Kiosk path |
+| 1 | The picker is the first screen and lists the device modes | Initial model and first render |
+| 2 | Picking a person opens the sign-in surface that is theirs | Session gate and credential kind |
+| 3 | Picking a board signs the device in and opens it | Kiosk path |
 | 4 | A role cannot open a screen it may not use | RBAC guard |
-| 5 | The permission matrix is total | Lock-out guarantees |
+| 5 | The permission matrix is total: every role against every screen | Lock-out guarantees |
 | 6 | Going back returns to the previous screen | Stack |
 | 7 | The cart adds, counts and totals in minor units | Cart arithmetic |
 | 8 | Money stays integer | No float money |
@@ -39,14 +51,15 @@ A rule that lives only in a comment is a rule that breaks. The tests in
 | 11 | The model reports its own numbers instead of storing them | Derived values |
 | 12 | The setup screen renders on a fresh installation | Setup gate and template |
 | 13 | The POS screen renders with a menu and a cart | POS template |
-| 14 | The order confirmation renders after a sale | Confirmation template |
+| 14 | The order confirmation screen renders after a sale | Confirmation template |
 | 15 | The layout survives a resize | Markup build + layout at 1280×800 |
-
-The working tree also has 12 in-memory database tests (`tests_data.zig`);
-with one generated test the runner reports 28. The RBAC
-“matrix is total” test is tautological (the assertion is guarded by
-the value it asserts); see the [documentation
-audit](../review/docs-audit.md#d-007--the-rbac-matrix-test-is-tautological).
+| 16 | The secret shows as bullets, and the eye opens it | Masking, and that the view never sees the value |
+| 17 | The pad taps a PIN one digit at a time | The numeric surface, its length guard |
+| 18 | The database, not an old list, decides which surface the till offers | The kind is the row's, and a mismatch costs nothing |
+| 19 | A wrong try is counted once | The lockout arithmetic, against a query's terminal result |
+| 20 | A price is read in the currency the till actually trades in | Money decimals come from the company; a finer fraction is refused, not rounded |
+| 21 | A tax slab is saved, and the rate the owner typed is the rate stored | A rate keeps the hundred of the percent, one fraction digit included |
+| 22 | The rail, the title bar and the markup say the same thing | One vocabulary list, pinned against three places a name is drawn. `retired_words` is the enforcement half: a caption the product stopped using fails the build wherever it reappears, and the day's figure joined the list when it turned out to be counting bills under a money word ([ADR-0025](../decisions/0025-a-days-report-counts-bills-and-money.md)) |
 
 How they run:
 
@@ -54,9 +67,10 @@ How they run:
 native test apps/admin --yes
 ```
 
-The test block in `main.zig` imports `tests.zig`. Markup tests resolve the
-same import closure as the runtime, then build and finalize a tree, so a
-broken template fails a unit test with a line/column diagnostic.
+The test block in `main.zig` imports `tests.zig` and `tests_data.zig`.
+Markup tests resolve the same import closure as the runtime, then build
+and finalize a tree, so a broken template fails a unit test with a
+line/column diagnostic.
 
 The fake effects channel is `Effects.init(allocator)` with
 `fx.executor = .fake`. It records requests; it does not answer them. A test
@@ -67,32 +81,24 @@ does) or bind an in-memory store.
 
 | Area | Risk |
 |---|---|
-| Repository SQL against a real migrated database | A typo is caught only at runtime |
-| Write atomicity (order + lines) | No test inserts then reads back |
-| Login success path | Only hashing is tested; the SQL match is not |
-| `config_loaded` salt creation | Covered by the working-tree DB test; the provisional gate is still untested |
-| Salt provisional race | Untested; see `plan/status.md` |
-| Order ID collisions | Untested; the scheme is provisional |
-| Decoders for categories/tables/employees/customers/orders/lines | Only the generic page reader is tested |
-| Every screen template | Five of nine templates have no render test |
-| Node budget | No assertion on `widget_nodes` |
-| Error arms (`db_failed`, failed loads) | Copy and state are untested |
-| Timer tick | Untested |
-| Theme switch | Untested at the token level |
-| Accessibility names | Left to SDK validation |
-| Window resize below minimum | Untested |
-| Sidecars | No code, no tests |
+| The clock tick's arithmetic | `tick` only feeds the board's "waiting" text and has no unit test; the kiosk's two-second board re-read is exercised by the sale walkthrough, not by a headless test |
+| A salt race between two first boots | Two fresh terminals writing at once is unproven; one boot, a second instance adopting the stored salt, a legacy digest waiting for confirmation, and a failed write are all tested |
+| Theme switch | The walkthrough presses the control, asserts the chosen state each register button reports and the canvas's own centre pixel, and keeps a screenshot of every register; every text pair in all eight palettes - four registers, each standard and high contrast - clears its threshold in `src/tests.zig`, and Settings is pinned to offer every register the enum has. The choice is kept: the DB test writes it, boots a second model and reads it back, and shows that a read landing after a tap does not undo it. The restaurant's own colour is asserted the same way from both ends - the form refuses a hash it cannot read and the pair survives, the value comes back out of the database and into the reference document a peer applies, and the eight palettes each wear six brands through the accent's four pairs. A brand the register cannot carry is proved to be pushed rather than replaced: the order of its channels is the hue, and that order is what the test holds. No test compares the registers field by field, and no test screenshots a branded canvas, because the pixel the walkthrough can read is the canvas's centre, which is a card and not a button |
+| Accessibility names | Visible labels are enforced by `expectVisibleLabels`; accessible names are left to SDK validation |
+| Window resize below minimum | "The layout survives a resize" covers 1280×800; the clamp below the minimum is untested |
+| Two binaries on two machines | The socket is in the app now, so `apps/net-spike` and the admin's net tests cover the seam, and the walkthrough hands the admin's database to the kiosk on one host. A till and a kitchen display on separate machines, converging over a real LAN, is not run anywhere |
 
-## Test layers (target)
+## Test layers
 
 | Layer | Tool | Scope | Status |
 |---|---|---|---|
-| Pure update | `native test` | Model transitions, RBAC, cart, status machine | Partial |
-| Markup build | `native test` | Every template builds for its model fixture and contains its landmark | Partial |
-| Page decoder | `native test` | Every decoder against a hand-built page | Partial |
-| Relational integration | `native test` + `openMemoryMigrated` | Migrate, insert fixtures, run repo SQL, assert rows | In progress (uncommitted; 25/25 pass) |
-| Business calculations | `native test` | Tax, discount, rounding, split payment, against v1 tests as oracle | Planned |
-| Live automation | `native automate` | Role picker → login → sale → KDS advance, node budget, non-blank GPU | Planned |
+| Pure update | `native test` | Model transitions, RBAC, cart, status machine, the sign-in | Covered |
+| Markup build | `native test` | Every screen builds for its fixture and stays inside the widget budget | Covered |
+| Page decoder | `native test` | The page dialect and every repository load | Covered |
+| Relational integration | `native test` + `openMemoryMigrated` | Migrate, insert fixtures, run repo SQL, assert rows | Covered — 156 tests |
+| Business calculations | `native test` | Tax, discounts, cash tenders and change | Covered |
+| Split payment | — | One bill paid by more than one tender | Not a feature yet |
+| Live automation | `native automate` | Role picker → sign-in → sale → KDS advance, node budget, non-blank GPU | In CI (`smoke`, `sale-smoke`) |
 | Interop | External harness | Flutter app and native app converge on sync | Planned |
 
 ### Relational test recipe
@@ -111,13 +117,25 @@ fx.bindRelationalStore(db.binding());
 // seed, then drive fx.dbExec / fx.dbQuery exactly as the app does
 ```
 
-This is how `saveOrder` should be proven: execute, then query `orders` and
-`order_line` and assert both are present, then force a failure and assert
-neither is.
+This is how `saveOrder` is proven: "an order is written, read back, and
+its status advances" executes the write and queries both tables back;
+"a failed sale does not consume an order number" points the cart at a
+product the database does not carry, forces the line's foreign key to
+fail, and shows the order and the sequence stayed put. The retry tests
+add the harder case: a sale written twice is still one sale, and its
+stock is taken once.
+
+A migration that repairs rows is tested by opening a database that
+predates it: `Harness.startTo(count)` stops the migration list short, the
+test writes the bad row the old build could write, and the full list is
+applied again - the same call the runtime makes when an app opens a
+database at an older version. The file, not a copy of its SQL, is what
+runs. That is "a ticket that closed unpaid is reopened when the database
+opens".
 
 ### Automation smoke
 
-The showcase CI runs a live app headlessly:
+Two jobs drive a live app headlessly. `smoke` proves each binary paints:
 
 ```
 native build -Dautomation=true
@@ -127,22 +145,55 @@ native automate screenshot <view>
 native automate assert 'widget_nodes=<n>/1024'
 ```
 
-Target flow: role picker → admin login (seeded PIN) → POS → add item →
-place order → orders list → KDS advance. This is the fastest way to catch a
-shell gate that points at the wrong ordinal.
+One pixel on a canvas is not a sale, so `sale-smoke` runs
+`scripts/smoke-sale.sh`, which walks setup → sign out → the pad → the
+picker → POS → add a dish → Place order → Orders → the four registers and the
+restaurant's own colour, then resets the owner to a password and signs in
+through the masked field, then hands the database the admin wrote to the
+kiosk and asserts the same ticket on the kitchen board and advances it.
+Every step is an `automate assert` against the snapshot, so a shell gate
+pointing at the wrong ordinal fails the run rather than rendering
+something plausible.
+
+Three things the script has to survive:
+
+- **Stale widget ids.** A view that refreshes on a timer rebuilds its tree,
+  and an id read from one snapshot can be retired before the click carrying
+  it arrives. Every press is repeated until the screen it expects actually
+  appears; the app's own guards — a sale still being saved, an order
+  already moving — make a repeated press safe instead of a second sale.
+- **Keystrokes, which move no screen.** A dropped press shows up as the
+  next assertion failing; a dropped `set_text` shows up twenty steps later
+  as an order with no name on it. The host answers a stale id with
+  `delivered` and discards the command, so the only proof a field took its
+  value is the `text="…"` the snapshot publishes back — and typing is
+  repeated until that reading matches what was asked for.
+- **Names, not positions.** A widget is found by role and accessible name,
+  matched literally, so a price carrying `$` is never read as a regex. The
+  settings rows press as cards, which the tree publishes unnamed: the word
+  that says which row it is sits on the title inside, so the script presses
+  the title and the card takes it.
+
+The same path exists as a headless test, "a sale at the till shows on the
+orders board and the kitchen board", driven against a real migrated
+database. The test proves the state machine; the job proves the binaries
+and the screens an operator actually sees.
 
 ## CI
 
-`.github/workflows/ci.yml` has two jobs:
+`.github/workflows/ci.yml` has four jobs:
 
 1. **verify** — installs the pinned Zig 0.16.0 and Node 24, builds or
    restores the SDK CLI, then runs `scripts/verify-all.sh`
    (`native check` + `native test`).
-2. **smoke** — builds with `-Dautomation=true`, runs under `xvfb`, and
-   asserts `gpu_nonblank=true` plus a screenshot.
-
-The smoke does not sign in, place an order or assert a widget, so a broken
-sale path still passes. Extending it is gap G-018.
+2. **smoke** — one matrix leg per app: builds with `-Dautomation=true`,
+   runs under `xvfb`, and asserts `gpu_nonblank=true` plus a screenshot.
+3. **sale-smoke** — runs `scripts/smoke-sale.sh` end to end and uploads the
+   screens and app logs as an artifact, so a run that dies three screens
+   into the walk is still diagnosable from the runner.
+4. **package** — packages the three macOS apps with ad-hoc signing and
+   checks the artifacts without rebuilding; a release supplies the
+   Developer ID and notarisation profile.
 
 Pinning matters: Zig 0.17 cannot parse the SDK, and Node 22 fails the
 relational toolchain. A CI runner that "looks fine" will fail at step 1.
@@ -160,7 +211,7 @@ relational toolchain. A CI runner that "looks fine" will fail at step 1.
 | Receipt print on target hardware | Yes, if printing ships |
 | Two-device sync convergence | Yes, if sync ships |
 | Keyboard-only pass on POS and login | Yes |
-| Contrast audit, light and dark | Yes |
+| Contrast audit, every register in both contrasts | Yes |
 | Crash-free 30-minute service run | Yes |
 
 ## Known testing hazards

@@ -23,6 +23,7 @@ const Model = model_mod.Model;
 const Msg = msg_mod.Msg;
 const Role = nav.Role;
 const Screen = nav.Screen;
+const canvas = native_sdk.canvas;
 const Effects = native_sdk.Effects(Msg);
 
 /// The clock tick. A repeating timer keeps `now_ms` fresh so the
@@ -48,6 +49,15 @@ pub fn boot(model: *Model, fx: *Effects) void {
     // anybody in, and the company - an empty database means a fresh
     // installation, and the app opens on the setup screen.
     repos.loadConfig(model, fx);
+    // What this device looks like, read with the rest of the settings.
+    // It is a preference rather than a record, so a database that does
+    // not have it is not an error: the device draws its default.
+    repos.loadTheme(model, fx);
+    // The pairing token, read with the other settings and for the same
+    // reason the salt is read at boot: the wire is already listening, and
+    // the value it checks a peer against has to be in hand before the
+    // first request, not after it.
+    repos.loadPairing(model, fx);
     repos.loadCompany(model, fx);
     // The people who work here, because the picker asks who is using
     // the device. A person signs in; a device signs in by being the
@@ -72,25 +82,76 @@ fn findEmployee(model: *const Model, id: i64) ?domain.Employee {
     return null;
 }
 
+/// Put a person in front of the sign-in gate: who they are, and how
+/// they prove it.
+///
+/// Two things reach a gate - the picker choosing a person, and a
+/// session ending on the gate of the person who was using it - and both
+/// ask the row, so the surface is built from the person rather than
+/// from whatever the screen was showing before.
+fn choose_sign_in(model: *Model, employee: domain.Employee) void {
+    model.sign_in_employee_id = employee.id;
+    const name_len = @min(employee.name.len, model.sign_in_employee_name_buf.len);
+    @memcpy(model.sign_in_employee_name_buf[0..name_len], employee.name[0..name_len]);
+    model.sign_in_employee_name_len = name_len;
+    model.credential_kind = employee.auth_kind;
+}
+
 /// A new order on the board gets a sound. The kitchen hears the sale
 /// without looking at the screen - and the cashier hears it too, which
 /// is how a second cashier knows a table needs serving.
+///
+/// "New" is the local order number, not the row id. A remote order is
+/// stored under a negative id, so the highest id never moves when a
+/// waiter's ticket arrives from another device; the order number is a
+/// sequence the database assigns to every order, local or synced.
 fn announceNewOrder(model: *Model, fx: *Effects) void {
-    var newest: i64 = model.last_seen_order_id;
+    var newest: i64 = model.last_seen_order_no;
     for (model.orders) |order| {
-        if (order.id > newest) newest = order.id;
+        const number = std.fmt.parseInt(i64, order.order_no, 10) catch 0;
+        if (number > newest) newest = number;
     }
-    if (newest == model.last_seen_order_id) return;
-    const first_time = model.last_seen_order_id == 0;
-    model.last_seen_order_id = newest;
-    // The first board of the shift is not a new sale: the kitchen has
-    // not been watching yet.
-    if (first_time) return;
+    // The first board of the shift is where the kitchen starts
+    // watching, so its orders are not new sales. An empty first board
+    // still counts as primed: the first order after it is a sale.
+    if (!model.board_primed) {
+        model.board_primed = true;
+        model.last_seen_order_no = newest;
+        return;
+    }
+    if (newest <= model.last_seen_order_no) return;
+    model.last_seen_order_no = newest;
     fx.playAudio(.{
         .key = repos.key_chime,
         .path = "assets/chime.wav",
         .on_event = Effects.audioMsg(.audio_event),
     });
+}
+
+/// A payment reports success even when its guards found a late plate or
+/// a ticket that moved, because the transaction itself is healthy. The
+/// board is the truth: only a payment row on the order means the money
+/// landed. Check it before leaving the confirmation screen.
+fn settlePayment(model: *Model, fx: *Effects) void {
+    const id = model.payment_check_id;
+    if (id == 0) return;
+    model.payment_check_id = 0;
+    const order = findOrder(model, id) orelse {
+        // Voided while the cashier was paying. There is no bill left to
+        // charge, and the order list is the right place to be.
+        model.payment_error = "";
+        model.error_text = "That order is no longer on the board";
+        go(model, .orders);
+        return;
+    };
+    if (!order.paid) {
+        model.payment_error = "The bill changed - check the total and take the payment again";
+        return;
+    }
+    model.payment_error = "";
+    go(model, .orders);
+    net_bridge.notify();
+    repos.maybeCompact(model, fx);
 }
 
 /// Keep the waiter's cart in step with the database: the lines of the
@@ -132,6 +193,9 @@ fn keepActiveOrder(model: *Model) void {
 /// The waiter picked a table. If the table already has an open order,
 /// the waiter joins it; if it is free, a new order is opened for it.
 fn selectTable(model: *Model, fx: *Effects, table_id: i64) void {
+    // The order is being opened; a second tap would open a second one
+    // for the same table.
+    if (model.pending_order_id != 0) return;
     const table = findTable(model, table_id) orelse return;
     model.waiter_buf.reset();
     model.active_table_id = table.id;
@@ -155,7 +219,7 @@ fn selectTable(model: *Model, fx: *Effects, table_id: i64) void {
     // sequence, and the database assigns it.
     const order_id = nextOrderId(model, fx.wallMs());
     model.pending_order_id = order_id;
-    repos.openOrderForTable(fx, repos.key_open_order, table.id, model.employee_id, order_id);
+    repos.openOrderForTable(model, fx, repos.key_open_order, table.id, model.employee_id, order_id);
 }
 
 /// Add a product to the open order the waiter is serving.
@@ -164,8 +228,27 @@ fn addToOrder(model: *Model, fx: *Effects, product_id: i64) void {
         model.error_text = "Pick a table first";
         return;
     }
+    // The table can be paid for while the waiter is still holding the
+    // menu. The board carries the closed status; a plate must not land
+    // on a bill the customer has already settled.
+    const order = findOrder(model, model.active_order_id) orelse {
+        model.error_text = "That table's order is no longer open";
+        return;
+    };
+    if (order.status == .completed or order.status == .voided) {
+        model.error_text = "That table has been paid - start a new order";
+        return;
+    }
+    // One plate at a time. The op carries the whole ticket, so the
+    // second plate has to see the first one in the list.
+    if (model.add_line_pending) {
+        model.error_text = "The last item is still being added";
+        return;
+    }
     const product = findProduct(model, product_id) orelse return;
+    model.add_line_pending = true;
     repos.addOrderLine(
+        model,
         fx,
         repos.key_add_line,
         model.active_order_id,
@@ -187,7 +270,8 @@ fn openProductForm(model: *Model, id: i64) void {
         for (model.products) |product| {
             if (product.id != id) continue;
             model.form_product_name_buf.set(product.name);
-            model.form_product_price_buf.set(priceAsTyped(product.price_minor));
+            var price_buffer: [24]u8 = undefined;
+            model.form_product_price_buf.set(priceAsTyped(&price_buffer, product.price_minor, model.currency_decimals));
             model.form_product_category_id = product.category_id;
             model.form_product_food_id = @intFromEnum(product.food_type);
             break;
@@ -249,8 +333,9 @@ fn openDiscountForm(model: *Model, id: i64) void {
         for (model.discounts_list) |discount| {
             if (discount.id != id) continue;
             model.form_discount_name_buf.set(discount.name);
-            model.form_discount_percent_buf.set(rateAsTyped(discount.percent_bps));
-            model.form_discount_amount_buf.set(priceAsTyped(discount.amount_minor));
+            var text_buffer: [24]u8 = undefined;
+            model.form_discount_percent_buf.set(rateAsTyped(&text_buffer, discount.percent_bps));
+            model.form_discount_amount_buf.set(priceAsTyped(&text_buffer, discount.amount_minor, model.currency_decimals));
             break;
         }
     }
@@ -267,7 +352,8 @@ fn openTaxSlabForm(model: *Model, id: i64) void {
         for (model.tax_slabs_list) |slab| {
             if (slab.id != id) continue;
             model.form_tax_slab_name_buf.set(slab.name);
-            model.form_tax_slab_rate_buf.set(rateAsTyped(slab.rate_bps));
+            var rate_buffer: [24]u8 = undefined;
+            model.form_tax_slab_rate_buf.set(rateAsTyped(&rate_buffer, slab.rate_bps));
             model.form_tax_slab_inclusive = slab.inclusive;
             break;
         }
@@ -276,25 +362,56 @@ fn openTaxSlabForm(model: *Model, id: i64) void {
 }
 
 /// A rate in basis points, as the form shows it: the percentage, with
-/// no decimals the owner did not type.
-fn rateAsTyped(rate_bps: i64) []const u8 {
-    var buffer: [24]u8 = undefined;
+/// no decimals the owner did not type. The caller owns the buffer: a
+/// slice of a local would point at this function's dead frame.
+fn rateAsTyped(buffer: []u8, rate_bps: i64) []const u8 {
     if (@mod(rate_bps, 100) == 0) {
-        const written = std.fmt.bufPrint(&buffer, "{d}", .{@divTrunc(rate_bps, 100)}) catch return "";
+        const written = std.fmt.bufPrint(buffer, "{d}", .{@divTrunc(rate_bps, 100)}) catch return "";
         return written;
     }
-    const written = std.fmt.bufPrint(&buffer, "{d}.{d:0>2}", .{ @divTrunc(rate_bps, 100), @mod(rate_bps, 100) }) catch return "";
+    const written = std.fmt.bufPrint(buffer, "{d}.{d:0>2}", .{ @divTrunc(rate_bps, 100), @mod(rate_bps, 100) }) catch return "";
     return written;
 }
 
-/// A price in minor units, as the form shows it: the amount with two
-/// decimals and no currency symbol.
-fn priceAsTyped(minor: i64) []const u8 {
-    var buffer: [24]u8 = undefined;
-    const whole = @divTrunc(minor, 100);
-    const cents = @mod(minor, 100);
-    const written = std.fmt.bufPrint(&buffer, "{d}.{d:0>2}", .{ whole, cents }) catch return "";
-    return written;
+/// A price in minor units, as the form shows it: the amount in the
+/// company's currency, with its own number of decimals and no symbol.
+/// The caller owns the buffer for the same reason as `rateAsTyped`.
+fn priceAsTyped(buffer: []u8, minor: i64, decimals: i64) []const u8 {
+    if (decimals <= 0) {
+        return std.fmt.bufPrint(buffer, "{d}", .{minor}) catch return "";
+    }
+    if (decimals > 9) return "";
+    const divisor = tenTo(decimals);
+    const whole = @divTrunc(minor, divisor);
+    const frac = @mod(minor, divisor);
+    const whole_text = std.fmt.bufPrint(buffer, "{d}", .{whole}) catch return "";
+    var written = whole_text.len;
+    if (written + 1 + @as(usize, @intCast(decimals)) > buffer.len) return "";
+    buffer[written] = '.';
+    written += 1;
+    const padded = writePadded(buffer[written..], frac, @intCast(decimals)) orelse return "";
+    return buffer[0 .. written + padded];
+}
+
+/// Write `value` right-aligned in a field of `width` zeroes. The form
+/// needs it because a currency's decimals are not a compile-time two.
+fn writePadded(buffer: []u8, value: i64, width: usize) ?usize {
+    var digits_buffer: [24]u8 = undefined;
+    const digits = std.fmt.bufPrint(&digits_buffer, "{d}", .{value}) catch return null;
+    if (digits.len > width or width > buffer.len) return null;
+    const padding = width - digits.len;
+    @memset(buffer[0..padding], '0');
+    @memcpy(buffer[padding..][0..digits.len], digits);
+    return width;
+}
+
+/// Ten to the power of a small exponent: the divisor a currency's
+/// decimals mean.
+fn tenTo(exponent: i64) i64 {
+    var value: i64 = 1;
+    var index: i64 = 0;
+    while (index < exponent) : (index += 1) value *= 10;
+    return value;
 }
 
 /// Save the discount the form is editing.
@@ -318,8 +435,8 @@ fn saveDiscount(model: *Model, fx: *Effects) void {
     const amount = if (model.form_discount_amount_buf.text().len == 0)
         0
     else
-        parsePrice(model.form_discount_amount_buf.text()) orelse {
-            model.error_text = "The amount must be a number";
+        parseAmount(model.form_discount_amount_buf.text(), model.currency_decimal_count()) orelse {
+            model.error_text = "The amount must be a number this currency can say";
             return;
         };
     if (percent > 10000) {
@@ -368,8 +485,8 @@ fn saveProduct(model: *Model, fx: *Effects) void {
         model.error_text = "The product needs a name";
         return;
     }
-    const price = parsePrice(model.form_product_price_buf.text()) orelse {
-        model.error_text = "The price is not a number";
+    const price = parseAmount(model.form_product_price_buf.text(), model.currency_decimal_count()) orelse {
+        model.error_text = "The price is not a number this currency can say";
         return;
     };
     if (model.form_product_category_id == 0) {
@@ -404,33 +521,12 @@ fn saveEmployee(model: *Model, fx: *Effects) void {
     repos.saveEmployee(fx, repos.key_save_employee, id, name, model.form_employee_role_id, fx.wallMs());
 }
 
-/// The price as typed, in minor units. A price is a decimal amount, and
-/// a decimal amount is never a float in this app.
-fn parsePrice(text: []const u8) ?i64 {
-    const trimmed = std.mem.trim(u8, text, " ");
-    if (trimmed.len == 0) return null;
-    var whole: i64 = 0;
-    var cents: i64 = 0;
-    var after_dot = false;
-    var digits: usize = 0;
-    for (trimmed) |char| {
-        if (char == '.') {
-            if (after_dot) return null;
-            after_dot = true;
-            continue;
-        }
-        if (!std.ascii.isDigit(char)) return null;
-        if (after_dot) {
-            if (digits == 0) cents += (char - '0') * 10;
-            if (digits == 1) cents += (char - '0');
-            digits += 1;
-        } else {
-            whole = whole * 10 + (char - '0');
-        }
-    }
-    if (digits == 1) cents *= 10;
-    return whole * 100 + cents;
-}
+/// The two readers a typed figure goes through. Money takes the
+/// currency's decimals, so the price, the discount and the cash tender
+/// cannot disagree about what an amount means; a rate keeps the hundred
+/// that belongs to a percent and takes the fixed two decimals instead.
+const parsePrice = model_mod.parsePrice;
+const parseAmount = model_mod.parseAmount;
 
 /// Save the company. The name is the one field that must not be empty:
 /// it is on every receipt.
@@ -438,6 +534,14 @@ fn saveCompany(model: *Model, fx: *Effects) void {
     const name = std.mem.trim(u8, model.form_name_buf.text(), " ");
     if (name.len == 0) {
         model.error_text = "The restaurant needs a name";
+        return;
+    }
+    // The colour is the one field that may be left empty, because empty
+    // is the answer "the restaurant has no colour of its own". Anything
+    // else has to be a colour, and a half-typed hash is not one.
+    const brand = std.mem.trim(u8, model.form_brand_buf.text(), " ");
+    if (brand.len != 0 and model_mod.parseBrand(brand) == null) {
+        model.error_text = "The brand colour is a hash and six digits, like #1F7A8C";
         return;
     }
     model.busy = true;
@@ -449,7 +553,30 @@ fn saveCompany(model: *Model, fx: *Effects) void {
         std.mem.trim(u8, model.form_address_buf.text(), " "),
         std.mem.trim(u8, model.form_phone_buf.text(), " "),
         std.mem.trim(u8, model.form_tax_buf.text(), " "),
+        brand,
     );
+}
+
+/// Rotate the device's pairing token.
+///
+/// The typed value becomes the truth the moment it is saved: the thread
+/// is handed it before the write is asked for, because a peer that has
+/// already been told the new token should not be refused while the
+/// database catches up. The write is an UPDATE, so the first rotation
+/// replaces whatever boot seeded.
+fn savePairing(model: *Model, fx: *Effects) void {
+    const token = std.mem.trim(u8, model.pairing_entry.text(), " ");
+    if (token.len == 0) {
+        model.error_text = "A token of spaces pairs nobody";
+        return;
+    }
+    const copied = model.pairing_buf[0..];
+    @memcpy(copied[0..token.len], token);
+    model.pairing_len = token.len;
+    net_bridge.sharePairing(model);
+    model.pairing_entry.clear();
+    model.error_text = "";
+    repos.setPairing(fx, model.pairing(), fx.wallMs());
 }
 
 /// Take the payment for the order that was just placed and close it.
@@ -467,19 +594,48 @@ fn takePayment(model: *Model, fx: *Effects) void {
         model.payment_error = "That order is no longer on the board";
         return;
     };
-    if (order.status == .completed) {
+    if (order.paid or order.status == .completed) {
         model.payment_error = "This order is already paid";
         return;
     }
+    if (order.status == .voided) {
+        model.payment_error = "A voided order cannot be paid";
+        return;
+    }
     const mode = std.enums.fromInt(domain.PaymentMode, model.payment_mode_field) orelse domain.PaymentMode.cash;
+    // A sale on account is a receivable: it needs a customer and a due
+    // date, and it is not money the drawer received. Until there is a
+    // book to put it in, the till says so instead of writing a cash
+    // payment that never happened.
+    if (mode == .credit) {
+        model.payment_error = "On account is not available - take the payment now";
+        return;
+    }
+    // Cash: what the customer handed over has to cover the bill. An
+    // empty field means the exact amount - the common case - and the
+    // change is what the confirmation screen shows. The payment row is
+    // still the bill, not the tender: the change never was revenue.
+    if (mode == .cash) {
+        const tendered_text = std.mem.trim(u8, model.cash_tendered_buf.text(), " ");
+        if (tendered_text.len > 0) {
+            const tendered = parseAmount(tendered_text, model.currency_decimal_count()) orelse {
+                model.payment_error = "The cash received is not an amount this currency can say";
+                return;
+            };
+            if (tendered < order.total_minor) {
+                model.payment_error = "The cash received is less than the total";
+                return;
+            }
+        }
+    }
     model.busy = true;
     model.payment_pending = true;
     model.payment_error = "";
     repos.takePayment(
+        model,
         fx,
         repos.key_payment,
         order.id,
-        order.status,
         mode,
         order.total_minor,
         fx.wallMs(),
@@ -489,9 +645,17 @@ fn takePayment(model: *Model, fx: *Effects) void {
 /// Set up the restaurant: the company, the first operator, and the
 /// starter menu and floor. One transaction, in `repos.setupCompany`.
 fn submitSetup(model: *Model, fx: *Effects) void {
+    // One writer for the restaurant: the admin app. A service or kiosk
+    // gets its rows over the wire, and a second company row would make
+    // "which menu is the menu?" unanswerable.
+    if (model_mod.app_kind != .admin) {
+        model.setup_error = "The restaurant is set up on the admin device";
+        return;
+    }
     const name = std.mem.trim(u8, model.setup_company_name.text(), " ");
     const admin = std.mem.trim(u8, model.setup_admin_name.text(), " ");
-    const pin = model.setup_pin.text();
+    const secret = model.setup_credential.text();
+    const kind = model.setup_credential_kind;
 
     if (name.len == 0) {
         model.setup_error = "Give the restaurant a name";
@@ -501,21 +665,21 @@ fn submitSetup(model: *Model, fx: *Effects) void {
         model.setup_error = "Give the operator a name";
         return;
     }
-    if (pin.len == 0) {
-        model.setup_error = "Choose a PIN";
+    if (secret.len == 0) {
+        model.setup_error = if (kind == .pin) "Choose a PIN" else "Choose a password";
         return;
     }
-    if (!std.mem.eql(u8, pin, model.setup_pin2.text())) {
-        model.setup_error = "The two PINs do not match";
+    if (!std.mem.eql(u8, secret, model.setup_credential2.text())) {
+        model.setup_error = if (kind == .pin) "The two PINs do not match" else "The two passwords do not match";
         return;
     }
 
-    // The PIN is hashed with the installation salt and the first
-    // employee's id, exactly as it is at every other sign-in. The
-    // plaintext never reaches the disk.
+    // The secret is hashed with the installation salt and the first
+    // employee's id, exactly as it is at every other sign-in. Whatever
+    // kind it is, the plaintext never reaches the disk.
     var hash: [auth.hash_length]u8 = undefined;
-    const hashed = auth.hashPin(model.pin_salt(), repos.first_employee_id, pin, &hash) orelse {
-        model.setup_error = "Could not hash the PIN - try again";
+    const hashed = auth.hashCredential(model.salt(), repos.first_employee_id, secret, &hash) orelse {
+        model.setup_error = "Could not hash the credential - try again";
         return;
     };
 
@@ -533,7 +697,8 @@ fn submitSetup(model: *Model, fx: *Effects) void {
         if (symbol.len == 0) "$" else symbol,
         admin,
         hashed,
-        model.pin_salt(),
+        @intFromEnum(kind),
+        model.salt(),
         model_mod.decimalsForCurrency(currency),
         std.mem.trim(u8, model.wizard_address_buf.text(), " "),
         std.mem.trim(u8, model.wizard_phone_buf.text(), " "),
@@ -546,13 +711,27 @@ fn submitSetup(model: *Model, fx: *Effects) void {
 ///
 /// The salt is NOT marked as confirmed here: the write has not happened
 /// yet. A failed write that still cleared the flag would leave the app
-/// hashing PINs against a salt that is not in the database - the
+/// hashing credentials against a salt that is not in the database - the
 /// operator signs in, the next boot makes a different salt, and nobody
 /// can ever sign in again. The write coming back moves the state to
 /// `.verifying`; only the read-back in `config_loaded` confirms the salt
 /// the database actually holds.
 fn createSalt(model: *Model, fx: *Effects) void {
-    repos.saveSalt(fx, repos.key_save_salt, model.pin_salt(), fx.wallMs());
+    repos.saveSalt(fx, repos.key_save_salt, model.salt(), fx.wallMs());
+}
+
+/// Wear a palette, and keep the choice.
+///
+/// The look belongs to the device, not to the restaurant, so it is
+/// stored in `app_config` beside the salt and read back at boot. Marking
+/// the choice is what makes a read that lands late harmless: the tap the
+/// operator made is the truth, and the stored value only fills in a
+/// device nobody has set yet.
+fn chooseTheme(model: *Model, fx: *Effects, palette: model_mod.Palette, contrast: bool) void {
+    model.theme_palette = palette;
+    model.theme_contrast_high = contrast;
+    model.theme_chosen = true;
+    repos.saveTheme(fx, @intFromEnum(palette), contrast, fx.wallMs());
 }
 
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
@@ -574,8 +753,83 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
     switch (msg) {
         // ----------------------------------------------------------- the wire
 
-        .net => |event| net_bridge.onChannel(model, event),
-        .peer => |response| net_bridge.onResponse(model, response),
+        .net => |event| net_bridge.onChannel(model, fx, event),
+        .peer => |response| net_bridge.onResponse(model, fx, response),
+        .snapshot => |response| net_bridge.onSnapshotResponse(model, fx, response),
+        .net_event => |line| net_bridge.onEventLine(model, fx, line),
+        .event_done => |response| net_bridge.onEventDone(model, response),
+        .sync_ops_loaded => |result| net_bridge.onOpsLoaded(model, result),
+        .sync_snapshot_loaded => |result| net_bridge.onSnapshotLoaded(model, result),
+        .sync_compacted => |result| repos.onSyncCompacted(model, result),
+        .sync_applied => |result| {
+            // The cursor has already moved; a failed apply is a gap the
+            // operator can see, not a loop that retries forever.
+            if (result.outcome != .ok) {
+                model.sync_rejected += 1;
+            } else {
+                // The op is committed. Wake the other peers' streams
+                // and re-read the board now, so the event stream's
+                // promise - the ticket appears without waiting for the
+                // next poll - reaches the screen and not just the
+                // database.
+                net_bridge.notify();
+                repos.loadOrders(model, fx);
+                repos.maybeCompact(model, fx);
+            }
+        },
+        .reference => |response| net_bridge.onReferenceResponse(model, fx, response),
+        .reference_bumped => |result| {
+            // The counter moved. Rebuild the document the peer asks
+            // for; serving the old one under the new version would be
+            // a lie the receiver could not detect.
+            if (result.outcome == .ok) repos.loadReferenceSnapshot(model, fx);
+        },
+        .reference_loaded => |result| {
+            if (result.outcome != .ok or result.kind != .page) return;
+            var reader = page.Reader.init(result.bytes);
+            var values: [page.max_columns]page.Value = undefined;
+            if (!reader.readHeader()) return;
+            if (!reader.nextRow(&values)) return;
+            const version = reader.intOf(&values, "version", 0);
+            const json = reader.textOf(&values, "snapshot");
+            model.reference_snapshot_buf.reset();
+            const copied = model.reference_snapshot_buf.dupe(json) orelse return;
+            model.reference_snapshot_len = copied.len;
+            model.reference_version = if (version > 0) @as(u64, @intCast(version)) else 1;
+        },
+        .reference_version_loaded => |result| {
+            if (result.outcome != .ok or result.kind != .page) return;
+            var reader = page.Reader.init(result.bytes);
+            var values: [page.max_columns]page.Value = undefined;
+            if (!reader.readHeader()) return;
+            if (!reader.nextRow(&values)) return;
+            const version = reader.intOf(&values, "version", 0);
+            if (version > 0) model.reference_version = @intCast(version);
+        },
+        .reference_applied => |result| {
+            if (result.outcome != .ok) {
+                // The version did not move, so the next pull asks for
+                // the same document again.
+                model.reference_applying = 0;
+                model.sync_rejected += 1;
+                return;
+            }
+            if (model.reference_applying > model.reference_version) {
+                model.reference_version = model.reference_applying;
+            }
+            model.reference_applying = 0;
+            // The catalogue, the people, the tables and the salt all
+            // changed; reload what the screens read.
+            repos.loadConfig(model, fx);
+            repos.loadCompany(model, fx);
+            repos.loadCategories(model, fx);
+            repos.loadTaxSlabs(model, fx);
+            repos.loadProducts(model, fx);
+            repos.loadEmployees(model, fx);
+            repos.loadTableCategories(model, fx);
+            repos.loadTables(model, fx);
+            repos.loadStations(model, fx);
+        },
 
         // -------------------------------------------------------- session
 
@@ -613,7 +867,37 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
         },
 
-        .pin_edit => |event| model.pin.apply(event),
+        .credential_edit => |event| {
+            if (model.login_locked()) return;
+            applySecretEdit(&model.credential, event);
+        },
+
+        .credential_digit => |digit| {
+            // The pad: one key, one digit. A PIN is tapped rather than
+            // typed because a till has a screen in front of a queue, and
+            // a keyboard would be a keyboard.
+            if (model.login_locked()) return;
+            if (model.credential.text().len >= auth.max_pin_len) return;
+            var next: [auth.max_secret_len]u8 = undefined;
+            const held = model.credential.text();
+            @memcpy(next[0..held.len], held);
+            next[held.len] = '0' + @as(u8, @intCast(digit));
+            model.credential.set(next[0 .. held.len + 1]);
+        },
+
+        .credential_clear => {
+            if (model.login_locked()) return;
+            model.credential.clear();
+        },
+
+        .credential_back => {
+            if (model.login_locked()) return;
+            const held = model.credential.text();
+            if (held.len == 0) return;
+            model.credential.set(held[0 .. held.len - 1]);
+        },
+
+        .toggle_reveal => model.credential_revealed = !model.credential_revealed,
 
         .pick_employee => |id| {
             // The person the picker chose. Their role is the mode they
@@ -630,7 +914,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // The app is one role. A waiter's row must not open the
             // back office because the device happens to be an admin
             // till: the person's role and the binary's role have to
-            // agree, which is the same rule the PIN check applies.
+            // agree, which is the same rule the credential check applies.
             if (!model_mod.allows_role(role)) {
                 model.error_text = "That person does not work on this device";
                 return;
@@ -638,10 +922,9 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             resetSession(model, .login);
             model.role = role;
             model.role_chosen = true;
-            model.sign_in_employee_id = employee.id;
-            const name_len = @min(employee.name.len, model.sign_in_employee_name_buf.len);
-            @memcpy(model.sign_in_employee_name_buf[0..name_len], employee.name[0..name_len]);
-            model.sign_in_employee_name_len = name_len;
+            // How they prove it is theirs, and the surface is built from
+            // that: a pad for a PIN, a field for a password.
+            choose_sign_in(model, employee);
         },
 
         .submit_login => {
@@ -649,15 +932,15 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // is found by trying every one of them; the till is where
             // that trying happens, so the till is where it stops.
             if (model.login_locked()) {
-                model.login_error = "Too many wrong PINs - try again in a moment";
+                model.login_error = "Too many wrong tries - try again in a moment";
                 return;
             }
-            if (model.pin.text().len == 0) {
-                model.login_error = "Enter your PIN";
+            if (model.credential.text().len == 0) {
+                model.login_error = missingSecret(model.credential_kind);
                 return;
             }
             // Nobody is signing in without a person: the picker chose
-            // who, and the PIN says they are that person.
+            // who, and the secret says they are that person.
             if (model.sign_in_employee_id == 0) {
                 model.login_error = "Choose who you are first";
                 return;
@@ -666,8 +949,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 .key = repos.key_login,
                 // The employee the picker chose. The hash is not
                 // computed here: the row's own hash is verified
-                // against the PIN, and that is ONE slow hash, not one
-                // per employee on the staff list.
+                // against the secret, and that is ONE slow hash, not
+                // one per employee on the staff list.
                 .sql = repos.login_sql,
                 .params = &.{.{ .integer = model.sign_in_employee_id }},
                 .on_result = Effects.dbMsg(.login_checked),
@@ -675,18 +958,24 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
 
         .login_checked => |result| {
-            if (result.kind != .page or result.outcome != .ok) {
+            if (result.outcome != .ok) {
                 noteLoginFailure(model);
                 model.login_error = "Sign-in failed - try again";
-                model.pin.set("");
+                model.credential.clear();
                 return;
             }
+            // A query answers with a page and then a terminal message
+            // that says it is finished. The terminal is not a wrong
+            // credential: counting it would make the till lock after
+            // fewer real guesses than it says it will, and it would
+            // overwrite the instruction the screen just gave.
+            if (result.kind != .page) return;
             var reader = page.Reader.init(result.bytes);
             var values: [page.max_columns]page.Value = undefined;
             if (!reader.readHeader() or !reader.nextRow(&values)) {
                 noteLoginFailure(model);
-                model.login_error = "Wrong PIN";
-                model.pin.set("");
+                model.login_error = wrongSecret(model.credential_kind);
+                model.credential.clear();
                 return;
             }
             // The row that came back has to be the employee the
@@ -696,27 +985,42 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // matrix from being decoration.
             const employee_id = reader.intOf(&values, "id", 0);
             if (employee_id != model.sign_in_employee_id) {
-                model.login_error = "Wrong PIN";
-                model.pin.set("");
+                model.login_error = wrongSecret(model.credential_kind);
+                model.credential.clear();
                 return;
             }
             const stored_role = reader.intOf(&values, "role", -1);
             if (stored_role != @intFromEnum(rbac.employee_role(model.role))) {
-                model.login_error = "Wrong PIN";
-                model.pin.set("");
+                model.login_error = wrongSecret(model.credential_kind);
+                model.credential.clear();
                 return;
             }
-            // The row's hash is the one the PIN has to match. A bcrypt
-            // hash carries its own salt, so verifying it needs nothing
-            // but the PIN - which is why a second device can check a
-            // PIN it was never given the salt for.
+            // The row says how this person signs in, and the row is the
+            // truth. A list read before a change on another device can
+            // have offered the wrong surface; the secret typed into it
+            // is not held against them, and the screen becomes the other
+            // one for the next try.
+            const stored_kind = domain.CredentialKind.fromInt(reader.intOf(&values, "auth_kind", 0)) orelse .pin;
+            if (stored_kind != model.credential_kind) {
+                model.credential_kind = stored_kind;
+                model.credential.clear();
+                model.login_error = switch (stored_kind) {
+                    .pin => "This person signs in with a PIN - tap it",
+                    .password => "This person signs in with a password - type it",
+                };
+                return;
+            }
+            // The row's hash is the one the secret has to match. A
+            // bcrypt hash carries its own salt, so verifying it needs
+            // nothing but the secret - which is why a second device can
+            // check a credential it was never given the salt for.
             const stored = reader.textOf(&values, "pin_hash");
             if (stored.len == 0) {
-                // An employee with no PIN cannot sign in. Saying so is
-                // better than a wrong PIN: the PIN is not wrong, it
-                // was never set.
-                model.login_error = "That employee has no PIN yet";
-                model.pin.set("");
+                // An employee who has never been given a secret cannot
+                // sign in. Saying so is better than a wrong one: the
+                // secret is not wrong, it was never set.
+                model.login_error = noSecret(model.credential_kind);
+                model.credential.clear();
                 return;
             }
             // A hash from before bcrypt is salted with the
@@ -725,25 +1029,25 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // holds, or the hash cannot match. Until the database has
             // confirmed it, there is nothing to check with, so the
             // sign-in waits rather than guessing.
-            if (auth.isLegacy(stored) and (model.pin_salt().len == 0 or model.salt_state != .confirmed)) {
+            if (auth.isLegacy(stored) and (model.salt().len == 0 or model.salt_state != .confirmed)) {
                 model.login_error = "Still starting up - try again in a moment";
-                model.pin.set("");
+                model.credential.clear();
                 return;
             }
-            if (!auth.verifyPin(model.pin_salt(), model.pin.text(), stored)) {
+            if (!auth.verifyCredential(model.salt(), model.credential.text(), stored)) {
                 noteLoginFailure(model);
-                model.login_error = "Wrong PIN";
-                model.pin.set("");
+                model.login_error = wrongSecret(model.credential_kind);
+                model.credential.clear();
                 return;
             }
             // The modern hash for a row that still holds an old digest.
             // It is made BEFORE the session reset, because the reset
-            // clears the PIN the hash is made from.
+            // clears the secret the hash is made from.
             const legacy = auth.isLegacy(stored);
             if (legacy) {
-                const hashed = auth.hashPin(model.pin_salt(), model.sign_in_employee_id, model.pin.text(), &model.login_hash) orelse {
-                    model.login_error = "Could not check the PIN - try again";
-                    model.pin.set("");
+                const hashed = auth.hashCredential(model.salt(), model.sign_in_employee_id, model.credential.text(), &model.login_hash) orelse {
+                    model.login_error = "Could not check the credential - try again";
+                    model.credential.clear();
                     return;
                 };
                 model.login_hash_len = hashed.len;
@@ -756,7 +1060,14 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.employee_name = model.operator_buf.dupe(employee_name) orelse "";
             model.signed_in = true;
             model.role_chosen = true;
-            // The counter of wrong PINs starts again: the cashier is
+            // The person the picker chose is now the person who is
+            // signed in, so the pending choice ends here. Leaving it
+            // would keep a second answer to "who is at this till"
+            // around for the whole session, and a secret typed at a
+            // stale gate is checked against the person it names.
+            model.sign_in_employee_id = 0;
+            model.sign_in_employee_name_len = 0;
+            // The counter of wrong secrets starts again: the cashier is
             // in, and the till is not holding a grudge.
             model.login_failures = 0;
             model.login_locked_until = 0;
@@ -777,11 +1088,17 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
 
         .sign_out => {
-            // A PIN role goes back to its sign-in gate. A kiosk role
-            // has no PIN, so it goes back to the role picker that
-            // chooses the device's mode.
-            const gate: Screen = if (model.role.needs_sign_in()) .login else .role_picker;
+            // A role a person signs in to goes back to that person's
+            // sign-in gate. A kiosk role has no credential, so it goes
+            // back to the picker that chooses the device's mode - and
+            // so does a person whose row has gone away, because a gate
+            // for nobody is a gate a secret gets typed at no one.
+            const person = findEmployee(model, model.employee_id);
+            const gate: Screen = if (model.role.needs_sign_in() and person != null) .login else .role_picker;
+            // The row is read before the reset, because the reset is
+            // what clears who was signed in.
             resetSession(model, gate);
+            if (gate == .login) choose_sign_in(model, person.?);
             model.role_chosen = gate == .login;
         },
 
@@ -820,9 +1137,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .setup_admin_edit => |event| model.setup_admin_name.apply(event),
 
-        .setup_pin_edit => |event| model.setup_pin.apply(event),
+        .setup_credential_edit => |event| applySecretEdit(&model.setup_credential, event),
 
-        .setup_pin2_edit => |event| model.setup_pin2.apply(event),
+        .setup_credential2_edit => |event| applySecretEdit(&model.setup_credential2, event),
+
+        .setup_credential_kind => |id| {
+            model.setup_credential_kind = domain.CredentialKind.fromInt(id) orelse .pin;
+        },
 
         .setup_currency_edit => |event| model.setup_currency_code.apply(event),
 
@@ -857,6 +1178,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // salt in the database. A sign-in may use it.
             model.salt_state = .confirmed;
             repos.loadAll(model, fx);
+            if (model_mod.app_kind == .admin) {
+                // The first document includes the salt and the owner's
+                // PIN hash, so a peer can sign in with them.
+                repos.loadReferenceSnapshot(model, fx);
+            } else {
+                repos.loadReferenceVersion(model, fx);
+            }
         },
 
         // ----------------------------------------------------- navigation
@@ -872,6 +1200,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.form_address_buf.set(model.company_address_field);
                 model.form_phone_buf.set(model.company_phone_field);
                 model.form_tax_buf.set(model.company_tax_field);
+                model.form_brand_buf.set(model.company_brand_field);
             }
             go(model, screen);
             // The screen loads what it shows: the effects channel has
@@ -1052,6 +1381,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 return;
             }
             model.error_text = "";
+            publishReference(fx);
             repos.loadTableCategories(model, fx);
             go(model, .table_categories);
         },
@@ -1214,7 +1544,14 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .sync_state_loaded => |result| {
             if (result.outcome != .ok) return;
-            if (result.kind == .page) repos.decodeSyncState(model, result.bytes);
+            if (result.kind == .page) {
+                repos.decodeSyncState(model, result.bytes);
+                // A boot after a week may find a log that is already
+                // past the policy. The durable counter survived the
+                // restart; compact now rather than waiting for another
+                // 128 ops.
+                repos.maybeCompact(model, fx);
+            }
         },
 
         .dish_assigned => |result| {
@@ -1270,6 +1607,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.busy = true;
             model.error_text = "";
             repos.saveStockCount(
+                model,
                 fx,
                 repos.key_save_stock,
                 model.form_stock_product_id,
@@ -1305,6 +1643,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         // ---------------------------------------------------------- the POS
         .open_order => |id| {
             model.selected_order_id = id;
+            model.void_reason_buf.set("");
             go(model, .order_detail);
             repos.loadOrderLines(model, fx);
         },
@@ -1313,6 +1652,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             const id = model.selected_order_id;
             if (id == 0) return;
             const order = findOrder(model, id) orelse return;
+            if (!canTakePayment(model, order)) return;
             model.sale_buf.reset();
             model.last_order_id = order.id;
             model.last_order_no_field = model.sale_buf.dupe(order.order_no) orelse "";
@@ -1324,7 +1664,9 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.last_order_items_count += line.qty;
             }
             model.last_order_at = order.placed_at;
+            model.payment_check_id = 0;
             model.payment_error = "";
+            model.cash_tendered_buf.clear();
             go(model, .order_confirmation);
         },
 
@@ -1332,6 +1674,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // The confirmation screen takes the money, so the sale state
             // is filled in from the order that is being paid.
             const order = findOrder(model, id) orelse return;
+            if (!canTakePayment(model, order)) return;
             model.sale_buf.reset();
             model.last_order_id = order.id;
             model.last_order_no_field = model.sale_buf.dupe(order.order_no) orelse "";
@@ -1343,7 +1686,9 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.last_order_items_count += line.qty;
             }
             model.last_order_at = order.placed_at;
+            model.payment_check_id = 0;
             model.payment_error = "";
+            model.cash_tendered_buf.clear();
             go(model, .order_confirmation);
         },
 
@@ -1353,18 +1698,27 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .set_category_all => model.selected_category = 0,
 
-        .add_to_cart => |product_id| addToCart(model, product_id),
+        .add_to_cart => |product_id| {
+            if (canEditCart(model)) addToCart(model, product_id);
+        },
 
-        .remove_from_cart => |product_id| removeFromCart(model, product_id),
+        .remove_from_cart => |product_id| {
+            if (canEditCart(model)) removeFromCart(model, product_id);
+        },
 
         .set_order_type => |index| {
-            model.cart_order_type = std.enums.fromInt(domain.OrderType, index) orelse return;
+            const next = std.enums.fromInt(domain.OrderType, index) orelse return;
+            if (!canEditCart(model)) return;
+            if (model.cart_order_type != next) model.cart_attempt_id = 0;
+            model.cart_order_type = next;
         },
 
         .apply_discount => |discount_id| {
+            if (!canEditCart(model)) return;
             for (model.discounts_list) |discount| {
                 if (discount.id != discount_id) continue;
                 if (!discount.active) break;
+                if (model.cart_discount_id != discount_id) model.cart_attempt_id = 0;
                 model.cart_discount_id = discount_id;
                 model.error_text = "";
                 return;
@@ -1373,12 +1727,16 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
 
         .clear_discount => {
+            if (!canEditCart(model)) return;
+            if (model.cart_discount_id != 0) model.cart_attempt_id = 0;
             model.cart_discount_id = 0;
         },
 
         .clear_cart => {
+            if (!canEditCart(model)) return;
             model.cart_len = 0;
             model.cart_buf.reset();
+            model.cart_attempt_id = 0;
         },
 
         .place_order => placeOrder(model, fx),
@@ -1411,6 +1769,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.cart_attempt_id = 0;
             go(model, .order_confirmation);
             repos.loadOrders(model, fx);
+            // The order is in the op log. The other apps' boards wake
+            // now instead of waiting for the five-second poll.
+            net_bridge.notify();
+            repos.maybeCompact(model, fx);
         },
 
         // ----------------------------------------------------- the waiter
@@ -1428,16 +1790,20 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.error_text = "Could not open the table";
                 return;
             }
-            // The order exists: the waiter can add to it.
+            // The order exists: the waiter can add to it. Read the
+            // board back now, so a second tap on the same table joins
+            // this order instead of opening another.
             model.active_order_id = model.pending_order_id;
             model.pending_order_id = 0;
             go(model, .waiter_menu);
             repos.loadOrderLines(model, fx);
+            repos.loadOrders(model, fx);
         },
 
         .add_to_order => |product_id| addToOrder(model, fx, product_id),
 
         .order_line_added => |result| {
+            model.add_line_pending = false;
             if (result.outcome != .ok) {
                 model.error_text = "Could not add the item";
                 return;
@@ -1452,6 +1818,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .set_payment_mode => |id| model.payment_mode_field = id,
 
+        .cash_tendered_edit => |event| model.cash_tendered_buf.apply(event),
+
         .take_payment => takePayment(model, fx),
 
         .back_to_pos => {
@@ -1462,7 +1830,9 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.last_order_type_field = "";
             model.last_order_total_minor = 0;
             model.last_order_items_count = 0;
+            model.payment_check_id = 0;
             model.payment_error = "";
+            model.cash_tendered_buf.clear();
             go(model, .pos);
         },
 
@@ -1470,18 +1840,32 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.busy = false;
             model.payment_pending = false;
             if (result.outcome != .ok) {
+                model.payment_check_id = 0;
                 model.payment_error = switch (result.outcome) {
                     .constraint => "The payment broke a data rule",
                     .busy => "The database is busy - try again",
                     else => "Could not take the payment",
                 };
+                // The refusal may be a late plate: re-read the board so
+                // the confirmation shows the bill the next tap will
+                // charge, not the one that was refused.
+                repos.loadOrders(model, fx);
                 return;
             }
             model.payment_error = "";
-            // The sale is done: back to the order list, where the
-            // closed order is now a completed one.
-            go(model, .orders);
-            repos.loadOrders(model, fx);
+            // The write is reported as success even when its guards
+            // found a late plate or a ticket that moved. Read the board
+            // back under the payment-check key and let the order's own
+            // row decide whether the money landed before telling the
+            // cashier the sale is done.
+            if (model.last_order_id != 0) {
+                model.payment_check_id = model.last_order_id;
+                repos.loadOrdersForPayment(model, fx);
+            } else {
+                go(model, .orders);
+                net_bridge.notify();
+                repos.maybeCompact(model, fx);
+            }
         },
 
         // -------------------------------------------------------- the forms
@@ -1514,6 +1898,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 return;
             }
             model.error_text = "";
+            publishReference(fx);
             repos.loadCompany(model, fx);
         },
 
@@ -1542,6 +1927,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 return;
             }
             model.error_text = "";
+            publishReference(fx);
             repos.loadProducts(model, fx);
             repos.loadCategories(model, fx);
             go(model, .product_categories);
@@ -1555,45 +1941,65 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .open_employees => go(model, .employees),
 
-        .reset_employee_pin => |id| {
+        .reset_employee_credential => |id| {
             model.form_reset_employee_id = id;
             model.form_reset_employee_name = "";
-            model.form_reset_pin_buf.set("");
-            model.form_reset_pin2_buf.set("");
+            model.form_reset_credential_buf.clear();
+            model.form_reset_credential2_buf.clear();
+            // The form opens on the kind this person uses today, so the
+            // owner sees what is there before they change it.
+            model.form_reset_credential_kind = .pin;
+            model.credential_revealed = false;
             for (model.employees) |employee| {
                 if (employee.id != id) continue;
                 model.form_reset_employee_name = employee.name;
+                model.form_reset_credential_kind = employee.auth_kind;
                 break;
             }
-            go(model, .reset_pin);
+            go(model, .reset_credential);
         },
 
-        .form_reset_pin_edit => |event| model.form_reset_pin_buf.apply(event),
+        .form_reset_credential_edit => |event| applySecretEdit(&model.form_reset_credential_buf, event),
 
-        .form_reset_pin2_edit => |event| model.form_reset_pin2_buf.apply(event),
+        .form_reset_credential2_edit => |event| applySecretEdit(&model.form_reset_credential2_buf, event),
 
-        .save_reset_pin => {
-            const pin = model.form_reset_pin_buf.text();
+        .form_reset_credential_kind => |id| {
+            model.form_reset_credential_kind = domain.CredentialKind.fromInt(id) orelse .pin;
+        },
+
+        .save_reset_credential => {
+            const secret = model.form_reset_credential_buf.text();
+            const kind = model.form_reset_credential_kind;
             if (model.form_reset_employee_id == 0) {
-                model.error_text = "Nobody is having their PIN reset";
+                model.error_text = "Nobody is having their sign-in reset";
                 return;
             }
-            if (!model.pin_is_acceptable(pin)) {
-                model.error_text = "A PIN is six digits or more, and digits only";
+            if (!model.credential_is_acceptable(kind, secret)) {
+                model.error_text = switch (kind) {
+                    .pin => "A PIN is six digits or more, and digits only",
+                    .password => "A password is eight characters or more",
+                };
                 return;
             }
-            if (!std.mem.eql(u8, pin, model.form_reset_pin2_buf.text())) {
-                model.error_text = "The two PINs do not match";
+            if (!std.mem.eql(u8, secret, model.form_reset_credential2_buf.text())) {
+                model.error_text = switch (kind) {
+                    .pin => "The two PINs do not match",
+                    .password => "The two passwords do not match",
+                };
                 return;
             }
             var hash: [auth.hash_length]u8 = undefined;
-            const hashed = auth.hashPin(model.pin_salt(), model.form_reset_employee_id, pin, &hash) orelse {
-                model.error_text = "Could not hash the PIN - try again";
+            const hashed = auth.hashCredential(model.salt(), model.form_reset_employee_id, secret, &hash) orelse {
+                model.error_text = "Could not hash the credential - try again";
                 return;
             };
             model.busy = true;
             model.error_text = "";
-            repos.saveEmployeePin(fx, repos.key_save_employee, model.form_reset_employee_id, hashed);
+            // The kind is written with the hash. There is no way to
+            // change one without the other, which is the point: a
+            // person left with a surface they never chose is a person
+            // who is locked out of their own till.
+            repos.saveEmployeeCredential(fx, repos.key_save_employee, model.form_reset_employee_id, hashed, @intFromEnum(kind));
         },
 
         .employee_saved => |result| {
@@ -1603,6 +2009,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 return;
             }
             model.error_text = "";
+            publishReference(fx);
             repos.loadEmployees(model, fx);
             go(model, .employees);
         },
@@ -1651,6 +2058,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 return;
             }
             model.error_text = "";
+            publishReference(fx);
             repos.loadTaxSlabs(model, fx);
             go(model, .settings_tax);
         },
@@ -1684,6 +2092,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 return;
             }
             model.error_text = "";
+            publishReference(fx);
             repos.loadCategories(model, fx);
             go(model, .product_categories);
         },
@@ -1730,6 +2139,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .form_company_tax_edit => |event| model.form_tax_buf.apply(event),
 
+        .form_company_brand_edit => |event| model.form_brand_buf.apply(event),
+
         .save_company => saveCompany(model, fx),
 
         .open_settings => go(model, .settings),
@@ -1741,10 +2152,17 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 return;
             }
             model.error_text = "";
+            publishReference(fx);
             // Read it back: the form's buffers are the edit model, and
             // the company row is the truth.
             repos.loadCompany(model, fx);
         },
+
+        // --------------------------------------------------------- pairing
+
+        .pairing_edit => |event| model.pairing_entry.apply(event),
+
+        .save_pairing => savePairing(model, fx),
 
         // -------------------------------------------------- the kitchen board
 
@@ -1796,15 +2214,50 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             model.advance_order_id = order_id;
             model.busy = true;
-            repos.setOrderStatus(fx, order_id, order.status, next, fx.wallMs());
+            repos.setOrderStatus(model, fx, order_id, order.status, next, fx.wallMs());
         },
 
-        .pin_rehashed => |result| {
+        .void_order => |order_id| {
+            // A void is a move like any other: one at a time, and only
+            // for an order that is still open. A paid order is money
+            // that has changed hands - putting it back is a refund,
+            // not a void, and it has to name the tender it came from.
+            if (model.advance_order_id != 0) {
+                model.error_text = "The order is still being updated";
+                return;
+            }
+            const order = findOrder(model, order_id) orelse {
+                model.error_text = "That order is no longer on the board";
+                return;
+            };
+            if (order.status == .completed or order.status == .voided) {
+                model.error_text = "A paid or voided order cannot be voided";
+                return;
+            }
+            const reason = std.mem.trim(u8, model.void_reason_buf.text(), " ");
+            if (reason.len == 0) {
+                model.error_text = "Say why the order is being voided";
+                return;
+            }
+            model.advance_order_id = order_id;
+            model.voiding_order_id = order_id;
+            model.busy = true;
+            model.error_text = "";
+            repos.voidOrder(model, fx, order_id, reason, fx.wallMs());
+        },
+
+        .void_reason_edit => |event| model.void_reason_buf.apply(event),
+
+        .credential_rehashed => |result| {
             // The rewrite is a courtesy: the sign-in has already
             // happened, and a row that could not be rewritten is worth
             // knowing about but not worth failing over.
             if (result.outcome != .ok) {
-                model.error_text = "The PIN could not be upgraded - it still works";
+                model.error_text = "The stored credential could not be upgraded - it still works";
+            } else {
+                // The employee's hash is reference data: the peer's
+                // copy would otherwise stay on the old hash.
+                publishReference(fx);
             }
         },
 
@@ -1812,6 +2265,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.busy = false;
             if (result.outcome != .ok) {
                 model.advance_order_id = 0;
+                model.voiding_order_id = 0;
                 model.error_text = "Could not update the order";
                 return;
             }
@@ -1819,6 +2273,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // not the one the model guessed: the board shows the truth
             // and the next move is computed from it.
             repos.loadOrders(model, fx);
+            net_bridge.notify();
+            repos.maybeCompact(model, fx);
         },
 
         // -------------------------------------------------------------- data
@@ -1890,20 +2346,45 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     .busy => "The database is busy - try again",
                     else => "Could not read the orders",
                 };
+                if (result.key == repos.key_payment_check and model.payment_check_id != 0) {
+                    model.payment_check_id = 0;
+                    model.payment_error = "Could not confirm the payment - try again";
+                }
                 return;
             }
             if (result.kind == .page) {
                 repos.decodeOrders(model, result.bytes);
                 announceNewOrder(model, fx);
             }
+            // The payment's write reports success even when its guards
+            // refused it. Wait for the payment's own board read, then
+            // check the order's payment row before calling the sale
+            // done.
+            if (result.key == repos.key_payment_check and result.kind == .done) settlePayment(model, fx);
             // The order we were moving is not on the board any more. It
             // was deleted, or the database was reset under us, and the
             // operator is told so instead of watching a ticket vanish.
             if (model.advance_order_id != 0) {
-                if (findOrder(model, model.advance_order_id) == null) {
-                    model.error_text = "That order is no longer on the board";
+                const moved = findOrder(model, model.advance_order_id);
+                const was_void = model.voiding_order_id != 0 and model.voiding_order_id == model.advance_order_id;
+                if (moved == null) {
+                    if (was_void) {
+                        // The void landed: the order is off the open
+                        // board, so leave the detail screen with it.
+                        model.error_text = "";
+                        model.void_reason_buf.set("");
+                        go(model, .orders);
+                    } else {
+                        model.error_text = "That order is no longer on the board";
+                    }
+                } else if (was_void) {
+                    // The write was accepted but the database did not
+                    // move the order - it was paid or voided elsewhere.
+                    // Say so instead of pretending the void happened.
+                    model.error_text = "The order could not be voided - it may have been paid";
                 }
                 model.advance_order_id = 0;
+                model.voiding_order_id = 0;
             }
         },
 
@@ -1947,13 +2428,21 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                         return;
                     }
                     const salt = reader.textOf(&values, "value");
-                    const copied = model.pin_salt_buf[0..];
+                    const copied = model.salt_buf[0..];
                     const length = @min(salt.len, copied.len);
                     @memcpy(copied[0..length], salt[0..length]);
-                    model.pin_salt_len = length;
+                    model.salt_len = length;
                     // The database has the salt now: it is the salt a
                     // sign-in has to use.
                     model.salt_state = .confirmed;
+                    // The salt is what the employee hashes were made
+                    // with, so the document can be built (admin) or its
+                    // version read (peer) only now.
+                    if (model_mod.app_kind == .admin) {
+                        repos.loadReferenceSnapshot(model, fx);
+                    } else {
+                        repos.loadReferenceVersion(model, fx);
+                    }
                 },
                 .done => {
                     // The settings query finished. If the database had
@@ -1988,22 +2477,102 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             };
         },
 
+        .theme_loaded => |result| {
+            // The look of the device is a preference, so a read that
+            // failed is not something to tell the operator: the screen
+            // is already drawing in the default.
+            if (result.outcome != .ok) return;
+            if (result.kind != .page) return;
+            // Asked for at boot, and it can land after the tap it would
+            // otherwise undo. The choice the operator made is the truth.
+            if (model.theme_chosen) return;
+            repos.decodeTheme(model, result.bytes);
+        },
+
+        .theme_saved => |result| {
+            // The screen already wears the palette. A write that did not
+            // land means only that the next boot puts the device back.
+            if (result.outcome == .ok) return;
+            model.error_text = "The look of this device could not be saved";
+        },
+
+        .pairing_loaded => |result| {
+            // A read that failed leaves whatever this device came up with
+            // in place. A device that cannot ask its database is still a
+            // device its own peers can reach, and the count of requests
+            // turned away is the sign that something is off - not a
+            // banner, because nothing the operator can do fixes a database
+            // that will not answer.
+            if (result.outcome != .ok) return;
+            if (result.kind != .page) return;
+            var reader = page.Reader.init(result.bytes);
+            var values: [page.max_columns]page.Value = undefined;
+            var stored: []const u8 = "";
+            if (reader.readHeader() and reader.nextRow(&values)) {
+                stored = reader.textOf(&values, "value");
+            }
+            if (stored.len == 0) {
+                // The database has no token of its own. This device's
+                // value - the one it was given, or the one it made at boot
+                // - becomes the restaurant's, and is stored where a peer
+                // started from the same database will read it back.
+                net_bridge.sharePairing(model);
+                repos.savePairing(fx, model.pairing(), fx.wallMs());
+                return;
+            }
+            // The database's value is the one the wire checks: it is the
+            // value the other devices were handed. A token this device
+            // made for itself steps aside for it, exactly as a provisional
+            // salt does.
+            const copied = model.pairing_buf[0..];
+            const length = @min(stored.len, copied.len);
+            @memcpy(copied[0..length], stored[0..length]);
+            model.pairing_len = length;
+            net_bridge.sharePairing(model);
+        },
+
+        .pairing_saved => |result| {
+            // The device is already using this token, on both halves of
+            // the wire. A write that did not land means the next boot puts
+            // the device back to the value the database holds - and the
+            // peers that were handed the new one stop being recognised,
+            // which the count of refusals will say.
+            if (result.outcome == .ok) return;
+            model.error_text = "The pairing token could not be stored";
+        },
+
         .company_loaded => |result| {
             if (result.outcome != .ok) return;
             if (result.kind == .page) repos.decodeCompany(model, result.bytes);
             model.db_ready = true;
-            // No company row: this is a fresh installation, and the
-            // app's first job is to become a restaurant.
-            if (model.company_id == 0 and !model.needs_setup) {
-                model.needs_setup = true;
-                // A fresh install opens on the walk-through: the
-                // company's record first, then the owner.
-                model.stack.resetTo(.create_company);
-                model.setup_currency_code.set("USD");
-                model.setup_currency_symbol.set("$");
-                // The walk-through is the way in: the company's record
-                // first, then the owner and their PIN.
-                resetNavigation(model, .create_company);
+            // No company row: this is a fresh installation. Only the
+            // admin app is the restaurant's writer; a service or kiosk
+            // that started first waits for its reference data rather
+            // than inventing a second restaurant with an admin who
+            // cannot sign in on a waiter binary.
+            if (model.company_id == 0 and !model.needs_setup and !model.waiting_for_reference) {
+                if (model_mod.app_kind == .admin) {
+                    model.needs_setup = true;
+                    // A fresh install opens on the walk-through: the
+                    // company's record first, then the owner.
+                    model.stack.resetTo(.create_company);
+                    model.setup_currency_code.set("USD");
+                    model.setup_currency_symbol.set("$");
+                    // The walk-through is the way in: the company's
+                    // record first, then the owner and the credential
+                    // they choose.
+                    resetNavigation(model, .create_company);
+                } else {
+                    model.waiting_for_reference = true;
+                    resetNavigation(model, .role_picker);
+                }
+            } else if (model.company_id != 0 and model.waiting_for_reference) {
+                // The admin's document arrived: this terminal now has
+                // the restaurant, the people and the menu it needed.
+                model.waiting_for_reference = false;
+                if (!model.signed_in and !model.role_chosen) {
+                    resetNavigation(model, .role_picker);
+                }
             }
         },
 
@@ -2033,16 +2602,41 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.loadForScreen(model, fx, screen);
         },
 
-        .toggle_theme => model.theme_dark = !model.theme_dark,
+        // The glyph promises the other half of the day, so this lands on
+        // one of the two palettes it names. All four are Settings' to
+        // offer, and the contrast is a setting of its own.
+        .toggle_theme => chooseTheme(model, fx, model.theme_palette.otherHalf(), model.theme_contrast_high),
+        .set_palette => |code| chooseTheme(model, fx, model_mod.Palette.fromCode(code), model.theme_contrast_high),
+        .toggle_contrast => chooseTheme(model, fx, model.theme_palette, !model.theme_contrast_high),
 
         .tick => |timer| {
             if (timer.outcome != .fired) return;
             model.now_ms = fx.wallMs();
+
+            // A peer that has gone quiet is gone; a manual address is
+            // not. Then pull what is new. Five seconds is the beacon
+            // interval, so a pull sees a peer the next beacon refreshed.
+            model.prunePeers(model.now_ms - 15_000);
+            if (model.now_ms >= model.sync_poll_at_ms) {
+                model.sync_poll_at_ms = model.now_ms + 5_000;
+                net_bridge.poll(model, fx);
+            }
         },
     }
 }
 
 // ------------------------------------------------------------- helpers
+
+/// Move the reference version after a save the admin made.
+///
+/// The admin is the only writer, and a peer asks "what is above my
+/// version?" - so a catalogue edit is not visible until the counter
+/// moves. The bump is a separate transaction that runs after the save
+/// committed, and its result rebuilds the document.
+fn publishReference(fx: *Effects) void {
+    if (model_mod.app_kind != .admin) return;
+    repos.bumpReferenceVersion(fx);
+}
 
 /// Move to a screen, refusing destinations the role may not open.
 fn go(model: *Model, screen: Screen) void {
@@ -2061,6 +2655,11 @@ fn go(model: *Model, screen: Screen) void {
 /// change, a successful sign-in and the setup hand-off all come through
 /// here, so "what survives a session" has one answer rather than four.
 ///
+/// The person the sign-in gate is asking about is the exception, and it
+/// is the caller's business: a successful sign-in ends that choice, and
+/// a sign-out hands the gate back to the person who just left. The two
+/// answers are opposite, so no single reset could give both.
+///
 /// Device settings are deliberately kept: the theme, the split widths,
 /// the KDS station filter, the installation salt and the device token
 /// belong to the machine, not to the operator.
@@ -2069,14 +2668,14 @@ fn resetSession(model: *Model, gate: Screen) void {
     model.employee_id = 0;
     model.employee_name = "";
     model.operator_buf.reset();
-    model.pin.set("");
+    model.credential.clear();
+    // Both of these are the last person's, not the machine's: which
+    // surface the sign-in offers belongs to whoever is chosen next, and
+    // a secret left on the screen in the clear is a secret left for the
+    // next person to read.
+    model.credential_kind = .pin;
+    model.credential_revealed = false;
     model.login_error = "";
-
-    // The person the sign-in screen was asking about. A stale selection
-    // would let the next PIN typed at the picker open the previous
-    // person's session.
-    model.sign_in_employee_id = 0;
-    model.sign_in_employee_name_len = 0;
 
     // Nothing the last operator put in the cart or typed into a filter
     // belongs to the next one.
@@ -2087,6 +2686,9 @@ fn resetSession(model: *Model, gate: Screen) void {
     model.cart_attempt_id = 0;
     model.sale_pending = false;
     model.payment_pending = false;
+    model.add_line_pending = false;
+    model.void_reason_buf.set("");
+    model.voiding_order_id = 0;
     model.search.set("");
     model.selected_category = 0;
 
@@ -2110,8 +2712,10 @@ fn resetSession(model: *Model, gate: Screen) void {
     model.last_order_total_minor = 0;
     model.last_order_items_count = 0;
     model.last_order_at = 0;
+    model.payment_check_id = 0;
     model.sale_buf.reset();
     model.payment_error = "";
+    model.cash_tendered_buf.clear();
     model.advance_order_id = 0;
 
     model.form_currency_code_buf.set("");
@@ -2128,6 +2732,7 @@ fn resetSession(model: *Model, gate: Screen) void {
     model.form_address_buf.set("");
     model.form_phone_buf.set("");
     model.form_tax_buf.set("");
+    model.form_brand_buf.set("");
 
     model.error_text = "";
     model.setup_error = "";
@@ -2155,6 +2760,9 @@ fn addToCart(model: *Model, product_id: i64) void {
     for (model.cart[0..model.cart_len], 0..) |line, index| {
         if (line.product_id == product_id) {
             model.cart[index].qty += 1;
+            // The ticket changed, so a retry is no longer the same
+            // sale. A fresh attempt gets a fresh request key.
+            model.cart_attempt_id = 0;
             return;
         }
     }
@@ -2168,6 +2776,7 @@ fn addToCart(model: *Model, product_id: i64) void {
         .qty = 1,
     };
     model.cart_len += 1;
+    model.cart_attempt_id = 0;
 }
 
 fn removeFromCart(model: *Model, product_id: i64) void {
@@ -2176,6 +2785,7 @@ fn removeFromCart(model: *Model, product_id: i64) void {
         if (model.cart[index].product_id != product_id) continue;
         if (model.cart[index].qty > 1) {
             model.cart[index].qty -= 1;
+            model.cart_attempt_id = 0;
             return;
         }
         // Drop the line and shift the rest down.
@@ -2184,6 +2794,7 @@ fn removeFromCart(model: *Model, product_id: i64) void {
             model.cart[next - 1] = model.cart[next];
         }
         model.cart_len -= 1;
+        model.cart_attempt_id = 0;
         return;
     }
 }
@@ -2209,6 +2820,33 @@ fn findOrder(model: *const Model, order_id: i64) ?domain.Order {
     return null;
 }
 
+/// Whether the cart may change right now. While a sale is being
+/// written the database already has its copy of the ticket; an edit
+/// would either be lost when the sale lands or be missing from the
+/// order that was saved. The edit waits for the answer.
+fn canEditCart(model: *Model) bool {
+    if (model.sale_pending) {
+        model.error_text = "The sale is still being saved";
+        return false;
+    }
+    return true;
+}
+
+/// Whether the confirmation screen may open for this order. A closed
+/// ticket has already taken its money; the list stops offering it, and
+/// a message that arrives anyway must not reopen the sale.
+fn canTakePayment(model: *Model, order: domain.Order) bool {
+    if (order.paid or order.status == .completed) {
+        model.error_text = "That order is already paid";
+        return false;
+    }
+    if (order.status == .voided) {
+        model.error_text = "A voided order cannot be paid";
+        return false;
+    }
+    return true;
+}
+
 /// The order lifecycle. A voided order is terminal - it never moves
 /// forward again.
 fn nextStatus(status: domain.OrderStatus) domain.OrderStatus {
@@ -2221,7 +2859,61 @@ fn nextStatus(status: domain.OrderStatus) domain.OrderStatus {
     };
 }
 
-/// Count a wrong PIN, and lock the till when there have been too
+/// Apply an edit to a field that is showing a mask rather than its own
+/// text.
+///
+/// The runtime sends edits that are relative to the caret - a typed
+/// character, a backspace, a word deleted - so those land correctly on
+/// the secret however the field is drawn. A caret or selection event is
+/// not relative: it is a byte offset into what the field SHOWS, and a
+/// bullet is three bytes where a character of the secret is one. Letting
+/// one through would put the caret into the middle of the secret on the
+/// strength of where it stood in the dots, and the next key would splice
+/// the secret in half. So the caret of a masked field is pinned to the
+/// end, which is also what a masked field ought to do: you type a secret
+/// at the end of it.
+fn applySecretEdit(buffer: anytype, event: canvas.TextInputEvent) void {
+    switch (event) {
+        .insert_text,
+        .delete_backward,
+        .delete_forward,
+        .delete_word_backward,
+        .delete_word_forward,
+        .delete_to_start,
+        .delete_to_line_start,
+        .clear,
+        => buffer.apply(event),
+        else => buffer.selection = canvas.TextSelection.collapsed(buffer.len),
+    }
+}
+
+/// The sign-in's three hard sentences, each in the word this person uses
+/// for their own secret. Telling somebody their PIN is wrong when the
+/// screen wanted a password sends them to a colleague for help instead
+/// of to the keyboard, and a sign-in screen that reads as broken is the
+/// one thing a restaurant cannot afford at lunch.
+fn wrongSecret(kind: domain.CredentialKind) []const u8 {
+    return switch (kind) {
+        .pin => "Wrong PIN",
+        .password => "Wrong password",
+    };
+}
+
+fn missingSecret(kind: domain.CredentialKind) []const u8 {
+    return switch (kind) {
+        .pin => "Enter your PIN",
+        .password => "Enter your password",
+    };
+}
+
+fn noSecret(kind: domain.CredentialKind) []const u8 {
+    return switch (kind) {
+        .pin => "That person has no PIN yet",
+        .password => "That person has no password yet",
+    };
+}
+
+/// Count a wrong credential, and lock the till when there have been too
 /// many.
 ///
 /// A PIN is short, and a short PIN is found by trying every one of
@@ -2233,7 +2925,11 @@ fn noteLoginFailure(model: *Model) void {
     if (model.login_failures < model_mod.max_login_failures) return;
     model.login_failures = 0;
     model.login_locked_until = model.now_ms + model_mod.login_lockout_ms;
-    model.login_error = "Too many wrong PINs - try again in a moment";
+    model.login_error = "Too many wrong tries - try again in a moment";
+    // The guess that triggered the wait is not left in the pad. An
+    // operator who comes back after the countdown types a fresh one,
+    // rather than pressing Sign in on a secret they did not mean.
+    model.credential.clear();
 }
 
 /// Turn the cart into an order and write it.
@@ -2289,7 +2985,10 @@ fn placeOrder(model: *Model, fx: *Effects) void {
         .order_no = "",
         .order_type = model.cart_order_type,
         .status = .pending,
+        .status_code = @intFromEnum(domain.OrderStatus.pending),
         .status_label = domain.OrderStatus.pending.label(),
+        .advance_label = domain.OrderStatus.pending.actionLabel(),
+        .advanceable = domain.OrderStatus.pending.advanceable(),
         .type_label = model.cart_order_type.label(),
         .dining_table_id = 0,
         .customer_id = 0,
@@ -2309,7 +3008,12 @@ fn placeOrder(model: *Model, fx: *Effects) void {
     var count: usize = 0;
     for (model.cart[0..model.cart_len]) |line| {
         lines[count] = .{
-            .id = order_id + @as(i64, @intCast(count)),
+            // Namespace the line under the order. A plain
+            // `order_id + index` can collide with the next order's id
+            // when two sales land in adjacent milliseconds, and a
+            // remote line id is namespaced the same way under the
+            // receiver's negative local order id.
+            .id = order_id * 128 + @as(i64, @intCast(count)),
             .order_id = order_id,
             .product_id = line.product_id,
             // The line carries the station that cooks it, so the kitchen
@@ -2336,7 +3040,9 @@ fn placeOrder(model: *Model, fx: *Effects) void {
     model.last_order_items_count = 0;
     for (lines[0..count]) |line| model.last_order_items_count += line.qty;
     model.last_order_at = order.placed_at;
+    model.payment_check_id = 0;
     model.payment_error = "";
+    model.cash_tendered_buf.clear();
 
     model.busy = true;
     model.sale_pending = true;
@@ -2349,7 +3055,7 @@ fn placeOrder(model: *Model, fx: *Effects) void {
         model.error_text = "Could not make the request key - try again";
         return;
     };
-    repos.saveOrder(fx, order, lines[0..count], request_key);
+    repos.saveOrder(model, fx, order, lines[0..count], request_key);
 }
 
 /// The request key: this device's token, a dash, and the attempt's id.

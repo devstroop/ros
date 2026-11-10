@@ -27,14 +27,14 @@ passing it by value.
 
 | Group | Fields | Notes |
 |---|---|---|
-| Session | `role`, `role_chosen`, `signed_in`, `employee_id`, `employee_name` | The PIN hash never lives in the model; `resetSession` is the only teardown |
+| Session | `role`, `role_chosen`, `signed_in`, `employee_id`, `employee_name` | `resetSession` is the only teardown; the sign-in secret never appears here. The person waiting at the sign-in gate (`sign_in_employee_id`) is the exception: a sign-in ends it and a sign-out re-reads it from the row, through `choose_sign_in` |
 | Navigation | `screen_index`, `nav_section`, `stack`, `rail_split`, `menu_split`, `now_ms` | Screen index is an enum ordinal; the enum is append-only; the stack is session history (ADR-0015) |
 | Company | `company_id`, `company_name`, `currency_code`, `currency_symbol`, `tax_inclusive` | One company per database |
 | Datasets | seven bump buffers and seven row slices | Products, tables, employees, orders, customers, categories, order lines |
 | POS filters | `selected_category`, `search` | 0 means "all"; search is a `TextBuffer(64)` |
-| Sign-in | `pin`, `pin_salt_buf`, `salt_state`, `login_hash`, `operator_buf`, `login_error` | The salt is only usable once the database has confirmed it |
+| Sign-in | `credential`, `credential_kind`, `credential_revealed`, `salt_buf`, `salt_state`, `login_hash`, `operator_buf`, `login_error`, `login_failures`, `login_locked_until` | The secret is a `TextBuffer` the view cannot bind — it is in `view_unbound`, and the markup gets `credential_display()` instead. The salt is only usable once the database has confirmed it. |
 | Cart | `cart_buf`, `cart[50]`, `cart_len`, `cart_order_type` | Session state, never persisted until placed |
-| Runtime | `db_ready`, `busy`, `error_text`, `theme_dark` | `error_text` is shown by the shell's dismissable error banner |
+| Runtime | `db_ready`, `busy`, `error_text`, `theme_palette`, `theme_contrast_high` | `error_text` is shown by the shell's dismissable error banner; the two appearance fields are chrome the theme reads and nothing else does |
 
 ### Visibility rules
 
@@ -46,9 +46,10 @@ passing it by value.
    `visible_products(arena)`, `cart_lines(arena)`, `kitchen_tickets(arena)`.
 3. **Anything the view must not see is listed in `view_unbound`.**
    Current entries: `stack`, `employee_id`, `db_ready`, `busy`,
-   `company_id`, `theme_dark`, `salt_state`, `last_issued_order_id`,
-   `advance_order_id`. The view reads errors through the derived
-   `has_error` and `error_message` methods.
+   `company_id`, `theme_palette`, `theme_contrast_high`, `salt_state`,
+   `last_issued_order_id`, `advance_order_id`. The view reads errors
+   through the derived `has_error` and `error_message` methods, and the
+   chosen palette through `palette_code` and `contrast_high`.
 4. **Rows are plain data.** The markup cannot call a method on a row, so
    labels (`status_label`, `type_label`) are resolved at decode time and
    stored in the row.
@@ -64,7 +65,7 @@ allocator. Rows live in `bump.Bump(capacity)` byte buffers:
 | `products_buffer` | 96 KiB | Menu rows and their names |
 | `tables_buffer` | 24 KiB | Floor rows |
 | `employees_buffer` | 16 KiB | Staff rows |
-| `orders_buffer` | 48 KiB | Order rows |
+| `orders_buffer` | 64 KiB | Order rows |
 | `customers_buffer` | 32 KiB | Customer rows |
 | `categories_buffer` | 16 KiB | Category rows |
 | `order_lines_buffer` | 48 KiB | Order line rows |
@@ -90,8 +91,8 @@ does not fit is a menu the app cannot show; see
 
 | Family | Examples | Payload |
 |---|---|---|
-| Runtime-delivered | `pin_edit`, `search_edit`, `tick`, `*_loaded`, `db_failed` | Fixed by the platform: text edit event, timer event, DB result |
-| App-intent | `pick_role`, `open_section`, `add_to_cart`, `place_order`, `advance_order`, `toggle_theme` | Small scalars so markup can dispatch `on-press="add_to_cart:{product.id}"` |
+| Runtime-delivered | `credential_edit`, `search_edit`, `tick`, `*_loaded`, `db_failed` | Fixed by the platform: text edit event, timer event, DB result |
+| App-intent | `pick_role`, `pick_employee`, `credential_digit`, `toggle_reveal`, `open_section`, `add_to_cart`, `place_order`, `advance_order`, `toggle_theme`, `set_palette`, `toggle_contrast` | Small scalars so markup can dispatch `on-press="add_to_cart:{product.id}"` |
 | Internal result | `login_checked`, `order_placed`, `order_status_saved`, `config_saved` | `EffectDbResult`; never bound by markup, listed in `Msg.view_unbound` |
 
 Design notes:
@@ -116,7 +117,7 @@ pub fn boot(model: *Model, fx: *Effects) void {
         .mode = .repeating,
         .on_fire = Effects.timerMsg(.tick),
     });
-    repos.loadConfig(fx);                // first read: the PIN salt
+    repos.loadConfig(fx);                // first read: the installation salt
 }
 ```
 
@@ -149,17 +150,20 @@ Notable arms:
 
 | Arm | Behaviour |
 |---|---|
-| `pick_role` | Reset the session, set the role; kiosk roles sign in immediately and load data; PIN roles land on login |
-| `submit_login` | Refuse unless the salt is confirmed; hash the PIN, query `employee` by `pin_hash` **and the session's role**, wait for `login_checked` |
-| `login_checked` | On a row of the session's role: reset the session to home, set the operator, sign in, load data. On no row, or a row of another role: "Wrong PIN", clear PIN |
-| `sign_out` / `pick_role_again` | Reset the session; a PIN role lands on login, a kiosk on the role picker |
+| `pick_role` | Reset the session, set the role; kiosk roles sign in by device and load data; a role that needs a person lands on the sign-in gate, which opens on the people list |
+| `pick_employee` | Take the kind of secret and the mode from that person's row, and land on the sign-in screen that suits it — pad for a PIN, masked field for a password |
+| `submit_login` | Refuse while locked out, refuse an empty secret and a person nobody chose; then query the chosen employee's row. No hash is computed here |
+| `login_checked` | Only the page counts; the query's terminal result is not a wrong secret. On a row of the session's role whose `auth_kind` matches the surface: verify the row's hash, reset the session to home, set the operator, sign in, load data. On no row, a row of another role, or an empty hash: count a failure, clear the secret, say so. On a row whose kind differs: flip the surface, clear the secret, explain — and count nothing |
+| `credential_digit` / `credential_back` / `credential_clear` | The pad's taps. Each appends one digit to the buffer and the display shows a bullet for it |
+| `toggle_reveal` | Open or shut the eye. It changes what the view is shown, never what is stored |
+| `sign_out` / `pick_role_again` | Reset the session; a person role lands on login, a kiosk on the role picker |
 | `open_screen` / `open_section` | Route through `go()`, which checks `rbac.allows` and pushes the stack |
 | `go_back` | Pop; stay put at a root |
 | `place_order` | Build an order from the cart and `dbExec` it |
 | `order_placed` | Clear cart, go to confirmation, reload orders |
 | `advance_order` | Compute next status and write status + history atomically |
 | `*_loaded` | Decode a page into the model's bump buffers |
-| `config_loaded` | Adopt the stored PIN salt, or mark the salt as "to be installed" on a fresh install |
+| `config_loaded` | Adopt the stored installation salt and confirm it, or mark it "to be installed" on a fresh install. The query's terminal result is what writes the new salt |
 | `config_saved` | The salt write came back: confirm the salt, or show the failure and keep it unconfirmed |
 | `db_failed` | Map outcome to operator copy |
 | `tick` | Refresh `now_ms` |
@@ -186,8 +190,11 @@ total, and directly unit-tested.
 Sessions are the other half of navigation. `resetSession(model, gate)`
 clears everything the operator owns, keeps the device settings, and
 calls `resetTo(gate)`. A sign-in lands on the role's home; a sign-out
-lands on the role's gate. The history never contains the previous
-session, and Back at the first screen of a session stays there. See
+lands on the role's gate, which keeps the person who just left - the
+pending choice is the caller's, not the reset's, because a successful
+sign-in ends it and a sign-out re-reads it from the row. The history
+never contains the previous session, and Back at the first screen of a
+session stays there. See
 [ADR-0015](../decisions/0015-session-scoped-navigation.md).
 
 ### Error handling
@@ -215,7 +222,7 @@ main.zig
           config_loaded ──▶ adopt/create salt
                  │
                  ▼
-          role picker ──▶ login (PIN) ──▶ resetSession(home) ──▶ loadAll
+          role picker ──▶ people ──▶ login (pad or field) ──▶ resetSession(home) ──▶ loadAll
                      └──▶ kiosk sign-in ──▶ resetSession(board) ──▶ loadAll
 ```
 
@@ -223,13 +230,14 @@ Every session transition calls `resetSession` before it enters the next
 session, so the next operator starts from the gate with no cart, filters,
 forms or history from the previous one.
 
-The salt is the one piece of state a PIN hash cannot be checked without,
-so it has four states rather than a flag:
+The salt is the one piece of state a pre-bcrypt digest cannot be checked
+without - a bcrypt hash carries its own - so it has four states rather
+than a flag:
 
 | State | What it means | What it allows |
 |---|---|---|
 | `unknown` | The database has not answered yet | Nothing may be hashed with the salt |
-| `installing` | The database has no salt: this one will be installed with the operator | The setup may hash the operator's PIN with it |
+| `installing` | The database has no salt: this one will be installed with the operator | The setup may hash the operator's credential with it |
 | `verifying` | The write returned, but the database has not been read back | Nothing may be hashed until the stored salt is read |
 | `confirmed` | The database holds this salt | A sign-in may hash with it |
 
@@ -250,13 +258,16 @@ decision:
    UI cannot distinguish "loading" from "empty" for reads.
 3. **`now_ms` is the only clock.** There is no monotonic clock and no
    handling for clock jumps backwards.
-4. **The PIN is a fast digest.** Salted SHA-256 is a storage
-   improvement, not adequate PIN security (B-027).
+4. **The lockout lives in the session.** Five wrong tries stops the till
+   for a minute, and a restart clears the counter, so anyone who can
+   restart the app gets another five. [ADR-0016](../decisions/0016-what-a-pin-is.md)
+   named it; the hash itself is bcrypt now, so the counter is the
+   remaining half of (B-027).
 
 ## Tests that pin this contract
 
 - role picker is the first screen;
-- kiosk role signs in, PIN role lands on login;
+- kiosk role signs in by device, a person role lands on the picker;
 - a role cannot open a screen it may not use;
 - the permission matrix is total;
 - back returns to the previous screen, and back at a session root stays
@@ -268,8 +279,13 @@ decision:
 - model reports derived numbers instead of storing them;
 - layout survives a resize;
 - page decoder handles NULL, INTEGER and TEXT;
-- PIN hashing is deterministic and salt-dependent;
-- a waiter's PIN does not open an admin session;
+- credential hashing is deterministic per person, and two people with
+  the same secret get different hashes;
+- the secret shows as bullets, and the eye opens it;
+- the pad taps a PIN one digit at a time;
+- the row's `auth_kind`, not a stale list, decides which surface the
+  till offers - and a mismatch costs the person nothing;
+- a waiter's credential does not open an admin session;
 - a sign-in waits for the database to confirm the salt, and a failed
   salt write is not a confirmed salt;
 - a second instance adopts the salt that is already stored;

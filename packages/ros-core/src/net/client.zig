@@ -45,6 +45,41 @@ pub fn formatOps(buffer: []u8, host: []const u8, port: u16, cursor: *const curso
     );
 }
 
+/// `http://<host>:<port>/v1/snapshot?after=<seq>&version=<version>`
+///
+/// A snapshot is paged: the client asks for the next sequence until the
+/// header says `done`. The version is a hint; the server always serves
+/// its current snapshot.
+pub fn formatSnapshot(buffer: []u8, host: []const u8, port: u16, after: i64, version: u64) ![]const u8 {
+    return std.fmt.bufPrint(
+        buffer,
+        "http://{s}:{d}{s}?after={d}&version={d}",
+        .{ host, port, protocol.endpoints.snapshot, after, version },
+    );
+}
+
+/// `http://<host>:<port>/v1/reference?after=<version>`
+pub fn formatReference(buffer: []u8, host: []const u8, port: u16, after: u64) ![]const u8 {
+    return std.fmt.bufPrint(
+        buffer,
+        "http://{s}:{d}{s}?after={d}",
+        .{ host, port, protocol.endpoints.reference, after },
+    );
+}
+
+/// `http://<host>:<port>/v1/events`
+///
+/// The fetch is a `.stream`: the response is held open and each line is
+/// delivered as it arrives. It carries no cursor, because it carries no
+/// state.
+pub fn formatEvents(buffer: []u8, host: []const u8, port: u16) ![]const u8 {
+    return std.fmt.bufPrint(
+        buffer,
+        "http://{s}:{d}{s}",
+        .{ host, port, protocol.endpoints.events },
+    );
+}
+
 /// Parse an NDJSON body into operations. A blank line is skipped, and a
 /// malformed line is an error: a peer that sends half a record must be
 /// told, not half-applied.
@@ -78,6 +113,22 @@ test "the URLs name the endpoint and carry the whole vector cursor" {
     try std.testing.expectEqualStrings(
         "http://10.0.0.4:45871/v1/ops?since=dev-1:1042,dev-3:87",
         try formatOps(&buffer, "10.0.0.4", 45871, &cursor),
+    );
+    try std.testing.expectEqualStrings(
+        "http://10.0.0.4:45871/v1/events",
+        try formatEvents(&buffer, "10.0.0.4", 45871),
+    );
+}
+
+test "a reference URL asks after the version the peer holds" {
+    var buffer: [max_url_bytes]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "http://10.0.0.4:45871/v1/reference?after=0",
+        try formatReference(&buffer, "10.0.0.4", 45871, 0),
+    );
+    try std.testing.expectEqualStrings(
+        "http://10.0.0.4:45871/v1/reference?after=12",
+        try formatReference(&buffer, "10.0.0.4", 45871, 12),
     );
 }
 

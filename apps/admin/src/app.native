@@ -27,8 +27,11 @@
   <row padding="12" gap="8" cross="center" background="surface">
     <text size="lg" grow="1">{company_label}</text>
     <badge>{role_label}</badge>
-    <button size="sm" variant="ghost" on-press="toggle_theme">Theme</button>
+    <button size="sm" variant="ghost" icon="{theme_icon}" label="Switch theme" on-press="toggle_theme"/>
   </row>
+  <!-- A <row> has no border code path in the SDK - `border-color` on one
+       paints nothing - so the title bar's edge is an element of its own. -->
+  <separator/>
 
   <if test="{is_loading}">
     <row padding="6" gap="8" cross="center" background="surface">
@@ -58,6 +61,10 @@
     <use template="screen-upgrade"/>
   </if>
 
+  <if test="{show_waiting}">
+    <use template="screen-waiting"/>
+  </if>
+
   <if test="{show_landing}">
     <use template="screen-landing"/>
   </if>
@@ -75,12 +82,14 @@
   </if>
 
   <if test="{show_shell}">
-    <split grow="1" value="{rail_split}" on-resize="rail_resized">
+    <!-- `gap` on a split is the divider band's width, not padding around
+         the panes; the 9px default floats the hairline in empty space. -->
+    <split grow="1" gap="2" value="{rail_split}" on-resize="rail_resized">
       <column width="200" gap="2" padding="12" background="surface">
-        <text size="sm" foreground="text_muted">NAVIGATION</text>
         <for each="nav_sections" key="id" as="section">
           <list-item selected="{section.id == nav_section}" on-press="open_section:{section.id}">{section.label}</list-item>
         </for>
+        <spacer grow="1"/>
         <separator/>
         <text size="sm" foreground="text_muted">{operator_label}</text>
       </column>
@@ -135,7 +144,7 @@
           <if test="{screen_index == 46}"><use template="screen-discount-form"/></if>
           <if test="{screen_index == 47}"><use template="screen-category-form"/></if>
           <if test="{screen_index == 48}"><use template="screen-categories"/></if>
-          <if test="{screen_index == 6}"><use template="screen-reset-pin"/></if>
+          <if test="{screen_index == 6}"><use template="screen-reset-credential"/></if>
           <if test="{screen_index == 42}"><use template="screen-display"/></if>
           <if test="{screen_index == 28}"><use template="screen-settings"/></if>
           <if test="{screen_index == 29}"><use template="screen-settings-company"/></if>

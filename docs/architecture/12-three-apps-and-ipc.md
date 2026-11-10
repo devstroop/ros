@@ -1,13 +1,16 @@
 # Three apps and the protocol between them
 
-> **Status:** Target design, with the transport built. The three shells
-> exist and build ([slice 9.1 and the shell split](../plan/phase-9-three-apps-and-ipc.md));
-> slice 9.2 built the wire in `packages/ros-core/src/net/` and both
-> `admin` and `service` answer `GET /v1/hello` on a real socket. The ops
-> themselves, discovery's peer list and push are still ahead. The
-> decision is [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md);
+> **Status:** Implemented core. The three shells build; the wire (9.2),
+> the op log (9.3), discovery (9.4), reference data (9.5), the push
+> stream (9.6) and late-join bootstrap/compaction (9.7) are merged.
+> Packaging (9.9) remains. The decision is
+> [ADR-0017](../decisions/0017-three-apps-over-tcp-ip.md); the bootstrap
+> and compaction rules are
+> [ADR-0020](../decisions/0020-late-join-and-compaction.md); the pairing
+> token that decides who may ask is
+> [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md);
 > the delivery order is [`plan/phase-9`](../plan/phase-9-three-apps-and-ipc.md).
-> **Last reviewed:** 2026-10-23, after slice 9.2 landed.
+> **Last reviewed:** 2026-11-03, after the peer-pairing slice landed.
 
 ## What this page is
 
@@ -23,26 +26,39 @@ It is the target, not the as-built. The as-built picture is
 
 | App | Role | Sign-in | Home | Screens |
 |---|---|---|---|---|
-| `admin` | `admin` | PIN | `admin_dashboard` | 50 |
-| `service` | `waiter` | PIN | `waiter_tables` | 9 |
+| `admin` | `admin` | PIN or password | `admin_dashboard` | 50 |
+| `service` | `waiter` | PIN or password | `waiter_tables` | 12 |
 | `kiosk` | `kds` or `display`, chosen at install | device | `kds_board` or `display_board` | 3 per mode |
 
 Each app is a separate Native SDK app: its own `app.json`, its own id
 (`com.devstroop.ros.admin`, `com.devstroop.ros.service`, `com.devstroop.ros.kiosk`),
-its own window, its own engine-owned database in its own app-data
-directory, and its own release artifact.
+its own window, its own icon, its own engine-owned database in its own
+app-data directory, and its own release artifact. `scripts/package.sh`
+builds the three macOS DMGs and the
+[release runbook](../operations/release.md) covers signing, install and
+the per-app update cadence.
 
 ### The screen partition
 
 The split follows the permission matrix in `src/core/rbac.zig` exactly.
 `Role.needs_sign_in()` is already the boundary: `admin` and `waiter`
-sign in with a PIN, `kds` and `display` sign in by device.
+sign in with a credential - a PIN or a password, per person - and `kds`
+and `display` sign in by device.
 
 The counts are read off the enum and the matrix, not estimated. The
 `admin` app mounts the 50 screens the admin role may open, less the
-three every app shares; the `service` app mounts the 9 the waiter role
+three every app shares; the `service` app mounts the 12 the waiter role
 may open, less those three; the `kiosk` app mounts 3 per mode - its
 board and `order_detail` - plus the person picker and the sign-in.
+
+**The counter POS is the service app's.** The waiter role opens `pos`,
+`pos_cart` and `payments`, and the service shell mounts all three; the
+tables screen has "Counter sale" and "Payments" entry points. The
+`admin` app remains the wildcard superset, so a single-machine
+restaurant can still run the till from it and a manager can use the
+same screens for setup or correction. The kiosk roles never open a
+money screen. See
+[ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md).
 
 **These counts move, and they have moved.** The first draft of this
 page said 38, 11 and 3, read off the enum as it stood on 2026-10-21.
@@ -62,11 +78,11 @@ those two tests describe.
 | Screen group | admin | service | kiosk |
 |---|---|---|---|
 | `admin_dashboard`, `control_center` | ● | | |
-| `pos`, `pos_cart` | ● | | |
+| `pos`, `pos_cart` | ● | ● | |
 | `orders` | ● | ● | |
 | `order_detail` | ● | ● | ● |
 | `order_confirmation` | ● | ● | |
-| `payments` | ● | | |
+| `payments` | ● | ● | |
 | `customers` | ● | ● | |
 | `dining_tables`, `table_categories`, `floor_plan`, `reservations` | ● | | |
 | `kitchen_dishes`, `inventory_items`, `product_categories`, `suppliers`, `purchase_orders` | ● | | |
@@ -83,27 +99,35 @@ those two tests describe.
 | `setup`, `wizard`, `create_company`, `upgrade` | ● | | |
 | `role_picker` (the person picker) | ● | ● | ● |
 
+`setup`, `wizard`, `create_company` and `upgrade` are the onboarding
+path: every app mounts them by their own condition before a role
+exists, and the table records the role that may open them once signed
+in.
+
 `role_picker` is the one screen whose meaning changes, and **it is
 mounted in all three apps** - which is a change from the first draft of
 this page, and the change is a correction.
 
 Under [ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)
-the sign-in names the *person* and the PIN says they are that person.
-So the picker is no longer a choice between four roles: it is a list of
-the people who work here, each with the mode they work in, and it is
-the way in to the PIN. `admin` and `service` both sign in with a PIN,
-so both need it. In `kiosk` it carries the two device modes as well -
-the kitchen board and the customer display are not people, and nobody
-types a PIN into them - and the choice is stored in the device's
-configuration.
+the sign-in names the *person* and the credential says they are that
+person. So the picker is no longer a choice between four roles: it is a
+list of the people who work here, each with the mode they work in and a
+badge saying whether they sign in with a PIN or a password
+([ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)),
+and it is the way in to the credential. `admin` and `service` both sign
+in by person, so both need it. In `kiosk` it carries the two device
+modes instead - the kitchen board and the customer display are not
+people, and nobody types a credential into them - and the choice is
+stored in the device's configuration.
 
 The first draft of this page said the picker survived only in `kiosk`.
 That was written against the salt being settled but not implemented, and
 it does not match the code: `pick_employee` in `core/update.zig` is the
-entry to the PIN, and the login screen refuses a sign-in with "Choose
-who you are first" when it has not been sent. The enum's name stays -
-the enum is append-only - but the screen behind it is the **person
-picker** now, and it is mounted wherever a person signs in.
+entry to the credential, it takes both the mode and the kind of secret
+from that person's row, and the login screen refuses a sign-in with
+"Choose who you are first" when it has not been sent. The enum's name
+stays - the enum is append-only - but the screen behind it is the
+**person picker** now, and it is mounted wherever a person signs in.
 
 The `Screen` enum stays append-only. Nothing is renumbered and no
 ordinal moves: the markup's contract is the enum's order, and the
@@ -172,11 +196,17 @@ database.** It moves bytes. That is the whole of it.
   `accept` blocks, so a flag alone cannot wake it. The app sets the
   flag and connects to its own listener, which is the portable way to
   make `accept` return.
+- **The event threads:** A held-open `/v1/events` connection gets its
+  own thread. It watches the shared sequence and writes bytes; it does
+  not touch the model, the database or the outbox.
 
-This outbox is the one piece of shared mutable state in an app. It is
-app-owned memory, not the world: no clock, no allocator, no I/O happens
-in `update`. It is called out here because it is the one place the
-design bends, and because a reader should be able to find it.
+This outbox is the one shared mutable **buffer** in an app. The event
+stream adds one atomic counter, `Shared.event_seq`, which the app bumps
+after an op commits and every event thread reads; it carries no rows
+and no answer. Both are app-owned memory, not the world: no clock, no
+allocator, no I/O happens in `update`. The outbox is called out here
+because it is the one place the design bends, and because a reader
+should be able to find it.
 
 **It does not need a lock, and that is a finding rather than a
 preference.** `std.Thread.Mutex` is gone in Zig 0.16, and
@@ -261,10 +291,13 @@ so the traffic never leaves the host, and a loopback or same-subnet
 path proves the seam but not the network; more than one connection in
 flight at once, which the per-connection slots make room for but the
 spike does not exercise; and the wake-up path that a self-pipe would
-give. The macOS Local Network permission is also still untested: it is
-asked the first time an app opens a socket to a local-network address,
-which is exactly what the LAN bind does, and a machine that has never
-been asked will show the prompt.
+give. The macOS Local Network permission is also still untested by the
+spike: it is asked the first time an app opens a socket to a
+local-network address, which is exactly what the LAN bind does, and a
+machine that has never been asked will show the prompt. The packaged
+apps carry their own `NSLocalNetworkUsageDescription`; the kiosk's
+install grants it by hand
+([release runbook](../operations/release.md)).
 
 ### Why the client is `fx.fetch` and not a socket
 
@@ -293,14 +326,22 @@ could speak without a second protocol.
 
 ### Endpoints
 
-| Endpoint | Direction | Body | Purpose |
-|---|---|---|---|
-| `GET /v1/hello` | peer → peer | — | The peer card: device id, role, protocol version, app version, local clock |
-| `GET /v1/ops?since=<cursor>` | peer → peer | NDJSON out | Every op the peer holds that the cursor does not already cover |
-| `POST /v1/ops` | peer → peer | NDJSON in | Ops this peer produced |
-| `GET /v1/reference?after=<version>` | admin → peer | NDJSON out | Admin-owned reference rows above a version |
-| `GET /v1/snapshot` | peer → peer | NDJSON out | A compacted base state, for a device that joins late |
-| `GET /v1/events` | peer → peer | NDJSON out | A long-lived stream of push notifications |
+| Endpoint | Direction | Body | Token | Purpose |
+|---|---|---|---|---|
+| `GET /v1/hello` | peer → peer | — | not asked | The peer card: device id, role, protocol version, app version, local clock |
+| `GET /v1/ops?since=<cursor>` | peer → peer | NDJSON out | required | A page of durable ops the cursor does not already cover; `409` when the cursor is below the compacted floor |
+| `POST /v1/ops` | peer → peer | NDJSON in | required | Ops this peer produced |
+| `GET /v1/reference?after=<version>` | admin → peer | NDJSON out | required | Admin-owned reference rows above a version |
+| `GET /v1/snapshot?after=<seq>` | peer → peer | NDJSON out | required | One page of a compacted base state, for a device that joins late or fell below the floor |
+| `GET /v1/events` | peer → peer | NDJSON out | required | A long-lived stream of push notifications |
+
+"Required" is the pairing token in the `x-ros-token` header: a request
+that cannot present it is answered `401` with a one-line error and none of
+the restaurant's bytes, and counted on the admin's Control centre. The two
+endpoints that carry no restaurant data -
+`/v1/hello` and the 404 for a path this build does not serve - answer
+anyone, so an unpaired device is still seen. See
+[ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md).
 
 `GET /v1/events` is the push path. The server holds the response open
 and writes a line as something happens; the client reads it with
@@ -308,6 +349,17 @@ and writes a line as something happens; the client reads it with
 poll on a timer is the fallback, and the two coexist: the stream makes
 the common case immediate, the poll makes the system converge even if
 the stream is dropped.
+
+**As built.** The response is chunked NDJSON and the line is
+`{"seq":N}\n`, where `N` is the server's op-log sequence at the time of
+the write; a heartbeat line keeps an idle connection honest. The server
+gives each stream its own thread and watches a shared atomic sequence
+every 20ms, so the listener keeps accepting. The client holds one
+stream per peer, and a line pulls that peer's ops from the cursor; a
+pull already in flight sets `sync_pending`, and the answer issues
+exactly one follow-up. A terminal or timeout clears the stream key and
+the five-second poll reopens it. The line never carries the op: a
+missed line costs latency, never state.
 
 ### Records
 
@@ -323,10 +375,10 @@ An operation is one line:
 |---|---|---|
 | `id` | `id` | Globally unique: `<device_id>:<clock>:<sequence>` |
 | `entity_table` | `entity_table` | What the operation touched |
-| `entity_id` | `entity_id` | The row's key |
+| `entity_id` | `entity_id` | The row's key; for an order, status or payment, the order id on the origin device |
 | `operation` | `operation` | `create`, `update` or `delete` |
 | `logical_clock` | `logical_clock` | The Lamport counter of the writer |
-| `device_id` | `device_id` | The writer |
+| `device_id` | `device_id` | The writer. For a create this is normally the origin device; for a status or payment it can be a device that only holds a remapped copy. |
 | `created_at` | `created_at` | Epoch milliseconds |
 | `data` | `data_json` | The row snapshot after the operation |
 
@@ -353,6 +405,28 @@ Two rules govern every value on the wire:
 - **Money is an integer in minor units.** No float crosses the wire, and
   the decoder rejects a fractional part rather than truncating it.
 - **Time is epoch milliseconds.** One shape for every timestamp.
+
+### Order identity on the wire
+
+The op's `device_id` is the writer, and the vector cursor is keyed by it.
+It is not the order's cross-device name. An order's stable name is the
+pair `(origin_device, origin_id)`: the device that took the sale and
+that device's local order id.
+
+- A create op carries `origin_device` in its snapshot. The receiver uses
+  it; a create written before the origin columns existed falls back to
+  the op's `device_id`.
+- A status or payment op carries `origin_device` too, because the writer
+  may only hold a remapped copy. The receiver resolves the pair to its
+  own local id. The id in the snapshot is the origin id, not the
+  receiver's row key.
+- A local order keeps a positive `orders.id`; an order received from a
+  peer gets a negative local id. Lines are namespaced under the local
+  order id (`local_order_id * 128 + index`), and the line id on the wire
+  is informational.
+- `entity_id` for an order, status or payment is the origin order id.
+
+See [ADR-0019](../decisions/0019-cross-device-order-identity.md).
 
 ### Clocks
 
@@ -419,24 +493,63 @@ a fallback to the ephemeral one.
 
 Broadcast is blocked by some managed and guest networks, and macOS asks
 the user for Local Network permission the first time a socket is used.
-So every app also accepts a **manually configured peer address**, and
-the admin app keeps a list of the devices it has seen. A restaurant that
-blocks broadcast configures one address per device and never thinks
-about it again.
+The packaged apps carry their own `NSLocalNetworkUsageDescription`, so
+the prompt is in the app's words; the kiosk's install grants it by hand
+([release runbook](../operations/release.md)). So every app also accepts
+a **manually configured peer address**, and the admin app keeps a list
+of the devices it has seen. A restaurant that blocks broadcast
+configures one address per device and never thinks about it again.
 
-### Bootstrap
+### Bootstrap and compaction
 
 A device that has never seen the restaurant asks for `/v1/ops` with an
-empty cursor and replays the log. The log is the history, so replay
-*is* the state. When the log is compacted, the peer answers
-`/v1/snapshot` instead: a base state plus the per-device clocks it was
-taken at.
+empty cursor and replays the durable log. The log is the history, so
+replay *is* the state while the range still exists.
 
-A device that has been offline for a week replays the ops it missed,
-from whichever peer holds them. Because ops are idempotent and the
-cursor is per source device, replaying a range a peer has already sent
-costs nothing but time - and a range from one peer can never hide a
-range from another.
+The log does not grow without bound. A SQLite trigger keeps a durable
+`ops_since_compact` counter; after 128 new ops the app compacts the log
+into a snapshot and keeps the last 64 clocks per device. The highest
+deleted clock for each device is the **floor**, stored in `sync_state`.
+Compaction writes the snapshot metadata and its lines, deletes the range
+below the floor and marks the retained rows in one transaction.
+
+The snapshot is NDJSON: a header line carrying the format version, the
+snapshot generation, the per-device clocks it was taken at, and the page
+position; then synthetic `create`, `order_status` and `payment` ops for
+the current state. The lines are ordinary wire ops, applied through the
+same idempotent path as a live op, with no op-log write and no cursor
+move per line. The receiver adopts the header clocks only after the last
+page, using the per-device maximum, so an interrupted bootstrap starts
+again from the top.
+
+A peer whose cursor does not cover the floor cannot replay the missing
+range. `/v1/ops` answers:
+
+```json
+{"error":"snapshot required","snapshot":"/v1/snapshot"}
+```
+
+with status `409`. The client resets its snapshot position, pages
+`/v1/snapshot?after=0` until the header says `done`, adopts the clocks,
+and then pulls the tail above them. A device that has been offline for a
+week therefore converges: the snapshot covers the week, and the tail
+covers what happened while it was reading.
+
+Both reads are async: the net thread parks the connection, the loop
+thread reads SQLite and answers. One pending answer slot is enough
+because the net thread is serial; a competing short request while a read
+is in flight gets `503`. A page is bounded by the 32 KiB frame. An op
+page that fills before its row limit is progress: the lines that fit are
+sent and the next pull resumes above the last clock. A single op or
+snapshot line that cannot fit in an empty frame is refused with `413`
+rather than split.
+
+The snapshot covers current orders, their lines, the current status and
+payments. It does not carry status history, voided drafts or reference
+data: a late joiner still gets the menu from the admin's
+`/v1/reference` document. An admin that is closed cannot seed a
+brand-new device's menu, but it is not needed for the restaurant to keep
+selling.
 
 ## Who owns what
 
@@ -446,14 +559,22 @@ impossible, and only accepted where it cannot.
 | Entity | Writer | How it reaches other devices | Merge |
 |---|---|---|---|
 | Company, settings, tax slabs, printers | `admin` | `GET /v1/reference` | The admin's row wins; a peer accepts only a newer version |
-| Employees and PINs | `admin` | `GET /v1/reference` | Same - but see [The sign-in problem](#the-sign-in-problem) before trusting this row |
+| Employees, their hashes and their `auth_kind` | `admin` | `GET /v1/reference` | Self-verifying on arrival - see [The sign-in problem](#the-sign-in-problem-and-how-it-was-settled) |
 | Product categories, products, modifier groups | `admin` | `GET /v1/reference` | Same |
 | Dining tables, table categories | `admin` | `GET /v1/reference` | Same |
 | Customers | the device that created the row | ops | Last writer - on the **vector** clock and then the device id, because two devices' scalar clocks are not comparable |
 | An order's content and its lines | the device that created the order | ops | Single writer - nobody else writes it |
 | An order's status | any device | ops | Monotonic: the furthest along wins |
-| Payments | the device that took the money | ops | Single writer, idempotent by request key ([ADR-0014](../decisions/0014-order-identity.md)) |
+| Payments | the device that took the money, `admin` or `service` | ops | Single writer, idempotent by request key ([ADR-0014](../decisions/0014-order-identity.md)) |
 | Devices | each device, for itself | ops | Insert-only |
+
+The counter POS is the service app's, so the device that takes the
+money is usually the waiter's tablet or counter terminal
+([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)). The
+payment is an op like any other: the device that took it owns it, and
+the order's status transition is the idempotency key, so a second tap
+finds the order closed and writes nothing. The admin app can still take
+a payment as the wildcard superset; the kiosk cannot.
 
 Two properties fall out of this and both are worth stating plainly:
 
@@ -467,92 +588,70 @@ What is left is the genuinely hard case, and it is already an open
 question in the plan: two waiters editing the same table's order at the
 same time ([`open-questions.md` A20](../plan/open-questions.md)).
 
-## The sign-in problem
+## The sign-in problem, and how it was settled
 
-**This is a blocker, and it is not solved by the protocol.** It is
-recorded here because the three apps cannot work without settling it,
-and because a reader who takes the ownership table at face value will
-build the service app and then find that no waiter can sign in.
+The three apps cannot work without this, and the first version of this
+page recorded it as a blocker.
 
-The mechanism, as it stands:
+The mechanism, as it stood:
 
-- `data/auth.zig` `hashPin` derives the bcrypt salt from the
-  **installation salt** (`deriveSalt`), so a hash is a function of
-  (installation salt, PIN) and of nothing else.
-- `data/repos.zig` `login_sql` finds the employee by **matching the
+- `data/auth.zig` derived the bcrypt salt from the **installation salt**
+  alone, so a hash was a function of (installation salt, credential) and
+  of nothing else.
+- `data/repos.zig` `login_sql` found the employee by **matching the
   computed hash for equality**:
   `WHERE (pin_hash = ?1 OR pin_hash = ?2) AND role = ?3 AND active = 1`.
-- `data/auth.zig` says why it is written that way: a random
-  per-employee salt "would mean trying every employee in turn, and a
-  slow hash for each of them".
-- The installation salt is generated once per **installation**
-  (`main.zig` calls `auth.makeSalt`) and stored in `app_config.pin_salt`
-  by `repos.saveSalt`, which is `ON CONFLICT DO NOTHING` - written once
-  and never replaced.
+- The installation salt was generated once per **installation**
+  (`main.zig` calls `auth.makeSalt`) and stored in `app_config` under
+  `pin_salt` by `repos.saveSalt`, which is `ON CONFLICT DO NOTHING` -
+  written once and never replaced.
 
 Each app has its own database in its own data directory, so **each app
 has its own installation salt**. The employee hashes were computed
-against the admin app's salt. The service app computes
-`hashPin(service_salt, "123456")`, which is a different bcrypt string
-from the stored one, the equality match misses, and **the waiter cannot
-sign in** - including in exactly the case the design is built for: the
-admin app is closed.
+against the admin app's salt. The service app hashed the same PIN against
+its own, which is a different bcrypt string from the stored one, the
+equality match missed, and **the waiter could not sign in** - including
+in exactly the case the design is built for: the admin app is closed.
 
-There are two ways out.
+There were two ways out, and the second is what shipped.
 
-### Option A - replicate the installation salt
+**Replicating the salt** - making it reference data owned by the admin
+app, like the employee rows - needed no schema change, no migration and
+no UX change, and the existing sign-in worked unchanged. Its cost was
+that a **shared secret crossed the wire in plain HTTP**, and a stolen
+service device's database became as crackable as the admin's. Once a
+secret has crossed a wire in plaintext, it has crossed it.
 
-The salt becomes reference data owned by the admin app, exactly like the
-employee rows. The service app stores it and the existing sign-in path
-works unchanged: no schema change, no migration, no UX change.
+**Making the hash the employee's** is what
+[ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md) decided,
+by [#95](https://github.com/devstroop/ros/issues/95):
 
-The cost is that a **shared secret crosses the wire in plain HTTP**,
-and a stolen service device's database becomes as crackable as the
-admin's is today. It also contradicts the security claim below.
+- `hashCredential` derives the bcrypt salt from the installation salt
+  **and the employee's id**, so two employees with the same secret do not
+  share a hash, and the derivation is reproducible - which matters,
+  because `update` is pure and has no randomness to draw from.
+- The **picker names the person** before anything is checked, so the
+  sign-in fetches their row by id instead of searching for a hash. That
+  is what made the per-employee salt affordable: one slow hash per
+  sign-in, not one per candidate.
+- A bcrypt crypt string embeds its own salt, so the replicated row is
+  **self-verifying**: any device holding it checks a credential with one
+  `bcrypt.strVerify` and needs nothing else. Nothing but employee data
+  crosses the wire.
 
-### Option B - the salt becomes per employee
+A legacy digest is the one thing that still needs the installation salt,
+because it was computed from it. Such a row waits for the database to
+confirm the salt, and the first sign-in that verifies rewrites it in the
+bcrypt form; after that the row travels on its own.
 
-`employee` grows a per-employee random salt. A bcrypt crypt string
-already embeds its own salt, so the row becomes **self-verifying**: any
-device holding the row can verify the PIN with one `bcrypt.strVerify`
-and needs nothing else.
-
-The sign-in then has to identify the employee before it hashes - which
-is exactly the follow-up ADR-0016 already records: *"The per-employee
-salt, when the sign-in can identify the employee before it hashes: an
-employee picker makes the salt per employee and the login one hash."*
-The alternatives are an employee picker (one hash) or trying the
-active employees of that role in turn (one hash each, a few hundred
-milliseconds at cost 2^10).
-
-The cost is a schema migration and a sign-in flow change, which is a
-product decision.
-
-### The recommendation
-
-**Option B.** It is the one that keeps the wire free of a shared
-secret, it is the recorded follow-up of an accepted decision, and it
-makes a replicated employee row self-verifying - which is the property
-the whole three-app design needs. Option A is cheaper to build and
-weakens the threat model in a way that is awkward to undo later, because
-once a secret has crossed a wire in plaintext it has crossed it.
-
-The question belongs to the product as much as to engineering, so it is
-[open question D19](../plan/open-questions.md) and it must be answered
-before the protocol is frozen - not during the implementation of it.
-
-**It is answered: the salt becomes per-employee**, by
-[#95](https://github.com/devstroop/ros/issues/95) - the sign-in
-identifies the employee before it hashes, so the row is self-verifying
-and no shared secret crosses the wire. That issue also plans the picker
-*in place of the role picker*, which the three-app split makes
-convenient: the `service` app signs in by picking an employee, and the
-role picker is only still needed by `kiosk`, for the choice between the
+The picker that makes this work replaced the role choice for the two
+apps that sign people in: `service` lets a waiter in by picking them,
+and the role picker survives only in `kiosk`, for the choice between the
 kitchen board and the customer display.
 
-Whichever way it goes, one thing is settled now: **the employee row
+What was settled before the answer, and still holds: **the employee row
 replicates as reference data, and the row must contain everything a
-device needs to verify a PIN offline.** A row that needs a second,
+device needs to verify a credential offline.** A row that needs a second,
 separately replicated secret is the thing to avoid.
 
 ## Failure modes
@@ -571,32 +670,56 @@ separately replicated secret is the thing to avoid.
 
 ## Security
 
-The trust model is a trusted LAN, and it is a decision rather than an
-omission: a restaurant's devices sit on a network the owner controls,
-and the alternative - pairing, certificates, a key exchange - is a
-second product.
+The trust model is a trusted LAN **that a device has to prove it belongs
+to**. A restaurant's devices sit on a network the owner controls, and the
+alternative to that - certificates, a key exchange, an enrolment
+ceremony - is a second product. What the network alone does not tell you
+is which machine is in the restaurant, so the restaurant keeps one
+secret and every request that carries its data says it. That is
+[ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md).
 
 What that means concretely:
 
-- Every peer can read the reference data and the ops. A device that
-  joins the LAN is a device in the restaurant.
-- **PINs are never sent.** The digits a cashier types never leave the
-  device. What crosses the wire is the **hash** - and, under the salt
-  as it stands today, the **installation salt** as well, because the
-  hash is computed from it. That is why
-  [the sign-in problem](#the-sign-in-problem) has to be settled before
-  this section can be called accurate: a peer must receive a row it can
-  verify a PIN against, and the salt question decides whether that row
-  is self-verifying or whether a shared secret has to travel with it.
+- **One pairing token per installation**, held in `app_config` under
+  `pairing_token`, shown on the admin's Control centre, rotatable by
+  typing a new one there and setting it on every other device. It says
+  *which restaurant*, not *which machine* - per-device identity is
+  already on the wire, in the installation token that signs every op
+  this device writes.
+- **`x-ros-token` goes on every request for the restaurant's data** -
+  `GET` and `POST /v1/ops`, `GET /v1/reference`, `GET /v1/snapshot` and
+  the held-open `GET /v1/events` - and a request that cannot present it
+  gets `401` with a one-line error and none of the restaurant's bytes. The
+  events stream is checked in the listener
+  thread, which answers it without asking the app; the other four are
+  checked in `update`. A refusal is counted, and the count is on the
+  same screen, because an owner whose till was misconfigured needs to
+  see that something asked.
+- **`/v1/hello` answers anyone**, deliberately. It carries this
+  device's own name, role and port and nothing of the restaurant's, and
+  it is how a device that has not been paired yet becomes visible rather
+  than invisible. An earlier draft of this page said the shared secret
+  would be presented in `/v1/hello`; no client fetches it, so that
+  sentence described a handshake nobody performs and guarded nothing.
+- **A credential is never sent.** What a person taps or types never
+  leaves the device. What crosses the wire is the employee **row**, hash
+  included, and a bcrypt hash carries its own salt, so the row verifies
+  itself. A stolen database is still bcrypt at cost 2^10 per guess, and a
+  stolen reference document is no better.
+- **The installation salt does travel**, in the same document, under
+  `pin_salt` - not because the bcrypt rows need it, but because the
+  legacy `sha256(pin_salt || PIN)` rows do, and a device that joined
+  after those were written has nothing else to check them against. It
+  travels only to a paired peer now, and retiring it means retiring
+  those rows: see [`04-data-layer`](04-data-layer.md) and
+  [#134](https://github.com/devstroop/ros/issues/134).
 - Money is never trusted from a peer: an order's total is recomputed
   from its lines by the device that owns the order.
 - The wire is plain HTTP on the LAN. It is readable by anyone on the
-  wire, and that is a known, accepted cost.
-
-The follow-up is peer authentication: a shared secret in the admin app's
-settings, presented in `/v1/hello`. That is a small change to one
-endpoint and it should be decided before the first restaurant runs on
-this.
+  wire, and that is a known, accepted cost: whoever can read it can also
+  read the token. A network the owner does not control - a guest SSID, a
+  shared router - is the case TLS would answer, and it is a follow-up,
+  not a solved thing.
 
 ## The shared package
 
@@ -637,18 +760,22 @@ meaningful across the three databases.
 
 ## What is not decided here
 
-- **The PIN salt.** The sign-in problem above is a blocker: either the
-  installation salt replicates as reference data, or it becomes
-  per-employee. The second is the recommendation, and it is a product
-  decision as much as an engineering one.
-- Whether the counter POS is the `admin` app or the `service` app.
-  Today the permission matrix gives `pos` and `payments` to `admin`
-  only, which puts the till on the dedicated machine. If the till is a
-  counter tablet, the matrix has to change and the partition with it.
+- ~~**The PIN salt.**~~ **Decided:** the bcrypt salt is derived per
+  employee and the sign-in identifies the person before it hashes, so a
+  replicated row verifies a credential with nothing else and no shared
+  secret crosses the wire
+  ([ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md)).
+  Whether a person taps a PIN or types a password is decided by their row
+  ([ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)).
+- ~~Whether the counter POS is the `admin` app or the `service` app.~~
+  **Decided:** the counter POS is the `service` app, and the `admin` app
+  remains the wildcard superset
+  ([ADR-0021](../decisions/0021-counter-pos-is-the-service-app.md)).
 - Peer authentication (see Security).
-- Compaction: how the log is summarised into a snapshot, and when.
 - Whether a removed device's ops are retained.
+- Whether the snapshot should carry status history for the admin's
+  audit screens.
 - The port numbers, which are a proposal, not a reservation.
 
-The first three are tracked as open questions. The rest belong to the
-phase that needs them.
+Peer authentication is the remaining open question; the salt and the
+counter POS are settled. The rest belong to the phase that needs them.

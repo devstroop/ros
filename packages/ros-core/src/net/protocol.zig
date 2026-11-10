@@ -36,6 +36,19 @@ pub const endpoints = struct {
     pub const events = "/v1/events";
 };
 
+/// The header a peer presents its pairing token in, and the longest token
+/// the wire will carry.
+///
+/// The token says *which restaurant* a request belongs to, not which
+/// person: it buys membership on the wire and nothing more, which is the
+/// whole of what `docs/decisions/0023-a-peer-presents-a-shared-device-token.md`
+/// claims and the whole of what it refuses to claim. A plain header rather
+/// than `Authorization: Bearer`, because the server reads its own headers
+/// and the SDK copies whatever it is handed - there is no scheme to
+/// negotiate over plaintext HTTP.
+pub const token_header = "x-ros-token";
+pub const max_token_bytes = 64;
+
 /// The device roles, spelled the way `device.role` stores them.
 ///
 /// This is deliberately not `core.navigation.Role`: the wire describes
@@ -70,6 +83,13 @@ pub const Hello = struct {
         return std.mem.eql(u8, self.proto, version);
     }
 };
+
+/// One event-stream notification: the op log moved to `seq`. The line
+/// is a hint, not state - the receiver pulls the ops from the cursor it
+/// holds - so a lost line costs latency, never an op.
+pub fn formatEvent(buffer: []u8, seq: u64) ![]const u8 {
+    return std.fmt.bufPrint(buffer, "{{\"seq\":{d}}}\n", .{seq});
+}
 
 /// Write the hello card as one JSON line.
 pub fn encodeHello(writer: *std.Io.Writer, hello: Hello) !void {
@@ -162,6 +182,11 @@ test "the hello card round-trips, and the beacon and the endpoint agree" {
     try std.testing.expectEqualStrings("192.168.1.42", decoded.host);
     try std.testing.expectEqual(@as(u16, 45892), decoded.tcp);
     try std.testing.expect(decoded.compatible());
+}
+
+test "an event line names the sequence and ends with a newline" {
+    var buffer: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("{\"seq\":42}\n", try formatEvent(&buffer, 42));
 }
 
 test "a hello card from another protocol version is not compatible" {

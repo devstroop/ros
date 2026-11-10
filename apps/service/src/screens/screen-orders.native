@@ -5,24 +5,34 @@
      than that. A file may hold several templates, so a screen that
      shares a file with its neighbours costs nothing. -->
 
-<!-- The order list. Every order on the board, newest first, with the
-     status that the kitchen is working through. The list is the model's
-     live view of the `orders` table - a status change anywhere in the
-     app lands here without a refresh. -->
+<!-- The order list. Open orders first-class, newest first, with the
+     status that the kitchen is working through; closed tickets stay
+     below them so the receipt is still one tap away. The list is the
+     model's live view of the `orders` table - a status change anywhere
+     in the app lands here without a refresh. -->
+
+<import src="parts.native"/>
 
 <template name="screen-orders">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
       <text size="heading" grow="1">Orders</text>
-      <badge>{order_count} open</badge>
+      <badge>{open_order_count} open</badge>
       <button size="sm" variant="ghost" on-press="open_payments">Payments</button>
     </row>
 
     <if test="{order_count == 0}">
       <column background="surface" radius="md" padding="16">
-        <text foreground="text_muted">No open orders.</text>
+        <text foreground="text_muted">No orders yet.</text>
       </column>
     </if>
+    <else>
+      <if test="{open_order_count == 0}">
+        <column background="surface" radius="md" padding="16">
+          <text foreground="text_muted">No open orders. The paid tickets are below.</text>
+        </column>
+      </if>
+    </else>
 
     <scroll grow="1">
       <column gap="4">
@@ -30,11 +40,21 @@
           <card padding="12">
             <row gap="12" cross="center">
               <text grow="1" on-press="open_order:{order.id}">{order.order_no}</text>
-              <badge>{order.status_label}</badge>
+              <use template="status-badge" code="{order.status_code}" label="{order.status_label}"/>
               <text foreground="text_muted">{order.type_label}</text>
               <text>{currency_symbol}{fixed(order.total_minor / currency_divisor, currency_decimal_count)}</text>
-              <button size="sm" variant="secondary" disabled="{advancing}" on-press="advance_order:{order.id}">Advance</button>
-              <button size="sm" variant="primary" on-press="pay_order:{order.id}">Pay</button>
+              <!-- A closed ticket has taken its money. Offering the
+                   same buttons again would be a no-op on the move and a
+                   second charge on Pay. -->
+              <if test="{order.paid}">
+                <badge>Paid</badge>
+              </if>
+              <else>
+                <if test="{order.advanceable}">
+                  <button size="sm" variant="secondary" disabled="{advancing}" on-press="advance_order:{order.id}">{order.advance_label}</button>
+                </if>
+                <button size="sm" variant="primary" on-press="pay_order:{order.id}">Pay</button>
+              </else>
             </row>
           </card>
         </for>
@@ -51,7 +71,7 @@
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
       <text size="heading" grow="1">Order {selected_order_no}</text>
-      <badge>{selected_order_status}</badge>
+      <use template="status-badge" code="{selected_order_status_code}" label="{selected_order_status}"/>
       <button size="sm" variant="ghost" on-press="open_orders">Back</button>
     </row>
 
@@ -67,7 +87,7 @@
             <row cross="center">
               <text grow="1">{line.product_name}</text>
               <text>{line.qty}</text>
-              <text>{currency_symbol}{fixed(line.unit_price_minor * line.qty / 100, 2)}</text>
+              <text>{currency_symbol}{fixed(line.unit_price_minor * line.qty / currency_divisor, currency_decimal_count)}</text>
             </row>
           </for>
         </column>
@@ -78,27 +98,62 @@
         </row>
         <row gap="8">
           <spacer grow="1"/>
-          <button variant="primary" on-press="pay_selected_order">Take the payment</button>
+          <if test="{selected_order_can_pay}">
+            <button variant="primary" on-press="pay_selected_order">Take the payment</button>
+          </if>
+          <else>
+            <text foreground="text_muted">No payment is due.</text>
+          </else>
         </row>
       </column>
     </card>
+
+    <!-- A wrong ticket has to be cancellable before the money is
+         taken. The reason is part of the record, not an optional note:
+         a void that cannot say why is not an audit trail. -->
+
+    <if test="{selected_order_can_void}">
+      <card padding="16" width="520">
+        <column gap="8">
+          <text size="sm" foreground="text_muted">VOID THIS ORDER</text>
+          <column gap="4">
+            <text size="sm" foreground="text_muted">Reason</text>
+            <text-field
+              text="{void_reason}"
+              placeholder="Wrong table, customer left, ..."
+              label="Reason"
+              on-input="void_reason_edit"
+            />
+          </column>
+          <row gap="8">
+            <spacer grow="1"/>
+            <button variant="secondary" on-press="void_order:{selected_order_id}">Void order</button>
+          </row>
+        </column>
+      </card>
+    </if>
   </column>
 </template>
 
-<!-- The money the restaurant has taken. The cashier's screen takes a
-     payment; this one is the owner asking what came in, and when. -->
+<!-- The money the restaurant has taken, as a ledger. The cashier's
+     screen takes a payment; this one is the owner asking what came in,
+     and when. The figure below is the sum of the rows on this list, and
+     the list is the last two hundred payments over every day - so it is
+     called LISTED, not TAKEN. TAKEN is the report's word for one day's
+     tickets (ADR-0025), and two screens using one word for two scopes is
+     the mistake that page is here to stop repeating. -->
 
 <template name="screen-payments">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
       <text size="heading" grow="1">Payments</text>
-      <text foreground="text_muted">{payment_count} taken</text>
+      <text foreground="text_muted">{payment_count} listed</text>
     </row>
 
     <row gap="12">
       <card padding="16" grow="1">
         <column gap="4">
-          <text size="sm" foreground="text_muted">TAKEN</text>
+          <text size="sm" foreground="text_muted">LISTED</text>
           <text size="display">{currency_symbol}{fixed(payments_total_minor / currency_divisor, currency_decimal_count)}</text>
         </column>
       </card>

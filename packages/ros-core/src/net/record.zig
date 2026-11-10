@@ -53,6 +53,136 @@ pub const ParsedId = struct {
     sequence: u64,
 };
 
+/// One line of an order, as the op carries it. The name and the price
+/// are frozen at the moment of the sale, so the receiving device can
+/// show the ticket even when its own menu has moved on.
+///
+/// `id` is the writer's line id. The receiver does not use it: it
+/// namespaces its own line ids under its local order id, because two
+/// devices' line ids are not comparable.
+pub const OrderLineSnapshot = struct {
+    id: i64,
+    product_id: ?i64 = null,
+    product_name: []const u8,
+    qty: i64,
+    unit_price_minor: i64,
+    tax_bps: i64,
+    notes: []const u8 = "",
+    /// Whether the plate is in the seller's stock figure. A snapshot
+    /// carries the marker so a receiver that tracks the product now
+    /// does not restore stock the seller never took off. Absent on
+    /// live ops, where the receiver derives it from its own shelf.
+    stock_taken: ?bool = null,
+};
+
+/// The order aggregate one op carries.
+///
+/// The order number is deliberately absent. It is a local sequence on
+/// each database, assigned by the database that stores the order, so
+/// two devices never fight over the same ticket number.
+///
+/// The order's stable cross-device identity is the pair
+/// (`origin_device`, `id`): the device that took the sale and that
+/// device's local order id. `id` is NOT the receiving database's row
+/// key. A receiver looks the pair up and stores the order under its own
+/// local id (a negative one when the order came from a peer), so two
+/// devices that minted the same id stay two orders.
+pub const OrderSnapshot = struct {
+    /// The order id on `origin_device`.
+    id: i64,
+    /// The device that took the sale. Absent on ops written before the
+    /// origin columns existed; the writer's `device_id` is the origin
+    /// in that case.
+    origin_device: []const u8 = "",
+    order_type: i64,
+    status: i64,
+    dining_table_id: ?i64 = null,
+    customer_id: ?i64 = null,
+    employee_id: ?i64 = null,
+    subtotal_minor: i64,
+    tax_minor: i64,
+    discount_minor: i64,
+    total_minor: i64,
+    placed_at: i64,
+    notes: []const u8 = "",
+    lines: []const OrderLineSnapshot = &.{},
+};
+
+/// A status move. It is its own op because the order's content is
+/// immutable and the status is the one part that moves.
+///
+/// `id` is the order id on `origin_device`, not the local id of the
+/// device that wrote the op. The writer can be a third device that only
+/// holds a remapped copy of the order; the origin is what travels.
+pub const OrderStatusSnapshot = struct {
+    id: i64,
+    origin_device: []const u8 = "",
+    status: i64,
+    changed_at: i64,
+};
+
+/// The money. One payment per order; the payment id is the receiving
+/// database's local order id, which is what makes a second delivery a
+/// duplicate rather than a second charge.
+///
+/// `order_id` is the order id on `origin_device`; `origin_device` names
+/// that device. The receiver resolves the pair to its own local id.
+pub const PaymentSnapshot = struct {
+    order_id: i64,
+    origin_device: []const u8 = "",
+    mode: i64,
+    amount_minor: i64,
+    paid_at: i64,
+};
+
+/// One movement of the shelf, and the reason it moved.
+///
+/// A sale and a void are deltas: `qty` is null and `delta` is applied to
+/// whatever the receiving device holds. A count and a snapshot are
+/// absolute: `qty` is the number the shelf should say now. Absolute
+/// movements win, because a count is a measurement rather than a guess.
+pub const StockMovement = struct {
+    product_id: i64,
+    delta: i64 = 0,
+    qty: ?i64 = null,
+    reason: []const u8 = "",
+    /// Human-readable provenance. The receiving device keeps it in its
+    /// own `stock_adjustment` row, so the ledger survives the trip.
+    reference: []const u8 = "",
+};
+
+/// The stock side of an op. A count carries one movement; a snapshot
+/// carries one per counted product. Sales and voids do not need this
+/// record: every device derives them from the order op it already
+/// applies, line by line.
+pub const StockSnapshot = struct {
+    movements: []const StockMovement = &.{},
+};
+
+pub fn parseOrder(arena: std.mem.Allocator, data_json: []const u8) !OrderSnapshot {
+    return std.json.parseFromSliceLeaky(OrderSnapshot, arena, data_json, .{
+        .ignore_unknown_fields = true,
+    });
+}
+
+pub fn parseOrderStatus(arena: std.mem.Allocator, data_json: []const u8) !OrderStatusSnapshot {
+    return std.json.parseFromSliceLeaky(OrderStatusSnapshot, arena, data_json, .{
+        .ignore_unknown_fields = true,
+    });
+}
+
+pub fn parsePayment(arena: std.mem.Allocator, data_json: []const u8) !PaymentSnapshot {
+    return std.json.parseFromSliceLeaky(PaymentSnapshot, arena, data_json, .{
+        .ignore_unknown_fields = true,
+    });
+}
+
+pub fn parseStock(arena: std.mem.Allocator, data_json: []const u8) !StockSnapshot {
+    return std.json.parseFromSliceLeaky(StockSnapshot, arena, data_json, .{
+        .ignore_unknown_fields = true,
+    });
+}
+
 /// `<device_id>:<logical_clock>:<sequence>` - unique without a
 /// coordinator, and recognisable from its own text.
 pub fn formatId(buffer: []u8, device_id: []const u8, clock: u64, sequence: u64) ![]const u8 {
@@ -282,4 +412,91 @@ test "an op without data still carries an empty object" {
         \\{"id":"dev-1:5:1","entity_table":"config","entity_id":"theme","operation":"delete","logical_clock":5,"device_id":"dev-1","created_at":1}
     );
     try std.testing.expectEqualStrings("{}", op.data_json);
+}
+
+test "an order snapshot round-trips with its lines" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const lines = [_]OrderLineSnapshot{.{
+        .id = 2,
+        .product_id = 1,
+        .product_name = "Paneer Tikka",
+        .qty = 2,
+        .unit_price_minor = 24500,
+        .tax_bps = 500,
+        .notes = "no onion",
+    }};
+    const snapshot = OrderSnapshot{
+        .id = 1_700_000_000_000,
+        .origin_device = "dev-3",
+        .order_type = 0,
+        .status = 0,
+        .dining_table_id = 3,
+        .customer_id = null,
+        .employee_id = 7,
+        .subtotal_minor = 49000,
+        .tax_minor = 2450,
+        .discount_minor = 0,
+        .total_minor = 51450,
+        .placed_at = 1_700_000_000_000,
+        .notes = "",
+        .lines = &lines,
+    };
+
+    var out = std.Io.Writer.Allocating.init(arena);
+    try std.json.Stringify.value(snapshot, .{}, &out.writer);
+
+    const again = try parseOrder(arena, out.written());
+    try std.testing.expectEqual(snapshot.id, again.id);
+    try std.testing.expectEqualStrings(snapshot.origin_device, again.origin_device);
+    try std.testing.expectEqual(snapshot.total_minor, again.total_minor);
+    try std.testing.expectEqual(@as(usize, 1), again.lines.len);
+    try std.testing.expectEqualStrings("Paneer Tikka", again.lines[0].product_name);
+    try std.testing.expectEqual(@as(i64, 2), again.lines[0].qty);
+}
+
+test "a status snapshot round-trips" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const snapshot = OrderStatusSnapshot{
+        .id = 42,
+        .origin_device = "dev-3",
+        .status = 2,
+        .changed_at = 1_700_000_000_000,
+    };
+    var out = std.Io.Writer.Allocating.init(arena);
+    try std.json.Stringify.value(snapshot, .{}, &out.writer);
+
+    const again = try parseOrderStatus(arena, out.written());
+    try std.testing.expectEqual(snapshot.id, again.id);
+    try std.testing.expectEqualStrings(snapshot.origin_device, again.origin_device);
+    try std.testing.expectEqual(snapshot.status, again.status);
+    try std.testing.expectEqual(snapshot.changed_at, again.changed_at);
+}
+
+test "a payment snapshot round-trips" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const snapshot = PaymentSnapshot{
+        .order_id = 42,
+        .origin_device = "dev-3",
+        .mode = 1,
+        .amount_minor = 51450,
+        .paid_at = 1_700_000_000_000,
+    };
+    var out = std.Io.Writer.Allocating.init(arena);
+    try std.json.Stringify.value(snapshot, .{}, &out.writer);
+
+    const again = try parsePayment(arena, out.written());
+    try std.testing.expectEqual(snapshot.order_id, again.order_id);
+    try std.testing.expectEqualStrings(snapshot.origin_device, again.origin_device);
+    try std.testing.expectEqual(snapshot.mode, again.mode);
+    try std.testing.expectEqual(snapshot.amount_minor, again.amount_minor);
+    try std.testing.expectEqual(snapshot.paid_at, again.paid_at);
 }

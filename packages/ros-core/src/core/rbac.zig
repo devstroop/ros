@@ -13,9 +13,11 @@ const domain = @import("../domain/models.zig");
 const Role = nav.Role;
 const Screen = nav.Screen;
 
-/// Admin is the wildcard. Waiter is scoped to service. The two kiosk roles
-/// are device-scoped and sign in without a PIN, so their lists are short
-/// and deliberately exclude anything that changes money.
+/// Admin is the wildcard. Waiter is the front of house and the counter
+/// POS: the waiter takes orders and money. The two kiosk roles are
+/// device-scoped - they sign in by being the device, with no credential
+/// at all - so their lists are short and deliberately exclude anything
+/// that changes money.
 pub fn allows(role: Role, screen: Screen) bool {
     return switch (role) {
         .admin => true,
@@ -23,6 +25,9 @@ pub fn allows(role: Role, screen: Screen) bool {
             .role_picker,
             .login,
             .landing,
+            .pos,
+            .pos_cart,
+            .payments,
             .waiter_tables,
             .waiter_menu,
             .waiter_cart,
@@ -31,7 +36,7 @@ pub fn allows(role: Role, screen: Screen) bool {
             .order_detail,
             .order_confirmation,
             .customers,
-            .reset_pin,
+            .reset_credential,
             => true,
             else => false,
         },
@@ -84,9 +89,9 @@ pub fn role_for_employee(stored_role: i64) ?Role {
 ///
 /// The device's mode and the employee's role are two different things: a
 /// till in "Admin" mode needs an employee whose stored role is `admin`.
-/// A sign-in has to agree on both - otherwise a waiter's PIN opens an
-/// admin session, and the permission matrix below stops being a
-/// permission matrix at all.
+/// A sign-in has to agree on both - otherwise a waiter's credential
+/// opens an admin session, and the permission matrix below stops being
+/// a permission matrix at all.
 pub fn employee_role(role: Role) domain.EmployeeRole {
     return switch (role) {
         .admin => .admin,
@@ -105,27 +110,31 @@ pub fn employee_role(role: Role) domain.EmployeeRole {
 // markup reads these rows on a later frame and finds garbage - a crash
 // that looks like a platform bug and is not one. Keep every table the
 // view binds at file scope, with comptime-known contents.
+//
+// The label comes from `NavSection`, not from a string typed here: the
+// rail and the glossary then cannot disagree about what a destination is
+// called.
 
 const admin_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.overview), .label = "Overview" },
-    .{ .id = @intFromEnum(nav.NavSection.sell), .label = "Sell" },
-    .{ .id = @intFromEnum(nav.NavSection.orders), .label = "Orders" },
-    .{ .id = @intFromEnum(nav.NavSection.floor), .label = "Floor" },
-    .{ .id = @intFromEnum(nav.NavSection.catalog), .label = "Catalog" },
-    .{ .id = @intFromEnum(nav.NavSection.people), .label = "People" },
-    .{ .id = @intFromEnum(nav.NavSection.system), .label = "System" },
+    .{ .id = @intFromEnum(nav.NavSection.overview), .label = nav.NavSection.overview.label() },
+    .{ .id = @intFromEnum(nav.NavSection.sell), .label = nav.NavSection.sell.label() },
+    .{ .id = @intFromEnum(nav.NavSection.orders), .label = nav.NavSection.orders.label() },
+    .{ .id = @intFromEnum(nav.NavSection.floor), .label = nav.NavSection.floor.label() },
+    .{ .id = @intFromEnum(nav.NavSection.catalog), .label = nav.NavSection.catalog.label() },
+    .{ .id = @intFromEnum(nav.NavSection.people), .label = nav.NavSection.people.label() },
+    .{ .id = @intFromEnum(nav.NavSection.system), .label = nav.NavSection.system.label() },
 };
 
 const waiter_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.service), .label = "Service" },
+    .{ .id = @intFromEnum(nav.NavSection.service), .label = nav.NavSection.service.label() },
 };
 
 const kitchen_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.kitchen), .label = "Kitchen" },
+    .{ .id = @intFromEnum(nav.NavSection.kitchen), .label = nav.NavSection.kitchen.label() },
 };
 
 const display_rail = [_]nav.NavItem{
-    .{ .id = @intFromEnum(nav.NavSection.display), .label = "Display" },
+    .{ .id = @intFromEnum(nav.NavSection.display), .label = nav.NavSection.display.label() },
 };
 
 /// The screens a role can reach from the shell rail, in rail order.
@@ -154,4 +163,25 @@ pub fn section_screen(section: nav.NavSection) Screen {
         .kitchen => .kds_board,
         .display => .display_board,
     };
+}
+
+test "the counter POS is the service role's, and the kiosk never touches money" {
+    for ([_]Screen{ .pos, .pos_cart, .payments }) |screen| {
+        // The admin app is the wildcard superset, so a single-machine
+        // restaurant can still run the till from it.
+        try std.testing.expect(allows(.admin, screen));
+        // The counter POS is the service app's: the waiter takes the
+        // order and the money at the same device.
+        try std.testing.expect(allows(.waiter, screen));
+        // The kiosk is a board, not a till.
+        try std.testing.expect(!allows(.kds, screen));
+        try std.testing.expect(!allows(.display, screen));
+    }
+
+    // The service role is the front of house, not the back office.
+    try std.testing.expect(allows(.waiter, .waiter_tables));
+    try std.testing.expect(allows(.waiter, .orders));
+    try std.testing.expect(!allows(.waiter, .admin_dashboard));
+    try std.testing.expect(!allows(.waiter, .reports));
+    try std.testing.expect(!allows(.waiter, .settings));
 }

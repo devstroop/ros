@@ -1,7 +1,7 @@
 # Open questions
 
 > **Status:** Living document. Expected to grow.
-> **Last reviewed:** 2026-10-21.
+> **Last reviewed:** 2026-11-04.
 > **Related:** [`risks.md`](risks.md), [`status.md`](status.md).
 
 This page exists because the most expensive mistakes in a rewrite are the
@@ -44,7 +44,7 @@ date before that phase starts.
 | A2 | How are discounts applied: line, order, percentage, fixed, coupon, happy hour? | Affects the order write and reporting | v1 code + product decision | Product | Open |
 | A3 | Are split payments, partial payments, tips, service charge or refunds in v1? | Payment schema and UI | v1 code + product | Product | Open |
 | A4 | What is the void/refund policy and who may do it? | Audit, compliance, RBAC | v1 code + legal | Product | Open |
-| A5 | What does "completed" mean: paid, served, or closed? | Status machine and reports | v1 code + interviews | Product | Open |
+| A5 | What does "completed" mean: paid, served, or closed? | Status machine and reports | v1 code + interviews | Product | Decided - [ADR-0024](../decisions/0024-a-ticket-closes-with-its-money.md), [#139](https://github.com/devstroop/ros/issues/139): completed means paid. `served` is the last step the kitchen owns and `completed` is money's, so a status move may not write it - the statement that advances an order and the statement that applies a peer's op both refuse it without a `payment` row behind the order, and migration 0021 reopens the tickets that closed unpaid before the rule was anywhere but in `update`. What it still does not answer is A3: how much of a bill a payment may be |
 | A6 | Can an order be edited after placement, and which fields? | Immutability rule vs reality | v1 code + interviews | Product | Open |
 | A7 | What are the waiter flows: transfer table, split bill, course timing, merge tables? | Waiter is one of four roles | v1 code + shadowing | Product | Open |
 | A8 | What does the customer display actually show: one order, a queue, a carousel? | Display board design | v1 code + store visit | Product | Open |
@@ -58,11 +58,9 @@ date before that phase starts.
 | A16 | Does a restaurant expect multi-company? | The schema enforces one | v1 usage + sales input | Product | Open |
 | A17 | What are the error messages an operator can act on? | Error copy is currently technical | Shadowing + support tickets | Design | Open |
 | A18 | Which reports does an owner actually open? | Report scope and queries | Usage data + interviews | Product | Open |
-| A19 | What is the day boundary and timezone for reporting? | Epoch-ms is UTC; reports are local | Accountant + product | Product | Open |
+| A19 | What is the day boundary and timezone for reporting? | Epoch-ms is UTC; reports are local | Accountant + product | Product | Open - unresolved by [ADR-0025](../decisions/0025-a-days-report-counts-bills-and-money.md), which left both windows as "since the first millisecond of the day asked" and named the clock on each figure instead. The tickets count on `placed_at`, the drawer on `paid_at`, so a 23:50 ticket settled after midnight is in one and not the other; neither query has an upper bound, so no report can be re-run for a closed day. #157 |
 | A20 | What happens when two waiters edit one table? | Shared model and sync | Interviews + pilot | Product | Open |
 | A21 | Can a customer take the goods and settle later, and who may allow it? | An order now closes only when it is paid for, so "pay later" needs an explicit action | Interviews + product | Product | Open |
-| A22 | Is the counter POS the `admin` app or the `service` app? | The three-app split puts `pos` and `payments` in `admin` today, which means the till is the dedicated machine. If the till is a counter tablet, the permission matrix and the partition both change. | Product decision + a store visit | Product | Open |
-| A23 | Does the `service` app ever take money? | The waiter role cannot open `payments` today. If a waiter takes a card, the money must be replicated with the same discipline as the order. | Interviews + product | Product | Open |
 | A24 | Does the kiosk app run one board or both? | A single `kiosk` binary serves the kitchen and the customer display; the device chooses at install. A restaurant wanting both on one screen is a different requirement. | Store visit | Product | Open |
 
 ## B. Data and migration
@@ -83,7 +81,7 @@ date before that phase starts.
 | B12 | What is the v1 order-number format customers expect? | Invoices, receipts, staff habits | v1 code + interviews | Product | Open |
 | B13 | Can order numbers repeat across devices or days? | Uniqueness and legal numbering | Accounting/legal | Product | Open |
 | B14 | Does the engine enable `PRAGMA foreign_keys`? | The order write stores `0` for nullable FKs; with FKs on it fails (B-005) | Probe the engine with a temporary table; document it | Eng | Open |
-| B15 | Which currency exponents must ship? | The UI hard-codes two decimals (B-013) | Target-market review; load `currency.minor_units` | Product/Eng | Open |
+| B15 | Which currency exponents must ship? | The company carries `currency_decimals` and both the display and the amount parser read it, but a code the table does not know is guessed at two, and a wrong guess silently moves every price by a factor | Target-market review; load `currency.minor_units` | Product/Eng | Open |
 | B16 | Does `dbExec` complete synchronously, and when is a result drainable? | The in-progress DB harness sees seed writes before reads; the answer decides the test loop (G-016) | Probe test around `dbExec`/`takeMsg`; document the contract | Eng | Open |
 
 ## C. Security, privacy and compliance
@@ -91,9 +89,9 @@ date before that phase starts.
 | # | Question | Why it matters | How to resolve | Owner | Status |
 |---|---|---|---|---|---|
 | C1 | What is the threat model for a restaurant device? | PIN strength, kiosk exit, sync trust | Security review + interviews | Eng | **Answered** — [ADR-0016](../decisions/0016-what-a-pin-is.md) |
-| C2 | Is a 4–8 digit PIN acceptable, or is a longer secret required? | Hashing choice and UX | Product + security | Product | **Answered** — six digits, [ADR-0016](../decisions/0016-what-a-pin-is.md) |
+| C2 | Is a 4–8 digit PIN acceptable, or is a longer secret required? | Hashing choice and UX | Product + security | Product | **Answered** — six digits, [ADR-0016](../decisions/0016-what-a-pin-is.md); and a person may now choose a password instead, which is the longer secret this question was reaching for ([ADR-0022](../decisions/0022-a-person-chooses-how-they-sign-in.md)) |
 | C3 | Can we use a memory-hard KDF in the SDK, or a keychain pepper? | PIN brute-force resistance | Spike the SDK crypto surface | Eng | **Answered** — the SDK has no KDF; bcrypt is in Zig's standard library and wants four kilobytes, [ADR-0016](../decisions/0016-what-a-pin-is.md) |
-| C4 | How should failed logins be throttled without locking out a rush? | Security vs service | Product + security | Product | **Answered** — five wrong PINs, then a minute's silence, [ADR-0016](../decisions/0016-what-a-pin-is.md) |
+| C4 | How should failed logins be throttled without locking out a rush? | Security vs service | Product + security | Product | **Answered** — five wrong credentials of either kind, then a minute's silence, [ADR-0016](../decisions/0016-what-a-pin-is.md) |
 | C5 | What personal data is stored (customer phone/email), and for how long? | Privacy obligations | Legal review | Product | Open |
 | C6 | Is data required to stay on-device, or may it sync/backup off-device? | Sync and cloud design | Customer/legal | Product | Open |
 | C7 | How are devices paired and trusted on the LAN? | Sync security | Design + spike | Eng | Open |
@@ -102,9 +100,7 @@ date before that phase starts.
 | C10 | What audit events must be retained (voids, discounts, price changes, logins)? | Compliance tables | Accountant/legal | Product | Open |
 | C11 | Does the app need code signing/notarisation in every target market? | Release | Release engineering | Eng | Open |
 | C12 | Is there a data-deletion/export request obligation? | Privacy | Legal | Product | Open |
-| C13 | The SDK's text field has no password mode, so a PIN is typed in the clear. Is a masked field, or a keypad, acceptable in the SDK? | A PIN on screen is a PIN the customer sees | Ask the SDK, or work around it | Eng | Open |
-| C14 | Should the PIN salt be per employee rather than per installation? | One cracked database then gives up every PIN | Needs a sign-in that identifies the employee first | Eng | Open |
-| C15 | Where should the failed-PIN counter live, so that a restart does not clear it? | A counter a restart clears is a counter a restart is worth | Write it to the database | Eng | Open |
+| C15 | Where should the failed-credential counter live, so that a restart does not clear it? | A counter a restart clears is a counter a restart is worth | Write it to the database | Eng | Open |
 
 ## D. Sync
 
@@ -114,21 +110,20 @@ date before that phase starts.
 | D2 | Which tables and columns sync? | Scope and conflict surface | Data model review | Eng | Open |
 | D3 | Is LWW acceptable, or must concurrent field edits merge? | Data loss vs complexity | Product decision | Product | Open |
 | D4 | How are deletes represented? | Convergence correctness | Design | Eng | Open |
-| D5 | How long are ops retained, and when is compaction safe? | Database growth and restore | Design + load test | Eng | Open |
+| D5 | How long are ops retained, and when is compaction safe? | Database growth and restore | Design + load test | Eng | Answered - [ADR-0020](../decisions/0020-late-join-and-compaction.md), [#111](https://github.com/devstroop/ros/issues/111): compact after 128 durable new ops, retain 64 clocks per device, floor in `sync_state`, one transaction |
 | D6 | Does a single-device install run the sidecar? | Simplicity vs one code path | Design | Eng | Open |
 | D7 | Must Restaurant OS interoperate with the Flutter app during rollout? | Protocol compatibility | Product rollout plan | Product | Open |
 | D8 | Is a cloud relay ever required? | Architecture | Product strategy | Product | Open |
 | D9 | Who is the host, and what happens when it leaves? | Availability | Design + test | Eng | Open |
 | D10 | What happens after a restore from backup with an old clock? | Correctness | Design + test | Eng | Open |
-| D11 | How does a new device bootstrap: full snapshot or replay? | Time to join, data size | Design | Eng | Open |
+| D11 | How does a new device bootstrap: full snapshot or replay? | Time to join, data size | Design | Eng | Answered - [ADR-0020](../decisions/0020-late-join-and-compaction.md), [#111](https://github.com/devstroop/ros/issues/111): durable replay above the floor, snapshot when the cursor does not cover it |
 | D12 | Are there regulatory constraints on LAN traffic? | Security | Legal/IT review | Product | Open |
-| D13 | Are peers authenticated, and with what? | A trusted LAN means any device on the wire is a device in the restaurant. A shared secret in the handshake is the smallest answer that is not nothing. | Design | Eng | Open |
+| D13 | Are peers authenticated, and with what? | A trusted LAN meant any device on the wire was a device in the restaurant. A shared secret in the handshake was the smallest answer that is not nothing. | Design | Eng | Decided - [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md), [#134](https://github.com/devstroop/ros/issues/134): one device token per installation, presented in the `x-ros-token` header of every request that carries the restaurant's data, stored in `app_config`, rotatable on the admin's Control centre. Not a handshake, and not per-device: revocation is rotate-everywhere, and the wire is still plain HTTP |
 | D14 | Which app owns which entity, formally? | The ownership table in `architecture/12` is a proposal. Moving an entity between owners later is a protocol change. | Design review | Eng | Open |
-| D15 | How are ops compacted into a snapshot, and when? | The log grows without bound and a device that joins late replays it. | Design + load test | Eng | Open |
+| D15 | How are ops compacted into a snapshot, and when? | The log grows without bound and a device that joins late replays it. | Design + load test | Eng | Answered - [ADR-0020](../decisions/0020-late-join-and-compaction.md), [#111](https://github.com/devstroop/ros/issues/111): synthetic ops in `sync_snapshot_op`, header clocks adopted after the last page |
 | D16 | What happens to the ops of a device that is removed from the restaurant? | The history of a sale outlives the till that took it | Product decision | Product | Open |
 | D17 | What is the acceptable convergence latency, and is a poll enough? | The kitchen board must show a ticket when it is placed, not on the next tick | Measurement | Product | Open |
 | D18 | Is the admin app the preferred bootstrap peer and the reference-data seed? | A peer design does not need a seed, but a restaurant with one always-on machine should not pay for a slower join | Design | Eng | Open |
-| D19 | Does the PIN salt become per-employee, or does the installation salt replicate as reference data? | The PIN hash is computed from the **installation** salt and the sign-in matches it for equality, and each app has its own installation salt - so a second device cannot let a waiter in. **Answered: per-employee**, by [ADR-0018](../decisions/0018-the-pin-hash-is-the-employees.md) and [#95](https://github.com/devstroop/ros/issues/95) - the picker identifies the employee before it hashes, so the row is self-verifying and no shared secret crosses the wire. | Product decision + a migration | Product/Eng | Answered - ADR-0018, [#95](https://github.com/devstroop/ros/issues/95) |
 
 ## E. Printing and hardware
 
@@ -240,6 +235,14 @@ listed so the team treats them as discovery work, not as solved.
 | Should we port Lottie/custom paint? | No; markup only | ADR-0010 |
 | Should the schema be STRICT? | Yes; required by the SDK and better | ADR-0005 |
 | Is there a pie chart? | No; use bar/stacked bar | ADR-0010 |
+| How long are ops retained, and when is compaction safe? | 128 new ops trigger it; keep 64 clocks per device; delete below the floor in one transaction | ADR-0020, #111, tests |
+| How does a new device bootstrap? | Replay the durable log; if its cursor is below the floor, fetch and apply the snapshot first | ADR-0020, #111, tests |
+| How are ops compacted, and when? | Synthetic create/status/payment ops in `sync_snapshot_op`, clocks in the header, adopted after the last page | ADR-0020, #111, tests |
+| Is the counter POS the `admin` app or the `service` app? | The `service` app; the waiter role opens `pos`, `pos_cart` and `payments`, and the `admin` app remains the wildcard superset | ADR-0021, #112, the shell-partition tests |
+| Does the `service` app ever take money? | Yes; the waiter takes it on the same device, and the payment is device-owned and idempotent by request key | ADR-0021, ADR-0014, #112, tests |
+| Does the PIN salt become per-employee, or does the installation salt replicate as reference data? | Per employee, derived: the picker identifies the person before anything is hashed, so the replicated row is self-verifying and no shared secret crosses the wire | ADR-0018, #95, `auth.deriveSalt`, `tests.zig` |
+| Is a masked field, or a keypad, acceptable in the SDK? | Both, and neither needed the SDK to change: the field binds a bullet slice the model computes, and the pad is buttons over the same buffer. The buffer itself is `view_unbound`. | ADR-0022, `model.credential_display`, `tests.zig`, `smoke-sale.sh` |
+| Should a person be able to sign in with a password rather than a PIN? | Yes, and the kind is the person's: `employee.auth_kind` decides the surface and the length rule | ADR-0022, migration 0020, `tests_data.zig` |
 
 ## Adding a question
 

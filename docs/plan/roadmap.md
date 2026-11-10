@@ -19,8 +19,8 @@ silently.
 
 A restaurant runs a service on Restaurant OS when:
 
-1. an owner installs it, creates a company, an admin PIN, a menu and a
-   floor;
+1. an owner installs it, creates a company, an admin credential, a menu
+   and a floor;
 2. a cashier takes an order, takes payment and prints a receipt;
 3. the kitchen sees the ticket and advances it;
 4. the customer display shows the order;
@@ -35,16 +35,18 @@ Everything else is a prerequisite for one of those six, or it is later.
 |---|---|---|---|---|
 | [0](#phase-0--foundation) | Foundation | The app model, the schema, the shell and the first sale exist | **Done** | — |
 | [1](#phase-1--data-layer-completion) | Data layer completion | Every entity has a read, a write and a test; the screens refresh themselves | Started | — |
-| [2](#phase-2--the-admin-back-office) | The admin back office | Every admin screen renders, and the operator can set the restaurant up | Not started | — |
-| [3](#phase-3--the-waiter-and-kiosk-surfaces) | The waiter and kiosk surfaces | The waiter and the two kiosks are usable on their own | Not started | — |
-| [4](#phase-4--sync-sidecar) | Sync sidecar | Two devices converge over a LAN with no cloud | Scaffolded | **Long pole** |
+| [2](#phase-2--the-admin-back-office) | The admin back office | Every admin screen renders, and the operator can set the restaurant up | Started | — |
+| [3](#phase-3--the-waiter-and-kiosk-surfaces) | The waiter and kiosk surfaces | The waiter and the two kiosks are usable on their own | Started | — |
+| [4](#phase-4--sync-sidecar) | Sync (in-process) | Two devices converge over a LAN with no cloud | Started | — |
 | [5](#phase-5--printing-sidecar) | Printing sidecar | Receipts and kitchen tickets print on a real device | Scaffolded | **Long pole** |
-| [6](#phase-6--packaging-and-cutover) | Packaging and cutover | A signed build installs on a clean machine and runs a service | Not started | — |
+| [6](#phase-6--packaging-and-cutover) | Packaging and cutover | A signed build installs on a clean machine and runs a service | Started (three macOS artifacts package and verify in CI; the clean-machine release remains) | — |
 
-Phase 4 and Phase 5 are the long poles: each needs a second program, a
-device integration the SDK does not have, and a packaging story that does
-not exist yet. They must be *started* inside Phase 1, not scheduled after
-Phase 3. The detail is in the dependency graph below.
+Phase 5 is the long pole: it needs a second program, a device
+integration the SDK does not have, and a packaging story that is only
+partly in place (macOS first; Linux/Windows and the release credentials
+remain). Sync no longer is: ADR-0017 moved the socket in-process, so
+Phase 4 ships inside the apps. Both must be *started* inside Phase 1, not
+scheduled after Phase 3. The detail is in the dependency graph below.
 
 ## Dependency graph
 
@@ -104,7 +106,7 @@ rules.
 |---|---|
 | App model | `apps/admin/src/core/model.zig`, `msg.zig`, `update.zig`, `navigation.zig`, `rbac.zig`, `theme.zig`, `bump.zig` |
 | View | `apps/admin/src/app.native` plus nine templates in `apps/admin/src/screens/` |
-| Data | `apps/admin/src/data/repos.zig`, `page.zig`, `auth.zig`; ten migrations in `apps/admin/src/schema/` (43 `STRICT` tables) |
+| Data | `apps/admin/src/data/repos.zig`, `page.zig`, `auth.zig`; seventeen migrations in `apps/admin/src/schema/` (46 `STRICT` tables) |
 | Manifest | `apps/admin/app.json`, `apps/admin/src/main.zig` |
 | Rules | `apps/admin/src/tests.zig` + `tests_data.zig` — 15 authored headless tests and 12 in-memory DB tests |
 
@@ -112,7 +114,8 @@ rules.
 
 - [x] `cd apps/admin && native check` is clean.
 - [x] `cd apps/admin && native test` is green.
-- [x] A role can be picked, a PIN accepted, a dashboard rendered.
+- [x] A person can be picked, a credential accepted, a dashboard
+      rendered.
 - [x] An order can be placed and lands in `orders` and `order_line` in one
       transaction.
 - [x] A ticket can be advanced and `order_status_history` is written in the
@@ -296,8 +299,9 @@ PLANNED), each imported by the screens that use it and listed in
       instead, because they are shown before anybody is signed in and the
       shell is not drawn yet.
 - [x] A fresh install can be driven from the role picker to a signed-in
-      admin with a company, an admin PIN, one category, one product and one
-      table — all created through the app, with no external seeding. The
+      admin with a company, an admin credential, one category, one
+      product and one table — all created through the app, with no
+      external seeding. The
       walk-through is the way in now, and the quick setup is the other.
 - [x] Every admin screen is inside the 1024-widget budget. The criterion
       says `native automate snapshot`, which needs a running app; the
@@ -372,8 +376,8 @@ avoided, and how a shared session is scoped. The answers go into
 - [ ] `cd apps/admin && native check` is clean and `native test` is green.
 - [ ] The waiter can open a table, add a product with a modifier, place the
       order, and see it on the order list.
-- [ ] The customer display shows the placed order and its status without a
-      PIN.
+- [ ] The customer display shows the placed order and its status without
+      a credential.
 - [ ] The kitchen board shows a ticket, advances it, and the customer
       display reflects the new status on the next rebuild.
 - [ ] A kiosk device restarts and comes up on its own board, not on the
@@ -387,7 +391,7 @@ avoided, and how a shared session is scoped. The answers go into
 
 | Risk | Mitigation |
 |---|---|
-| A kiosk with no PIN is unattended and can be walked up to | The kiosk permission list is narrow by construction; the display board shows nothing an attacker would want, and the KDS shows no money |
+| A kiosk with no credential is unattended and can be walked up to | The kiosk permission list is narrow by construction; the display board shows nothing an attacker would want, and the KDS shows no money |
 | The waiter and the admin want different cart semantics from the same `Model.cart` | The cart is session state in the model and one machine runs one session at a time; the multi-window decision in this phase has to say what happens when it does not |
 | The display board has to be readable from across a room | A dedicated template with a large type size, and a widget budget that leaves room for a 4-column grid at 1920x1080 |
 
@@ -426,8 +430,13 @@ cloud and no account.
       order is still written, and the ops queue in `op_log`.
 - [ ] `op_log` does not grow without bound: a pruning policy runs, and the
       rows it keeps are the ones a peer still needs.
-- [ ] The peer authentication decision is written down and either
+- [x] The peer authentication decision is written down and either
       implemented or recorded as an accepted risk with an owner.
+      Written and implemented in-app by
+      [ADR-0023](../decisions/0023-a-peer-presents-a-shared-device-token.md)
+      ([#134](https://github.com/devstroop/ros/issues/134)); the part of
+      it that is still a risk - one token per restaurant, no TLS, no
+      per-device revocation - is SEC9.
 
 **Risks.**
 
@@ -496,7 +505,7 @@ runs a service without a developer in the room.
 | Signing | A signed and notarised macOS build; a Windows signing story if Windows is in the release |
 | Migrations | A decision on v1 data: either a migration from a v1 database file, or an explicit "fresh install only" decision recorded in the release notes |
 | CI | A workflow that runs `native check`, `native test` and an automation smoke on every change |
-| Scripts | `scripts/setup.sh`, `scripts/env.sh`, `scripts/verify.sh`, `scripts/build.sh`, `scripts/dev.sh` — the five the README already advertises |
+| Scripts | `scripts/setup.sh`, `scripts/env.sh`, `scripts/verify-all.sh`, `scripts/build.sh`, `scripts/dev.sh`, plus `scripts/check-copies.sh` and `scripts/net-diag.sh` |
 | Documentation | The operator guide: install, first-run setup, daily use, backup |
 | Support | A `db_inspector` that can dump the schema and the data for a diagnosis, and a diagnostic log the app can export |
 
@@ -512,7 +521,7 @@ runs a service without a developer in the room.
 - [ ] A v1 database either migrates into Restaurant OS without loss of orders,
       payments or employees, or the release notes say plainly that Restaurant OS
       starts empty.
-- [ ] `scripts/verify.sh` runs `native check` and `native test` for every
+- [ ] `scripts/verify-all.sh` runs `native check` and `native test` for every
       app and exits non-zero on failure.
 - [ ] The v1 app and the Restaurant OS app have been run side by side through one
       service, and the orders agree.

@@ -114,14 +114,23 @@ pub fn main(init: std.process.Init) !void {
     // The installation salt. It is made here because this is the one
     // place with an `Io` (and therefore with randomness); `boot` writes
     // it to the database if this is a fresh installation.
-    auth.makeSalt(init.io, &app_state.model.pin_salt_buf);
-    app_state.model.pin_salt_len = app_state.model.pin_salt_buf.len;
+    auth.makeSalt(init.io, &app_state.model.salt_buf);
+    app_state.model.salt_len = app_state.model.salt_buf.len;
 
     // This installation's token. It names the device in the request
     // keys it makes, so two devices cannot mistake each other's sale
     // for a retry of their own.
     auth.makeToken(init.io, &app_state.model.device_token_buf);
     app_state.model.device_token_len = app_state.model.device_token_buf.len;
+
+    // The pairing token every device of this restaurant shares. Made
+    // here because it needs randomness, and `ROS_NET_TOKEN` beats it for
+    // a device that is provisioned before it has a database to read.
+    net_bridge.seedPairing(
+        &app_state.model,
+        init.io,
+        init.environ_map.get("ROS_NET_TOKEN"),
+    );
 
     // The wire. `main` is the one place with an `Io`, so the listener
     // thread starts here; its channel is opened by `boot`, on the loop
@@ -131,10 +140,20 @@ pub fn main(init: std.process.Init) !void {
         const text = init.environ_map.get("ROS_NET_PORT") orelse break :blk 0;
         break :blk std.fmt.parseInt(u16, text, 10) catch 0;
     };
-    const net_thread = try net_bridge.start(init.io, bind_host, bind_port);
+    if (init.environ_map.get("ROS_PEER")) |peer_text| {
+        net_bridge.parseManualPeer(&app_state.model, peer_text);
+    }
+    const net_threads = try net_bridge.start(
+        init.io,
+        bind_host,
+        bind_port,
+        app_state.model.device_token_buf[0..app_state.model.device_token_len],
+        net_bridge.deviceRole(&app_state.model),
+        app_state.model.pairing(),
+    );
     defer {
         net_bridge.stop(init.io);
-        net_thread.join();
+        net_threads.join();
     }
 
     try runner.runWithOptions(app_state.app(), .{
