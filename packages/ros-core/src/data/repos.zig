@@ -4050,6 +4050,10 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
         .sql = "UPDATE orders SET status = ?2, updated_at = ?3 WHERE id = ?1 AND status <= ?4;",
         .params = &order_params,
     };
+
+    // A voided paid order owes the money back. Record the refund
+    // against the payment it reverses; an unpaid void has no payment
+    // and writes nothing here.
     var count: usize = 4;
 
     var json_buffer: [256]u8 = undefined;
