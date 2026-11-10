@@ -2230,8 +2230,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.error_text = "That order is no longer on the board";
                 return;
             };
-            if (order.status == .completed or order.status == .voided) {
-                model.error_text = "A paid or voided order cannot be voided";
+            if (order.status == .voided) {
+                model.error_text = "This order is already voided";
                 return;
             }
             const reason = std.mem.trim(u8, model.void_reason_buf.text(), " ");
