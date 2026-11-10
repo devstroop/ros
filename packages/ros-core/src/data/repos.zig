@@ -1647,6 +1647,7 @@ pub fn decodeReport(model: *Model, bytes: []const u8) void {
     model.report_discount_field = reader.intOf(&values, "discount_minor", 0);
     model.report_net_field = reader.intOf(&values, "net_minor", 0);
     model.report_taken_field = reader.intOf(&values, "taken_minor", 0);
+    model.report_refunded_field = reader.intOf(&values, "refunded_minor", 0);
 }
 
 /// Decode the day's takings, split by the way they were paid.
