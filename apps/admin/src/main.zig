@@ -145,6 +145,7 @@ pub fn main(init: std.process.Init) !void {
     if (init.environ_map.get("ROS_PEER")) |peer_text| {
         net_bridge.parseManualPeer(&app_state.model, peer_text);
     }
+    net_bridge.storeIo(init.io);
     const net_threads = try net_bridge.start(
         init.io,
         bind_host,
