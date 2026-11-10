@@ -822,6 +822,7 @@ pub const Model = struct {
     /// is a second column of the same query because it is a second fact:
     /// an open ticket is billed and unbought.
     report_taken_field: i64 = 0,
+    report_refunded_field: i64 = 0,
     /// True while a payment is on its way to the database. The view
     /// binds it: the button that takes the money is disabled while it
     /// holds, so a second tap cannot take the money twice.
@@ -1860,6 +1861,11 @@ pub const Model = struct {
     /// ticket is billed and unbought.
     pub fn report_taken_minor(model: *const Model) i64 {
         return model.report_taken_field;
+    }
+
+    /// Refunds given back for the day, in minor units.
+    pub fn report_refunded_minor(model: *const Model) i64 {
+        return model.report_refunded_field;
     }
 
     /// What the day's tickets came to and nobody has paid for. A
