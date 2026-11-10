@@ -135,20 +135,25 @@
   </column>
 </template>
 
-<!-- The money the restaurant has taken. The cashier's screen takes a
-     payment; this one is the owner asking what came in, and when. -->
+<!-- The money the restaurant has taken, as a ledger. The cashier's
+     screen takes a payment; this one is the owner asking what came in,
+     and when. The figure below is the sum of the rows on this list, and
+     the list is the last two hundred payments over every day - so it is
+     called LISTED, not TAKEN. TAKEN is the report's word for one day's
+     tickets (ADR-0025), and two screens using one word for two scopes is
+     the mistake that page is here to stop repeating. -->
 
 <template name="screen-payments">
   <column grow="1" gap="12" padding="16" background="background">
     <row gap="8" cross="center">
       <text size="heading" grow="1">Payments</text>
-      <text foreground="text_muted">{payment_count} taken</text>
+      <text foreground="text_muted">{payment_count} listed</text>
     </row>
 
     <row gap="12">
       <card padding="16" grow="1">
         <column gap="4">
-          <text size="sm" foreground="text_muted">TAKEN</text>
+          <text size="sm" foreground="text_muted">LISTED</text>
           <text size="display">{currency_symbol}{fixed(payments_total_minor / currency_divisor, currency_decimal_count)}</text>
         </column>
       </card>

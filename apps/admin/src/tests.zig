@@ -2232,6 +2232,17 @@ test "the day report tells what was billed from what was taken" {
     // is not the one the tickets use.
     _ = try expectByText(tree.root, .text, "received today, by the day the money arrived");
     try testing.expectEqual(@as(i64, 4200), model.report_owed_minor());
+
+    // The ledger next door must not borrow this screen's word. Its total
+    // is the sum of the rows it lists, over every day, and a second
+    // "TAKEN" on a second scope is the confusion this change removed.
+    model.screen_index = screen_index_of("screen-payments");
+    const ledger = try buildTree(arena, &model);
+    _ = try expectByText(ledger.root, .text, "LISTED");
+    if (findByText(ledger.root, .text, "TAKEN") != null) {
+        std.debug.print("the payments ledger shows TAKEN, which is the report's word for one day's tickets\n", .{});
+        return error.RenamedFigure;
+    }
 }
 
 /// The screen a template belongs to, by its name.
