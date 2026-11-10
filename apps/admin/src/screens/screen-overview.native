@@ -142,6 +142,12 @@
           <text size="display">{currency_symbol}{fixed(report_owed_minor / currency_divisor, currency_decimal_count)}</text>
         </column>
       </card>
+      <card padding="16" grow="1">
+        <column gap="4">
+          <text size="sm" foreground="text_muted">REFUNDED</text>
+          <text size="display">{currency_symbol}{fixed(report_refunded_minor / currency_divisor, currency_decimal_count)}</text>
+        </column>
+      </card>
     </row>
 
     <row gap="8" cross="center">
