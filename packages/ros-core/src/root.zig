@@ -35,6 +35,7 @@ pub const print = struct {
     pub const job = @import("print/job.zig");
     pub const retry = @import("print/retry.zig");
     pub const address = @import("print/address.zig");
+    pub const sweep = @import("print/sweep.zig");
 };
 
 /// The wire: the protocol vocabulary, the operation record and the
@@ -57,6 +58,7 @@ pub const net = struct {
 
 test {
     _ = @import("print/escpos.zig");
+    _ = @import("print/sweep.zig");
     _ = @import("print/address.zig");
     _ = @import("print/retry.zig");
     _ = @import("print/job.zig");
