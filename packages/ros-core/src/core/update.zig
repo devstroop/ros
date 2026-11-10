@@ -2611,14 +2611,22 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .tick => |timer| {
             if (timer.outcome != .fired) return;
-            model.now_ms = fx.wallMs();
+            const now = fx.wallMs();
+
+            // The clock is only worth repainting for the screens that
+            // show a wait time. Other screens do not read now_ms, so
+            // storing it every second would rebuild the whole app for
+            // nothing.
+            if (model.screen() == .kds_board or model.screen() == .display_board) {
+                model.now_ms = now;
+            }
 
             // A peer that has gone quiet is gone; a manual address is
             // not. Then pull what is new. Five seconds is the beacon
             // interval, so a pull sees a peer the next beacon refreshed.
-            model.prunePeers(model.now_ms - 15_000);
-            if (model.now_ms >= model.sync_poll_at_ms) {
-                model.sync_poll_at_ms = model.now_ms + 5_000;
+            model.prunePeers(now - 15_000);
+            if (now >= model.sync_poll_at_ms) {
+                model.sync_poll_at_ms = now + 5_000;
                 net_bridge.poll(model, fx);
             }
         },
