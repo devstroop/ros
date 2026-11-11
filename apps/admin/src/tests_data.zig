@@ -73,6 +73,12 @@ const migration_sql = [_][]const u8{
     @embedFile("schema/0020_employee_credential.sql"),
     @embedFile("schema/0021_unpaid_closures.sql"),
     @embedFile("schema/0022_refund.sql"),
+    @embedFile("schema/0023_recipe.sql"),
+    @embedFile("schema/0024_work_period.sql"),
+    @embedFile("schema/0025_customer_ledger.sql"),
+    @embedFile("schema/0026_banking.sql"),
+    @embedFile("schema/0027_loyalty.sql"),
+    @embedFile("schema/0028_attendance.sql"),
 };
 
 const migration_names = [_][]const u8{
@@ -80,7 +86,7 @@ const migration_names = [_][]const u8{
     "inventory",        "ops",            "compliance",        "printing",      "sync",
     "default_tax_slab", "order_sequence", "order_request_key", "payment_once",  "currency_decimals",
     "order_origin",     "sync_snapshot",  "order_line_stock",  "company_brand", "employee_credential",
-    "unpaid_closures", "refund",
+    "unpaid_closures", "refund", "recipe", "work_period", "customer_ledger", "banking", "loyalty", "attendance",
 };
 
 /// The migrations, in the order the runtime applies them, each at the
@@ -326,7 +332,7 @@ test "a ticket that closed unpaid is reopened when the database opens" {
     // A database from before the guard. It stopped one migration short,
     // and it holds the state #139 found: a completed order with no
     // payment behind it, which a build before this one could write.
-    var harness = try Harness.startTo(testing.allocator, migration_sql.len - 2);
+    var harness = try Harness.startTo(testing.allocator, 20);
     defer harness.deinit();
 
     harness.fx.dbExec(.{

@@ -419,6 +419,14 @@ pub const table_counts_sql =
     \\UNION ALL SELECT 'sync_snapshot_op' AS name, (SELECT COUNT(*) FROM sync_snapshot_op) AS n
     \\UNION ALL SELECT 'tax_slab' AS name, (SELECT COUNT(*) FROM tax_slab) AS n
     \\UNION ALL SELECT 'time_entry' AS name, (SELECT COUNT(*) FROM time_entry) AS n
+    \\UNION ALL SELECT 'attendance' AS name, (SELECT COUNT(*) FROM attendance) AS n
+    \\UNION ALL SELECT 'bank_account' AS name, (SELECT COUNT(*) FROM bank_account) AS n
+    \\UNION ALL SELECT 'bank_ledger' AS name, (SELECT COUNT(*) FROM bank_ledger) AS n
+    \\UNION ALL SELECT 'customer_ledger' AS name, (SELECT COUNT(*) FROM customer_ledger) AS n
+    \\UNION ALL SELECT 'loyalty_ledger' AS name, (SELECT COUNT(*) FROM loyalty_ledger) AS n
+    \\UNION ALL SELECT 'loyalty_member' AS name, (SELECT COUNT(*) FROM loyalty_member) AS n
+    \\UNION ALL SELECT 'recipe' AS name, (SELECT COUNT(*) FROM recipe) AS n
+    \\UNION ALL SELECT 'work_period' AS name, (SELECT COUNT(*) FROM work_period) AS n
     \\UNION ALL SELECT 'void_log_entry' AS name, (SELECT COUNT(*) FROM void_log_entry) AS n
 ;
 
