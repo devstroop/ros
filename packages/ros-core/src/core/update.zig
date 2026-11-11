@@ -1252,6 +1252,27 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.loadRefunds(model, fx);
         },
 
+        .bank_deposit => {
+            model.busy = true;
+            model.error_text = "";
+            repos.bankDeposit(model, fx, model.form_bank_account_id, model.form_bank_amount_minor, fx.wallMs());
+        },
+
+        .bank_withdrawal => {
+            model.busy = true;
+            model.error_text = "";
+            repos.bankWithdrawal(model, fx, model.form_bank_account_id, model.form_bank_amount_minor, fx.wallMs());
+        },
+
+        .bank_saved => |result| {
+            model.busy = false;
+            if (result.outcome != .ok) {
+                model.error_text = "Could not save the bank entry";
+                return;
+            }
+            model.error_text = "";
+        },
+
         .open_dashboard => go(model, .admin_dashboard),
 
         .deactivate_employee => |id| {

@@ -200,6 +200,12 @@ pub const Msg = union(enum) {
     open_payments,
     /// Jump to the day's report.
     open_reports,
+    /// Record a bank deposit.
+    bank_deposit,
+    /// Record a bank withdrawal.
+    bank_withdrawal,
+    /// The bank write came back.
+    bank_saved: native_sdk.EffectDbResult,
     /// Open the cart on its own.
     open_pos_cart,
     /// Back to the dashboard.
