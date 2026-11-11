@@ -200,6 +200,12 @@ pub const Msg = union(enum) {
     open_payments,
     /// Jump to the day's report.
     open_reports,
+    /// Clock in an employee.
+    clock_in,
+    /// Clock out an employee.
+    clock_out,
+    /// The attendance write came back.
+    attendance_saved: native_sdk.EffectDbResult,
     /// Award loyalty points.
     loyalty_earn,
     /// Redeem loyalty points.
