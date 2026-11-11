@@ -2277,6 +2277,21 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.setOrderStatus(model, fx, order_id, order.status, .held, fx.wallMs());
         },
 
+        .unhold_order => |order_id| {
+            const order = findOrder(model, order_id) orelse {
+                model.error_text = "That order is no longer on the board";
+                return;
+            };
+            if (order.status != .held) {
+                model.error_text = "This order is not held";
+                return;
+            }
+            model.advance_order_id = order_id;
+            model.busy = true;
+            model.error_text = "";
+            repos.setOrderStatus(model, fx, order_id, .held, .pending, fx.wallMs());
+        },
+
         .void_reason_edit => |event| model.void_reason_buf.apply(event),
 
         .credential_rehashed => |result| {

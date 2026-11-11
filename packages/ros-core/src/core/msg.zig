@@ -182,6 +182,8 @@ pub const Msg = union(enum) {
     void_order: i64,
     /// Park the order with this id as held.
     hold_order: i64,
+    /// Bring a held order back to the floor.
+    unhold_order: i64,
     /// The reason the operator gave for the void.
     void_reason_edit: canvas.TextInputEvent,
 
