@@ -148,6 +148,7 @@ pub const Msg = union(enum) {
     payment_taken: native_sdk.EffectDbResult,
     /// The payments the restaurant has taken.
     payments_loaded: native_sdk.EffectDbResult,
+    refunds_loaded: native_sdk.EffectDbResult,
     /// The day's takings.
     report_loaded: native_sdk.EffectDbResult,
     /// The stock on the shelf.
@@ -527,6 +528,7 @@ pub const Msg = union(enum) {
             .company_loaded => |r| r.outcome == .ok,
             .config_loaded => |r| r.outcome == .ok,
             .payments_loaded => |r| r.outcome == .ok,
+            .refunds_loaded => |r| r.outcome == .ok,
             .report_loaded => |r| r.outcome == .ok,
             .report_modes_loaded => |r| r.outcome == .ok,
             .stock_loaded => |r| r.outcome == .ok,
@@ -581,6 +583,7 @@ pub const Msg = union(enum) {
         "setup_created",
         "payment_taken",
         "payments_loaded",
+        "refunds_loaded",
         "report_loaded",
         "stock_loaded",
         "stock_saved",

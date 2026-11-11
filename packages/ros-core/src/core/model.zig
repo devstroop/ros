@@ -1910,6 +1910,18 @@ pub const Model = struct {
         return model.refunds_list;
     }
 
+    /// How many refunds there are.
+    pub fn refund_count(model: *const Model) usize {
+        return model.refunds_list.len;
+    }
+
+    /// The total refunded, in minor units.
+    pub fn refunds_total_minor(model: *const Model) i64 {
+        var total: i64 = 0;
+        for (model.refunds_list) |refund| total += refund.amount_minor;
+        return total;
+    }
+
     /// How many payments the restaurant has taken.
     pub fn payment_count(model: *const Model) usize {
         return model.payments_list.len;
