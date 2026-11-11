@@ -7,7 +7,7 @@ pub fn sweepDir(io: std.Io, dir_path: []const u8, host: []const u8, port: u16, a
     var dir = std.Io.Dir.openDir(std.Io.Dir.cwd(), io, dir_path, .{ .iterate = true }) catch return;
     defer dir.close(io);
 
-    var it = dir.iterate(io);
+    var it = dir.iterate();
     while (it.next(io) catch null) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".prn")) continue;
