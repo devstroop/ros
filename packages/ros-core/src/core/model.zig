@@ -663,6 +663,8 @@ pub const Model = struct {
     /// they never chose or a PIN they cannot type.
     form_reset_credential_kind: domain.CredentialKind = .pin,
     form_reset_employee_id: i64 = 0,
+    form_bank_account_id: i64 = 0,
+    form_bank_amount_minor: i64 = 0,
     form_reset_employee_name: []const u8 = "",
     form_category_name_buf: canvas.TextBuffer(64) = .{},
     form_category_id: i64 = 0,
