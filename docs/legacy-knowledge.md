@@ -144,3 +144,14 @@ Essence: work period is a first-class aggregate boundary for reports and cash re
 - Held bills store full pricing snapshot (rates, discounts, taxes) so recall is exact.
 
 Essence: parking is a full snapshot of an in-progress order, keyed by service type; ROS can model as order status `held` with immutable line snapshots.
+
+
+## 17. Customer display
+
+- Legacy drives a serial customer display showing item name and balance.
+- ROS could expose an effect to push current item/total to a secondary display.
+
+## 18. Service-type KOT rules
+
+- Legacy distinguishes Dine-in/TA/HD/EB with different KOT and billing paths.
+- ROS keeps a unified order model; service_type should drive KOT generation, printing and billing rules, with tests per type.
