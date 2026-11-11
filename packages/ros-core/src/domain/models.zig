@@ -485,6 +485,16 @@ pub const Payment = struct {
     paid_at: i64,
 };
 
+/// A refund given back for a voided paid order.
+pub const Refund = struct {
+    id: i64,
+    payment_id: i64,
+    order_id: i64,
+    amount_minor: i64,
+    reason: []const u8,
+    refunded_at: i64,
+};
+
 /// How the money came in, on one mode.
 pub const ReportMode = struct {
     mode: PaymentMode,
