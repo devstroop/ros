@@ -146,6 +146,13 @@ pub fn main(init: std.process.Init) !void {
         net_bridge.parseManualPeer(&app_state.model, peer_text);
     }
     net_bridge.storeIo(init.io);
+    const printer_host = init.environ_map.get("ROS_PRINTER_HOST") orelse "127.0.0.1";
+    const printer_port: u16 = blk: {
+        const text = init.environ_map.get("ROS_PRINTER_PORT") orelse break :blk 9100;
+        break :blk std.fmt.parseInt(u16, text, 10) catch 9100;
+    };
+    @import("ros_core").print.sweep.sweepDir(init.io, "spool", printer_host, printer_port, 3);
+
     const net_threads = try net_bridge.start(
         init.io,
         bind_host,
