@@ -1911,6 +1911,11 @@ pub const Model = struct {
     }
 
     /// How many refunds there are.
+    pub fn refunds_count(model: *const Model) usize {
+        return model.refunds_list.len;
+    }
+
+    /// How many refunds there are.
     pub fn refund_count(model: *const Model) usize {
         return model.refunds_list.len;
     }
