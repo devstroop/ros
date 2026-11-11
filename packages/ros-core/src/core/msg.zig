@@ -178,6 +178,8 @@ pub const Msg = union(enum) {
     pay_selected_order,
     /// Void the order with this id, before it is paid.
     void_order: i64,
+    /// Park the order with this id as held.
+    hold_order: i64,
     /// The reason the operator gave for the void.
     void_reason_edit: canvas.TextInputEvent,
 

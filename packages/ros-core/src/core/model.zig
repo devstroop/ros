@@ -2694,7 +2694,7 @@ pub const Model = struct {
                 .pending, .preparing, .ready => {
                     if (orderOnStation(model, order.id, model.station_filter_field)) count += 1;
                 },
-                .served, .completed, .voided => {},
+                .served, .completed, .voided, .held => {},
             }
         }
         const out = arena.alloc(Ticket, count) catch return &.{};
@@ -2704,7 +2704,7 @@ pub const Model = struct {
                 .pending, .preparing, .ready => {
                     if (!orderOnStation(model, order.id, model.station_filter_field)) continue;
                 },
-                .served, .completed, .voided => continue,
+                .served, .completed, .voided, .held => continue,
             }
             out[index] = .{
                 .id = order.id,
@@ -2733,7 +2733,7 @@ pub const Model = struct {
                 .pending, .preparing, .ready => {
                     if (!orderOnStation(model, order.id, model.station_filter_field)) continue;
                 },
-                .served, .completed, .voided => continue,
+                .served, .completed, .voided, .held => continue,
             }
             count += 1;
         }
@@ -2952,7 +2952,7 @@ pub const DisplayCard = struct {
 fn orderIsOpen(status: domain.OrderStatus) bool {
     return switch (status) {
         .pending, .preparing, .ready, .served => true,
-        .completed, .voided => false,
+        .completed, .voided, .held => false,
     };
 }
 

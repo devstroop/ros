@@ -43,6 +43,7 @@ pub const OrderStatus = enum(i64) {
     served = 3,
     completed = 4,
     voided = 5,
+    held = 6,
 
     /// What the ticket is called on a board. These are the words the
     /// floor uses, not the words the workflow engine uses: a cook says
@@ -55,6 +56,7 @@ pub const OrderStatus = enum(i64) {
             .served => "Served",
             .completed => "Closed",
             .voided => "Voided",
+            .held => "Held",
         };
     }
 
@@ -69,7 +71,7 @@ pub const OrderStatus = enum(i64) {
             .preparing => "Mark ready",
             .ready => "Hand off",
             .served => "Close ticket",
-            .completed, .voided => "",
+            .completed, .voided, .held => "",
         };
     }
 
