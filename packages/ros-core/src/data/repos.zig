@@ -5464,3 +5464,37 @@ pub fn endWorkPeriod(model: *Model, fx: *Effects, at: i64) void {
         .on_result = Effects.dbMsg(.work_period_saved),
     });
 }
+
+/// Clock an employee in.
+pub fn clockIn(model: *Model, fx: *Effects, employee_id: i64, at: i64) void {
+    _ = model;
+    var params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = employee_id },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = 9301,
+        .statements = &.{.{
+            .sql = "INSERT INTO attendance (employee_id, clock_in) VALUES (?1, ?2);",
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.attendance_saved),
+    });
+}
+
+/// Clock an employee out.
+pub fn clockOut(model: *Model, fx: *Effects, employee_id: i64, at: i64) void {
+    _ = model;
+    var params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = employee_id },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = 9302,
+        .statements = &.{.{
+            .sql = "UPDATE attendance SET clock_out = ?2 WHERE employee_id = ?1 AND clock_out IS NULL;",
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.attendance_saved),
+    });
+}

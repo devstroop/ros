@@ -1252,6 +1252,27 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.loadRefunds(model, fx);
         },
 
+        .clock_in => {
+            model.busy = true;
+            model.error_text = "";
+            repos.clockIn(model, fx, model.form_employee_id, fx.wallMs());
+        },
+
+        .clock_out => {
+            model.busy = true;
+            model.error_text = "";
+            repos.clockOut(model, fx, model.form_employee_id, fx.wallMs());
+        },
+
+        .attendance_saved => |result| {
+            model.busy = false;
+            if (result.outcome != .ok) {
+                model.error_text = "Could not save the attendance entry";
+                return;
+            }
+            model.error_text = "";
+        },
+
         .bank_deposit => {
             model.busy = true;
             model.error_text = "";
