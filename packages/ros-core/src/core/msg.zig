@@ -200,6 +200,12 @@ pub const Msg = union(enum) {
     open_payments,
     /// Jump to the day's report.
     open_reports,
+    /// Record a bank deposit.
+    bank_deposit,
+    /// Record a bank withdrawal.
+    bank_withdrawal,
+    /// The bank write came back.
+    bank_saved: native_sdk.EffectDbResult,
     /// Start a work period.
     start_work_period,
     /// End the active work period.

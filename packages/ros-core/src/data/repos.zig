@@ -5397,6 +5397,44 @@ pub fn recordRefund(model: *Model, fx: *Effects, order_id: i64, reason: []const 
     });
 }
 
+/// Record a bank deposit.
+pub fn bankDeposit(model: *Model, fx: *Effects, account_id: i64, amount_minor: i64, at: i64) void {
+    _ = model;
+    var params: [4]native_sdk.EffectDbValue = .{
+        .{ .integer = account_id },
+        .{ .integer = amount_minor },
+        .{ .integer = at },
+        .{ .integer = 0 },
+    };
+    fx.dbExec(.{
+        .key = 9101,
+        .statements = &.{.{
+            .sql = "INSERT INTO bank_ledger (account_id, entry_type, amount_minor, created_at, employee_id) VALUES (?1, 0, ?2, ?3, ?4);",
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.bank_saved),
+    });
+}
+
+/// Record a bank withdrawal.
+pub fn bankWithdrawal(model: *Model, fx: *Effects, account_id: i64, amount_minor: i64, at: i64) void {
+    _ = model;
+    var params: [4]native_sdk.EffectDbValue = .{
+        .{ .integer = account_id },
+        .{ .integer = amount_minor },
+        .{ .integer = at },
+        .{ .integer = 0 },
+    };
+    fx.dbExec(.{
+        .key = 9102,
+        .statements = &.{.{
+            .sql = "INSERT INTO bank_ledger (account_id, entry_type, amount_minor, created_at, employee_id) VALUES (?1, 1, ?2, ?3, ?4);",
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.bank_saved),
+    });
+}
+
 /// Start a work period: close any open one, then open a new one.
 pub fn startWorkPeriod(model: *Model, fx: *Effects, employee_id: i64, at: i64) void {
     _ = model;
