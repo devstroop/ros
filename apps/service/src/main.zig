@@ -145,7 +145,6 @@ pub fn main(init: std.process.Init) !void {
     if (init.environ_map.get("ROS_PEER")) |peer_text| {
         net_bridge.parseManualPeer(&app_state.model, peer_text);
     }
-    net_bridge.storeIo(init.io);
     const printer_host = init.environ_map.get("ROS_PRINTER_HOST") orelse "127.0.0.1";
     const printer_port: u16 = blk: {
         const text = init.environ_map.get("ROS_PRINTER_PORT") orelse break :blk 9100;
