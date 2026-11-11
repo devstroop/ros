@@ -5396,3 +5396,33 @@ pub fn recordRefund(model: *Model, fx: *Effects, order_id: i64, reason: []const 
         .on_result = Effects.dbMsg(.refund_recorded),
     });
 }
+
+/// Start a work period: close any open one, then open a new one.
+pub fn startWorkPeriod(model: *Model, fx: *Effects, employee_id: i64, at: i64) void {
+    _ = model;
+    var params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = employee_id },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = 9001,
+        .statements = &.{
+            .{ .sql = "UPDATE work_period SET status = 0, ended_at = ?2 WHERE status = 1;", .params = &.{ .{ .integer = at } } },
+            .{ .sql = "INSERT INTO work_period (started_at, status, started_by) VALUES (?2, 1, ?1);", .params = &params },
+        },
+        .on_result = Effects.dbMsg(.work_period_saved),
+    });
+}
+
+/// End the active work period.
+pub fn endWorkPeriod(model: *Model, fx: *Effects, at: i64) void {
+    _ = model;
+    fx.dbExec(.{
+        .key = 9002,
+        .statements = &.{.{
+            .sql = "UPDATE work_period SET status = 0, ended_at = ?1 WHERE status = 1;",
+            .params = &.{ .{ .integer = at } },
+        }},
+        .on_result = Effects.dbMsg(.work_period_saved),
+    });
+}

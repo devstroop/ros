@@ -200,6 +200,12 @@ pub const Msg = union(enum) {
     open_payments,
     /// Jump to the day's report.
     open_reports,
+    /// Start a work period.
+    start_work_period,
+    /// End the active work period.
+    end_work_period,
+    /// The work period write came back.
+    work_period_saved: native_sdk.EffectDbResult,
     /// Open the cart on its own.
     open_pos_cart,
     /// Back to the dashboard.
