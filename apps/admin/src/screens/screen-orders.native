@@ -53,6 +53,7 @@
                 <if test="{order.status_code == 6}">
                   <badge>Held</badge>
                   <button size="sm" variant="secondary" on-press="unhold_order:{order.id}">Recall</button>
+                  <button size="sm" variant="primary" on-press="recall_to_cart:{order.id}">To cart</button>
                 </if>
                 <else>
                   <if test="{order.advanceable}">

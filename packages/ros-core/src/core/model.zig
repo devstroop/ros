@@ -857,6 +857,7 @@ pub const Model = struct {
     /// so a second tap cannot submit the same cart twice.
     sale_pending: bool = false,
     cart_hold_pending: bool = false,
+    recall_pending: bool = false,
     /// The highest order id this process has issued. The order id is
     /// the wall clock, but a clock is not a sequence: two sales in the
     /// same millisecond would want the same id, and the second one

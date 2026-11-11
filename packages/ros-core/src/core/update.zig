@@ -2292,6 +2292,20 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.setOrderStatus(model, fx, order_id, .held, .pending, fx.wallMs());
         },
 
+        .recall_to_cart => |order_id| {
+            const order = findOrder(model, order_id) orelse {
+                model.error_text = "That order is no longer on the board";
+                return;
+            };
+            if (order.status != .held) {
+                model.error_text = "This order is not held";
+                return;
+            }
+            model.selected_order_id = order_id;
+            model.recall_pending = true;
+            repos.loadOrderLines(model, fx);
+        },
+
         .void_reason_edit => |event| model.void_reason_buf.apply(event),
 
         .credential_rehashed => |result| {
@@ -2442,6 +2456,34 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .order_lines_loaded => |result| {
             if (result.outcome != .ok) return;
             if (result.kind == .page) repos.decodeOrderLines(model, result.bytes);
+            if (model.recall_pending) {
+                model.recall_pending = false;
+                model.cart_len = 0;
+                model.cart_buf.reset();
+                for (model.order_lines) |line| {
+                    if (line.order_id != model.selected_order_id) continue;
+                    if (model.cart_len >= model_mod.max_cart_lines) break;
+                    const name = model.cart_buf.dupe(line.product_name) orelse continue;
+                    model.cart[model.cart_len] = .{
+                        .product_id = line.product_id,
+                        .name = name,
+                        .price_minor = line.unit_price_minor,
+                        .qty = line.qty,
+                    };
+                    model.cart_len += 1;
+                }
+                model.cart_attempt_id = 0;
+                // Consume the held order so it does not linger on the board.
+                model.advance_order_id = model.selected_order_id;
+                model.busy = true;
+                repos.setOrderStatus(model, fx, model.selected_order_id, .held, .voided, fx.wallMs());
+                model.selected_order_id = 0;
+                go(model, .pos);
+                repos.loadOrders(model, fx);
+                net_bridge.notify();
+                repos.maybeCompact(model, fx);
+                return;
+            }
             keepActiveOrder(model);
         },
 

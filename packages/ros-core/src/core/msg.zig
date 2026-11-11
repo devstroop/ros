@@ -184,6 +184,8 @@ pub const Msg = union(enum) {
     hold_order: i64,
     /// Bring a held order back to the floor.
     unhold_order: i64,
+    /// Load a held order back into the cart.
+    recall_to_cart: i64,
     /// The reason the operator gave for the void.
     void_reason_edit: canvas.TextInputEvent,
 
