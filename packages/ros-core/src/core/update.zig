@@ -1273,6 +1273,27 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.error_text = "";
         },
 
+        .start_work_period => {
+            model.busy = true;
+            model.error_text = "";
+            repos.startWorkPeriod(model, fx, model.employee_id, fx.wallMs());
+        },
+
+        .end_work_period => {
+            model.busy = true;
+            model.error_text = "";
+            repos.endWorkPeriod(model, fx, fx.wallMs());
+        },
+
+        .work_period_saved => |result| {
+            model.busy = false;
+            if (result.outcome != .ok) {
+                model.error_text = "Could not update the work period";
+                return;
+            }
+            model.error_text = "";
+        },
+
         .open_dashboard => go(model, .admin_dashboard),
 
         .deactivate_employee => |id| {

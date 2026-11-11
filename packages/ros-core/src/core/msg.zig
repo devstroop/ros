@@ -206,6 +206,12 @@ pub const Msg = union(enum) {
     bank_withdrawal,
     /// The bank write came back.
     bank_saved: native_sdk.EffectDbResult,
+    /// Start a work period.
+    start_work_period,
+    /// End the active work period.
+    end_work_period,
+    /// The work period write came back.
+    work_period_saved: native_sdk.EffectDbResult,
     /// Open the cart on its own.
     open_pos_cart,
     /// Back to the dashboard.
