@@ -5464,3 +5464,39 @@ pub fn endWorkPeriod(model: *Model, fx: *Effects, at: i64) void {
         .on_result = Effects.dbMsg(.work_period_saved),
     });
 }
+
+/// Award loyalty points to a member.
+pub fn loyaltyEarn(model: *Model, fx: *Effects, member_id: i64, points: i64, at: i64) void {
+    _ = model;
+    var params: [3]native_sdk.EffectDbValue = .{
+        .{ .integer = member_id },
+        .{ .integer = points },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = 9201,
+        .statements = &.{
+            .{ .sql = "INSERT INTO loyalty_ledger (member_id, entry_type, points, created_at) VALUES (?1, 0, ?2, ?3);", .params = &params },
+            .{ .sql = "UPDATE loyalty_member SET points = points + ?2 WHERE id = ?1;", .params = &.{ .{ .integer = member_id }, .{ .integer = points } } },
+        },
+        .on_result = Effects.dbMsg(.loyalty_saved),
+    });
+}
+
+/// Redeem loyalty points from a member.
+pub fn loyaltyRedeem(model: *Model, fx: *Effects, member_id: i64, points: i64, at: i64) void {
+    _ = model;
+    var params: [3]native_sdk.EffectDbValue = .{
+        .{ .integer = member_id },
+        .{ .integer = points },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = 9202,
+        .statements = &.{
+            .{ .sql = "INSERT INTO loyalty_ledger (member_id, entry_type, points, created_at) VALUES (?1, 1, ?2, ?3);", .params = &params },
+            .{ .sql = "UPDATE loyalty_member SET points = points - ?2 WHERE id = ?1 AND points >= ?2;", .params = &.{ .{ .integer = member_id }, .{ .integer = points } } },
+        },
+        .on_result = Effects.dbMsg(.loyalty_saved),
+    });
+}

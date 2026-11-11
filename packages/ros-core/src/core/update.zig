@@ -1252,6 +1252,27 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.loadRefunds(model, fx);
         },
 
+        .loyalty_earn => {
+            model.busy = true;
+            model.error_text = "";
+            repos.loyaltyEarn(model, fx, model.form_loyalty_member_id, model.form_loyalty_points, fx.wallMs());
+        },
+
+        .loyalty_redeem => {
+            model.busy = true;
+            model.error_text = "";
+            repos.loyaltyRedeem(model, fx, model.form_loyalty_member_id, model.form_loyalty_points, fx.wallMs());
+        },
+
+        .loyalty_saved => |result| {
+            model.busy = false;
+            if (result.outcome != .ok) {
+                model.error_text = "Could not save the loyalty entry";
+                return;
+            }
+            model.error_text = "";
+        },
+
         .bank_deposit => {
             model.busy = true;
             model.error_text = "";
