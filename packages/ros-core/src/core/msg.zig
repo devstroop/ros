@@ -206,6 +206,12 @@ pub const Msg = union(enum) {
     clock_out,
     /// The attendance write came back.
     attendance_saved: native_sdk.EffectDbResult,
+    /// Award loyalty points.
+    loyalty_earn,
+    /// Redeem loyalty points.
+    loyalty_redeem,
+    /// The loyalty write came back.
+    loyalty_saved: native_sdk.EffectDbResult,
     /// Record a bank deposit.
     bank_deposit,
     /// Record a bank withdrawal.
