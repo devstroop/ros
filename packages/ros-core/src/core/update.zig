@@ -1739,7 +1739,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.cart_attempt_id = 0;
         },
 
-        .place_order => placeOrder(model, fx),
+        .place_order => placeOrder(model, fx, false),
+        .hold_cart => placeOrder(model, fx, true),
 
         .order_placed => |result| {
             model.busy = false;
@@ -1759,9 +1760,21 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 // cashier's: the button comes back and the sale can be
                 // tried again.
                 model.sale_pending = false;
+                model.cart_hold_pending = false;
                 return;
             }
             model.sale_pending = false;
+            if (model.cart_hold_pending) {
+                model.cart_hold_pending = false;
+                model.cart_len = 0;
+                model.cart_buf.reset();
+                model.cart_attempt_id = 0;
+                model.error_text = "";
+                repos.loadOrders(model, fx);
+                net_bridge.notify();
+                repos.maybeCompact(model, fx);
+                return;
+            }
             model.cart_len = 0;
             model.cart_buf.reset();
             // The sale landed: the next sale is a new attempt, with its
@@ -2975,7 +2988,7 @@ fn noteLoginFailure(model: *Model) void {
 /// order at a time, so the clock is unique enough, and it keeps the
 /// order number readable ("1749843210123"). A dedicated sequence would
 /// be better - see the roadmap.
-fn placeOrder(model: *Model, fx: *Effects) void {
+fn placeOrder(model: *Model, fx: *Effects, hold: bool) void {
     if (model.cart_len == 0) {
         model.error_text = "The cart is empty";
         return;
@@ -3021,11 +3034,11 @@ fn placeOrder(model: *Model, fx: *Effects) void {
         // the number on the ticket is the number that was stored.
         .order_no = "",
         .order_type = model.cart_order_type,
-        .status = .pending,
-        .status_code = @intFromEnum(domain.OrderStatus.pending),
-        .status_label = domain.OrderStatus.pending.label(),
-        .advance_label = domain.OrderStatus.pending.actionLabel(),
-        .advanceable = domain.OrderStatus.pending.advanceable(),
+        .status = if (hold) .held else .pending,
+        .status_code = @intFromEnum(if (hold) domain.OrderStatus.held else domain.OrderStatus.pending),
+        .status_label = (if (hold) domain.OrderStatus.held else domain.OrderStatus.pending).label(),
+        .advance_label = (if (hold) domain.OrderStatus.held else domain.OrderStatus.pending).actionLabel(),
+        .advanceable = (if (hold) domain.OrderStatus.held else domain.OrderStatus.pending).advanceable(),
         .type_label = model.cart_order_type.label(),
         .dining_table_id = 0,
         .customer_id = 0,
@@ -3083,6 +3096,7 @@ fn placeOrder(model: *Model, fx: *Effects) void {
 
     model.busy = true;
     model.sale_pending = true;
+    model.cart_hold_pending = hold;
     // The request key: this device's token and the attempt's id. It is
     // what makes a retry the same sale rather than a second one.
     var key_buffer: [64]u8 = undefined;

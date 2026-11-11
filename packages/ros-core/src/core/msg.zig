@@ -114,6 +114,8 @@ pub const Msg = union(enum) {
     clear_discount,
     /// Turn the cart into an order.
     place_order,
+    /// Park the cart as a held order.
+    hold_cart,
     /// The order write came back.
     order_placed: native_sdk.EffectDbResult,
 
