@@ -50,10 +50,18 @@
                 <badge>Paid</badge>
               </if>
               <else>
-                <if test="{order.advanceable}">
-                  <button size="sm" variant="secondary" disabled="{advancing}" on-press="advance_order:{order.id}">{order.advance_label}</button>
+                <if test="{order.status_code == 6}">
+                  <badge>Held</badge>
+                  <button size="sm" variant="secondary" on-press="unhold_order:{order.id}">Recall</button>
+                  <button size="sm" variant="primary" on-press="recall_to_cart:{order.id}">To cart</button>
                 </if>
-                <button size="sm" variant="primary" on-press="pay_order:{order.id}">Pay</button>
+                <else>
+                  <if test="{order.advanceable}">
+                    <button size="sm" variant="secondary" disabled="{advancing}" on-press="advance_order:{order.id}">{order.advance_label}</button>
+                  </if>
+                  <button size="sm" variant="primary" on-press="pay_order:{order.id}">Pay</button>
+                  <button size="sm" variant="ghost" on-press="hold_order:{order.id}">Hold</button>
+                </else>
               </else>
             </row>
           </card>

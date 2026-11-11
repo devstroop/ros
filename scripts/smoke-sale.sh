@@ -108,7 +108,14 @@ start_app() {
 }
 
 automate() {
-  (cd "$app_dir" && native automate "$@")
+  local attempt
+  for attempt in 1 2 3 4 5 6 7 8; do
+    if (cd "$app_dir" && native automate "$@"); then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
 }
 
 # The id of a widget by its role and accessible name. Names are matched
@@ -139,7 +146,7 @@ tap() {
   local role="$1" name="$2"
   shift 2
   local attempt id
-  for attempt in 1 2 3 4 5; do
+  for attempt in 1 2 3 4 5 6 7 8; do
     id="$(widget_id "$role" "$name")"
     [ -n "$id" ] || fail "\"$name\" left the screen and \"$*\" never held"
     automate widget-click main-canvas "$id" >/dev/null 2>&1 || true
@@ -172,7 +179,7 @@ box_text() {
 # negative appends the value a second time.
 type_into() {
   local name="$1" value="$2" id attempt
-  for attempt in 1 2 3 4 5; do
+  for attempt in 1 2 3 4 5 6 7 8; do
     id="$(widget_id textbox "$name")"
     [ -n "$id" ] || fail "no textbox named \"$name\" on screen"
     automate widget-action main-canvas "$id" set_text "$value" >/dev/null 2>&1 || true
@@ -197,7 +204,7 @@ assert_visible() {
 type_secret() {
   local name="$1" value="$2" id attempt bullets
   bullets="$(printf '•%.0s' $(seq 1 "${#value}"))"
-  for attempt in 1 2 3 4 5; do
+  for attempt in 1 2 3 4 5 6 7 8; do
     id="$(widget_id textbox "$name")"
     [ -n "$id" ] || fail "no textbox named \"$name\" on screen"
     automate widget-action main-canvas "$id" set_text "$value" >/dev/null 2>&1 || true

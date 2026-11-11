@@ -25,6 +25,7 @@ pub const auth = @import("data/auth.zig");
 pub const page = @import("data/page.zig");
 pub const repos = @import("data/repos.zig");
 pub const starter = @import("data/starter.zig");
+pub const export_mod = @import("data/export.zig");
 
 pub const models = @import("domain/models.zig");
 
