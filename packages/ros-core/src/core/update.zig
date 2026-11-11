@@ -1249,6 +1249,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .open_reports => {
             go(model, .reports);
             repos.loadReport(model, fx, model.report_day_start_ms());
+            repos.loadRefunds(model, fx);
         },
 
         .open_dashboard => go(model, .admin_dashboard),
@@ -2343,6 +2344,15 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             model.error_text = "";
             if (result.kind == .page) repos.decodePayments(model, result.bytes);
+        },
+
+        .refunds_loaded => |result| {
+            if (result.outcome != .ok) {
+                model.error_text = "The refunds could not be read - try again";
+                return;
+            }
+            model.error_text = "";
+            if (result.kind == .page) repos.decodeRefunds(model, result.bytes);
         },
 
         .orders_loaded => |result| {

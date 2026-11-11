@@ -80,6 +80,7 @@ pub const key_save_discount = 40;
 pub const key_save_category = 41;
 pub const key_save_pin_hash = 38;
 pub const key_payments = 42;
+pub const key_refunds = 54;
 pub const key_report = 43;
 pub const key_report_modes = 44;
 pub const key_stock = 45;
@@ -287,6 +288,12 @@ pub const payments_sql =
     \\JOIN orders o ON o.id = p.order_id
     \\WHERE o.status <> 5
     \\ORDER BY p.paid_at DESC
+    \\LIMIT 200;
+;
+pub const refunds_sql =
+    \\SELECT id, payment_id, order_id, amount_minor, reason, refunded_at
+    \\FROM refund
+    \\ORDER BY refunded_at DESC
     \\LIMIT 200;
 ;
 
@@ -759,6 +766,10 @@ pub fn loadReport(model: *Model, fx: *Effects, day_start_ms: i64) void {
 /// Load the payments the restaurant has taken.
 pub fn loadPayments(model: *Model, fx: *Effects) void {
     query(model, fx, key_payments, payments_sql, &.{}, Effects.dbMsg(.payments_loaded));
+}
+
+pub fn loadRefunds(model: *Model, fx: *Effects) void {
+    query(model, fx, key_refunds, refunds_sql, &.{}, Effects.dbMsg(.refunds_loaded));
 }
 
 pub fn loadOrderLines(model: *Model, fx: *Effects) void {
@@ -1700,6 +1711,27 @@ pub fn decodePayments(model: *Model, bytes: []const u8) void {
         };
     }
     model.payments_list = list[0..index];
+}
+
+pub fn decodeRefunds(model: *Model, bytes: []const u8) void {
+    var reader = page.Reader.init(bytes);
+    if (!reader.readHeader()) return;
+    model.refunds_buf.reset();
+    const count = reader.rows_left;
+    const list = model.refunds_buf.allocSlice(domain.Refund, count) orelse return;
+    var values: [page.max_columns]page.Value = undefined;
+    var index: usize = 0;
+    while (index < count and reader.nextRow(&values)) : (index += 1) {
+        list[index] = .{
+            .id = reader.intOf(&values, "id", 0),
+            .payment_id = reader.intOf(&values, "payment_id", 0),
+            .order_id = reader.intOf(&values, "order_id", 0),
+            .amount_minor = reader.intOf(&values, "amount_minor", 0),
+            .reason = model.refunds_buf.dupe(reader.textOf(&values, "reason")) orelse "",
+            .refunded_at = reader.intOf(&values, "refunded_at", 0),
+        };
+    }
+    model.refunds_list = list[0..index];
 }
 
 pub fn decodeSuppliers(model: *Model, bytes: []const u8) void {
