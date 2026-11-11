@@ -211,7 +211,7 @@ fn selectTable(model: *Model, fx: *Effects, table_id: i64) void {
                 repos.loadOrderLines(model, fx);
                 return;
             },
-            .completed, .voided => {},
+            .completed, .voided, .held => {},
         }
     }
 
@@ -1740,7 +1740,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.cart_attempt_id = 0;
         },
 
-        .place_order => placeOrder(model, fx),
+        .place_order => placeOrder(model, fx, false),
+        .hold_cart => placeOrder(model, fx, true),
 
         .order_placed => |result| {
             model.busy = false;
@@ -1760,9 +1761,21 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 // cashier's: the button comes back and the sale can be
                 // tried again.
                 model.sale_pending = false;
+                model.cart_hold_pending = false;
                 return;
             }
             model.sale_pending = false;
+            if (model.cart_hold_pending) {
+                model.cart_hold_pending = false;
+                model.cart_len = 0;
+                model.cart_buf.reset();
+                model.cart_attempt_id = 0;
+                model.error_text = "";
+                repos.loadOrders(model, fx);
+                net_bridge.notify();
+                repos.maybeCompact(model, fx);
+                return;
+            }
             model.cart_len = 0;
             model.cart_buf.reset();
             // The sale landed: the next sale is a new attempt, with its
@@ -2250,6 +2263,50 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.voidOrder(model, fx, order_id, reason, fx.wallMs());
         },
 
+        .hold_order => |order_id| {
+            const order = findOrder(model, order_id) orelse {
+                model.error_text = "That order is no longer on the board";
+                return;
+            };
+            if (order.status == .held) {
+                model.error_text = "This order is already held";
+                return;
+            }
+            model.advance_order_id = order_id;
+            model.busy = true;
+            model.error_text = "";
+            repos.setOrderStatus(model, fx, order_id, order.status, .held, fx.wallMs());
+        },
+
+        .unhold_order => |order_id| {
+            const order = findOrder(model, order_id) orelse {
+                model.error_text = "That order is no longer on the board";
+                return;
+            };
+            if (order.status != .held) {
+                model.error_text = "This order is not held";
+                return;
+            }
+            model.advance_order_id = order_id;
+            model.busy = true;
+            model.error_text = "";
+            repos.setOrderStatus(model, fx, order_id, .held, .pending, fx.wallMs());
+        },
+
+        .recall_to_cart => |order_id| {
+            const order = findOrder(model, order_id) orelse {
+                model.error_text = "That order is no longer on the board";
+                return;
+            };
+            if (order.status != .held) {
+                model.error_text = "This order is not held";
+                return;
+            }
+            model.selected_order_id = order_id;
+            model.recall_pending = true;
+            repos.loadOrderLines(model, fx);
+        },
+
         .void_reason_edit => |event| model.void_reason_buf.apply(event),
 
         .credential_rehashed => |result| {
@@ -2409,6 +2466,34 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .order_lines_loaded => |result| {
             if (result.outcome != .ok) return;
             if (result.kind == .page) repos.decodeOrderLines(model, result.bytes);
+            if (model.recall_pending) {
+                model.recall_pending = false;
+                model.cart_len = 0;
+                model.cart_buf.reset();
+                for (model.order_lines) |line| {
+                    if (line.order_id != model.selected_order_id) continue;
+                    if (model.cart_len >= model_mod.max_cart_lines) break;
+                    const name = model.cart_buf.dupe(line.product_name) orelse continue;
+                    model.cart[model.cart_len] = .{
+                        .product_id = line.product_id,
+                        .name = name,
+                        .price_minor = line.unit_price_minor,
+                        .qty = line.qty,
+                    };
+                    model.cart_len += 1;
+                }
+                model.cart_attempt_id = 0;
+                // Consume the held order so it does not linger on the board.
+                model.advance_order_id = model.selected_order_id;
+                model.busy = true;
+                repos.setOrderStatus(model, fx, model.selected_order_id, .held, .voided, fx.wallMs());
+                model.selected_order_id = 0;
+                go(model, .pos);
+                repos.loadOrders(model, fx);
+                net_bridge.notify();
+                repos.maybeCompact(model, fx);
+                return;
+            }
             keepActiveOrder(model);
         },
 
@@ -2887,7 +2972,7 @@ fn nextStatus(status: domain.OrderStatus) domain.OrderStatus {
         .preparing => .ready,
         .ready => .served,
         .served => .completed,
-        .completed, .voided => status,
+        .completed, .voided, .held => status,
     };
 }
 
@@ -2970,7 +3055,7 @@ fn noteLoginFailure(model: *Model) void {
 /// order at a time, so the clock is unique enough, and it keeps the
 /// order number readable ("1749843210123"). A dedicated sequence would
 /// be better - see the roadmap.
-fn placeOrder(model: *Model, fx: *Effects) void {
+fn placeOrder(model: *Model, fx: *Effects, hold: bool) void {
     if (model.cart_len == 0) {
         model.error_text = "The cart is empty";
         return;
@@ -3016,11 +3101,11 @@ fn placeOrder(model: *Model, fx: *Effects) void {
         // the number on the ticket is the number that was stored.
         .order_no = "",
         .order_type = model.cart_order_type,
-        .status = .pending,
-        .status_code = @intFromEnum(domain.OrderStatus.pending),
-        .status_label = domain.OrderStatus.pending.label(),
-        .advance_label = domain.OrderStatus.pending.actionLabel(),
-        .advanceable = domain.OrderStatus.pending.advanceable(),
+        .status = if (hold) .held else .pending,
+        .status_code = @intFromEnum(if (hold) domain.OrderStatus.held else domain.OrderStatus.pending),
+        .status_label = (if (hold) domain.OrderStatus.held else domain.OrderStatus.pending).label(),
+        .advance_label = (if (hold) domain.OrderStatus.held else domain.OrderStatus.pending).actionLabel(),
+        .advanceable = (if (hold) domain.OrderStatus.held else domain.OrderStatus.pending).advanceable(),
         .type_label = model.cart_order_type.label(),
         .dining_table_id = 0,
         .customer_id = 0,
@@ -3078,6 +3163,7 @@ fn placeOrder(model: *Model, fx: *Effects) void {
 
     model.busy = true;
     model.sale_pending = true;
+    model.cart_hold_pending = hold;
     // The request key: this device's token and the attempt's id. It is
     // what makes a retry the same sale rather than a second one.
     var key_buffer: [64]u8 = undefined;

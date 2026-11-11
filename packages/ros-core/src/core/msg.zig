@@ -114,6 +114,8 @@ pub const Msg = union(enum) {
     clear_discount,
     /// Turn the cart into an order.
     place_order,
+    /// Park the cart as a held order.
+    hold_cart,
     /// The order write came back.
     order_placed: native_sdk.EffectDbResult,
 
@@ -179,6 +181,12 @@ pub const Msg = union(enum) {
     pay_selected_order,
     /// Void the order with this id, before it is paid.
     void_order: i64,
+    /// Park the order with this id as held.
+    hold_order: i64,
+    /// Bring a held order back to the floor.
+    unhold_order: i64,
+    /// Load a held order back into the cart.
+    recall_to_cart: i64,
     /// The reason the operator gave for the void.
     void_reason_edit: canvas.TextInputEvent,
 

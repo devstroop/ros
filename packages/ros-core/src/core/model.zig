@@ -858,6 +858,8 @@ pub const Model = struct {
     /// it: the button that places the order is disabled while it holds,
     /// so a second tap cannot submit the same cart twice.
     sale_pending: bool = false,
+    cart_hold_pending: bool = false,
+    recall_pending: bool = false,
     /// The highest order id this process has issued. The order id is
     /// the wall clock, but a clock is not a sequence: two sales in the
     /// same millisecond would want the same id, and the second one
@@ -2718,7 +2720,7 @@ pub const Model = struct {
                 .pending, .preparing, .ready => {
                     if (orderOnStation(model, order.id, model.station_filter_field)) count += 1;
                 },
-                .served, .completed, .voided => {},
+                .served, .completed, .voided, .held => {},
             }
         }
         const out = arena.alloc(Ticket, count) catch return &.{};
@@ -2728,7 +2730,7 @@ pub const Model = struct {
                 .pending, .preparing, .ready => {
                     if (!orderOnStation(model, order.id, model.station_filter_field)) continue;
                 },
-                .served, .completed, .voided => continue,
+                .served, .completed, .voided, .held => continue,
             }
             out[index] = .{
                 .id = order.id,
@@ -2757,7 +2759,7 @@ pub const Model = struct {
                 .pending, .preparing, .ready => {
                     if (!orderOnStation(model, order.id, model.station_filter_field)) continue;
                 },
-                .served, .completed, .voided => continue,
+                .served, .completed, .voided, .held => continue,
             }
             count += 1;
         }
@@ -2820,7 +2822,7 @@ pub const KitchenDish = struct {
 /// of the app, and this version must not write to it. A test counts
 /// the tables in the migrations and says when the two disagree, so a
 /// new migration that adds a table cannot slip past.
-pub const known_table_count: i64 = 47;
+pub const known_table_count: i64 = 55;
 
 /// One food marking, as the product form offers it.
 /// One palette, as the Settings screen offers it.
@@ -2976,7 +2978,7 @@ pub const DisplayCard = struct {
 fn orderIsOpen(status: domain.OrderStatus) bool {
     return switch (status) {
         .pending, .preparing, .ready, .served => true,
-        .completed, .voided => false,
+        .completed, .voided, .held => false,
     };
 }
 
