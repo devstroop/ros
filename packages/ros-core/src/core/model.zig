@@ -2798,7 +2798,7 @@ pub const KitchenDish = struct {
 /// of the app, and this version must not write to it. A test counts
 /// the tables in the migrations and says when the two disagree, so a
 /// new migration that adds a table cannot slip past.
-pub const known_table_count: i64 = 47;
+pub const known_table_count: i64 = 55;
 
 /// One food marking, as the product form offers it.
 /// One palette, as the Settings screen offers it.
