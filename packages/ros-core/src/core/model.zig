@@ -705,6 +705,7 @@ pub const Model = struct {
     reservations_list: []const domain.Reservation = &.{},
     suppliers_list: []const domain.Supplier = &.{},
     payments_list: []const domain.Payment = &.{},
+    refunds_list: []const domain.Refund = &.{},
     report_modes_list: []const domain.ReportMode = &.{},
     stock_items_list: []const domain.StockItem = &.{},
     table_counts_list: []const domain.TableCount = &.{},
@@ -722,6 +723,7 @@ pub const Model = struct {
     reservations_buf: bump.Bump(8192) = .{},
     suppliers_buf: bump.Bump(8192) = .{},
     payments_buf: bump.Bump(16384) = .{},
+    refunds_buf: bump.Bump(8192) = .{},
     report_modes_buf: bump.Bump(2048) = .{},
     stock_buf: bump.Bump(8192) = .{},
     table_counts_buf: bump.Bump(4096) = .{},
@@ -1901,6 +1903,11 @@ pub const Model = struct {
     /// The payments the restaurant has taken.
     pub fn payments(model: *const Model) []const domain.Payment {
         return model.payments_list;
+    }
+
+    /// The refunds given back.
+    pub fn refunds(model: *const Model) []const domain.Refund {
+        return model.refunds_list;
     }
 
     /// How many payments the restaurant has taken.
