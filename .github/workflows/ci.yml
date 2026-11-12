@@ -269,3 +269,72 @@ jobs:
             dist/checksums.txt
           if-no-files-found: error
           retention-days: 14
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Zig
+        uses: vercel-labs/setup-zig@v1
+        with:
+          version: ${{ env.NATIVE_ZIG_VERSION }}
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install GTK (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev
+      - name: Restore the Native SDK checkout
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: ~/native-sdk
+          key: native-sdk-${{ runner.os }}-${{ env.NATIVE_SDK_TAG }}-zig${{ env.NATIVE_ZIG_VERSION }}-b2
+      - name: Fetch and build the SDK CLI
+        if: steps.sdk.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$NATIVE_SDK_TAG" https://github.com/vercel-labs/native.git "$HOME/native-sdk"
+          cd "$HOME/native-sdk"
+          zig build -Doptimize=ReleaseFast -Dcpu=baseline
+      - name: Put the SDK CLI on PATH
+        shell: bash
+        run: |
+          test -x "$HOME/native-sdk/zig-out/bin/native"
+          echo "$HOME/native-sdk/zig-out/bin" >> "$GITHUB_PATH"
+      - name: Install the SDK TypeScript toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$HOME/native-sdk/packages/core"
+          npm ci --include=dev
+      - name: Point the app builds at the SDK
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cmd /c "mklink /J .native-sdk $USERPROFILE\\native-sdk"
+          else
+            ln -sfn "$HOME/native-sdk" "$GITHUB_WORKSPACE/.native-sdk"
+          fi
+      - name: Cache the Zig compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-cache-${{ runner.os }}-${{ env.NATIVE_SDK_TAG }}-zig${{ env.NATIVE_ZIG_VERSION }}
+      - name: Build all apps
+        shell: bash
+        run: |
+          set -euo pipefail
+          for app in admin service kiosk; do
+            echo "==> building $app"
+            cd "apps/$app"
+            native build --yes
+            cd "$GITHUB_WORKSPACE"
+          done
