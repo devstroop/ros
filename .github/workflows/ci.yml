@@ -319,7 +319,8 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cmd /c "mklink /J .native-sdk %USERPROFILE%\\native-sdk"
+            rm -rf .native-sdk
+            cp -r "$HOME/native-sdk" .native-sdk
             test -d .native-sdk
           else
             ln -sfn "$HOME/native-sdk" "$GITHUB_WORKSPACE/.native-sdk"
