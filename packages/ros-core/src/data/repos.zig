@@ -5520,6 +5520,31 @@ pub fn endWorkPeriod(model: *Model, fx: *Effects, at: i64) void {
 }
 
 /// Clock an employee in.
+pub fn reverseCustomerLedgerByReference(model: *Model, fx: *Effects, customer_id: i64, ref_text: []const u8, employee_id: i64, at: i64) void {
+    var params: [4]native_sdk.EffectDbValue = .{
+        .{ .text = ref_text },
+        .{ .integer = at },
+        idParam(employee_id),
+        .{ .integer = customer_id },
+    };
+    const statements = [_]native_sdk.EffectDbStatement{.{
+        .sql =
+        \\INSERT INTO customer_ledger (customer_id, entry_type, amount_minor, reference, reversed_id, created_at, employee_id)
+        \\SELECT customer_id, 2, -amount_minor, ?1, id, ?2, ?3
+        \\FROM customer_ledger
+        \\WHERE customer_id = ?4 AND reference = ?1
+        \\  AND reversed_id IS NULL;
+        ,
+        .params = &params,
+    }};
+    fx.dbExec(.{
+        .key = key_write_order,
+        .statements = &statements,
+        .on_result = Effects.dbMsg(.attendance_saved),
+    });
+    saveCursor(model, fx);
+}
+
 pub fn clockIn(model: *Model, fx: *Effects, employee_id: i64, at: i64) void {
     _ = model;
     var params: [2]native_sdk.EffectDbValue = .{
