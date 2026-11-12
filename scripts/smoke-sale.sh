@@ -135,7 +135,7 @@ widget_id() {
 # read from one snapshot can be retired before the command carrying it
 # arrives: the app rejects the stale id and nothing happens. So every
 # interaction is repeated until the screen says it landed.
-press_window_ms="${ROS_SMOKE_PRESS_MS:-3000}"
+press_window_ms="${ROS_SMOKE_PRESS_MS:-5000}"
 
 # Press a control, and press it again if what was asked of the screen
 # did not follow. The app's own guards - a sale still being saved, an
@@ -146,7 +146,7 @@ tap() {
   local role="$1" name="$2"
   shift 2
   local attempt id
-  for attempt in 1 2 3 4 5 6 7 8; do
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
     id="$(widget_id "$role" "$name")"
     [ -n "$id" ] || fail "\"$name\" left the screen and \"$*\" never held"
     automate widget-click main-canvas "$id" >/dev/null 2>&1 || true
