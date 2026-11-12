@@ -2107,7 +2107,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
         .edit_employee => |id| openEmployeeForm(model, id),
 
-        .open_employees => go(model, .employees),
+        .open_employees => {
+            go(model, .employees);
+            repos.loadAttendance(model, fx);
+        },
 
         .reset_employee_credential => |id| {
             model.form_reset_employee_id = id;
@@ -2569,6 +2572,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .work_periods_loaded => |result| {
             if (result.outcome != .ok) return;
             if (result.kind == .page) repos.decodeWorkPeriods(model, result.bytes);
+        },
+
+        .attendance_loaded => |result| {
+            if (result.outcome != .ok) return;
+            if (result.kind == .page) repos.decodeAttendance(model, result.bytes);
         },
 
         .refunds_exported => |result| {

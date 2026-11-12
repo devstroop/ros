@@ -497,6 +497,14 @@ pub const Refund = struct {
     refunded_at: i64,
 };
 
+/// A staff attendance entry.
+pub const Attendance = struct {
+    id: i64,
+    employee_id: i64,
+    clock_in: i64,
+    clock_out: i64,
+};
+
 /// A work period: an open/close boundary for reports and cash.
 pub const WorkPeriod = struct {
     id: i64,

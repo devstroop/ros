@@ -25,6 +25,20 @@
       </column>
     </if>
 
+    <if test="{attendance_count > 0}">
+      <card padding="16">
+        <column gap="6">
+          <text size="lg">Attendance</text>
+          <for each="attendance" key="id" as="entry">
+            <row cross="center">
+              <text grow="1">Employee {entry.employee_id}</text>
+              <text>{entry.clock_in}</text>
+            </row>
+          </for>
+        </column>
+      </card>
+    </if>
+
     <scroll grow="1">
       <column gap="4">
         <for each="employees" key="id" as="employee">
