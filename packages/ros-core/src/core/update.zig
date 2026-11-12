@@ -2147,6 +2147,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.loadBankAccounts(model, fx);
             repos.loadExpenses(model, fx);
             repos.loadBankLedger(model, fx);
+            repos.loadPromotions(model, fx);
+            repos.loadGiftCards(model, fx);
         },
 
         .reset_employee_credential => |id| {
@@ -2634,6 +2636,16 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .bank_ledger_loaded => |result| {
             if (result.outcome != .ok) return;
             if (result.kind == .page) repos.decodeBankLedger(model, result.bytes);
+        },
+
+        .promotions_loaded => |result| {
+            if (result.outcome != .ok) return;
+            if (result.kind == .page) repos.decodePromotions(model, result.bytes);
+        },
+
+        .gift_cards_loaded => |result| {
+            if (result.outcome != .ok) return;
+            if (result.kind == .page) repos.decodeGiftCards(model, result.bytes);
         },
 
         .refunds_exported => |result| {

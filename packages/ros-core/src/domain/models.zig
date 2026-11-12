@@ -564,6 +564,23 @@ pub const Expense = struct {
     spent_at: i64,
 };
 
+/// A promotion.
+pub const Promotion = struct {
+    id: i64,
+    name: []const u8,
+    kind: i64,
+    value_minor: i64,
+    active: bool,
+};
+
+/// A gift card.
+pub const GiftCard = struct {
+    id: i64,
+    code: []const u8,
+    balance_minor: i64,
+    active: bool,
+};
+
 /// A bank account.
 pub const BankAccount = struct {
     id: i64,

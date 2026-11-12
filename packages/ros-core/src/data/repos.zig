@@ -87,6 +87,8 @@ pub const key_loyalty_members = 57;
 pub const key_bank_accounts = 58;
 pub const key_expenses = 59;
 pub const key_bank_ledger = 60;
+pub const key_promotions = 61;
+pub const key_gift_cards = 62;
 pub const key_report = 43;
 pub const key_report_modes = 44;
 pub const key_stock = 45;
@@ -345,6 +347,20 @@ pub const bank_ledger_sql =
     \\LIMIT 100;
 ;
 
+pub const promotions_sql =
+    \\SELECT id, name, kind, value_minor, active
+    \\FROM promotion
+    \\ORDER BY name
+    \\LIMIT 100;
+;
+
+pub const gift_cards_sql =
+    \\SELECT id, code, balance_minor, active
+    \\FROM gift_card
+    \\ORDER BY code
+    \\LIMIT 100;
+;
+
 /// The sign-in reads the employee the picker chose.
 ///
 /// The lookup is by EMPLOYEE, not by hash. The person is already
@@ -480,6 +496,8 @@ pub const table_counts_sql =
     \\UNION ALL SELECT 'customer_ledger' AS name, (SELECT COUNT(*) FROM customer_ledger) AS n
     \\UNION ALL SELECT 'loyalty_ledger' AS name, (SELECT COUNT(*) FROM loyalty_ledger) AS n
     \\UNION ALL SELECT 'loyalty_member' AS name, (SELECT COUNT(*) FROM loyalty_member) AS n
+    \\UNION ALL SELECT 'promotion' AS name, (SELECT COUNT(*) FROM promotion) AS n
+    \\UNION ALL SELECT 'gift_card' AS name, (SELECT COUNT(*) FROM gift_card) AS n
     \\UNION ALL SELECT 'recipe' AS name, (SELECT COUNT(*) FROM recipe) AS n
     \\UNION ALL SELECT 'work_period' AS name, (SELECT COUNT(*) FROM work_period) AS n
     \\UNION ALL SELECT 'void_log_entry' AS name, (SELECT COUNT(*) FROM void_log_entry) AS n
@@ -850,6 +868,14 @@ pub fn loadExpenses(model: *Model, fx: *Effects) void {
 
 pub fn loadBankLedger(model: *Model, fx: *Effects) void {
     query(model, fx, key_bank_ledger, bank_ledger_sql, &.{}, Effects.dbMsg(.bank_ledger_loaded));
+}
+
+pub fn loadPromotions(model: *Model, fx: *Effects) void {
+    query(model, fx, key_promotions, promotions_sql, &.{}, Effects.dbMsg(.promotions_loaded));
+}
+
+pub fn loadGiftCards(model: *Model, fx: *Effects) void {
+    query(model, fx, key_gift_cards, gift_cards_sql, &.{}, Effects.dbMsg(.gift_cards_loaded));
 }
 
 pub fn loadOrderLines(model: *Model, fx: *Effects) void {
@@ -1932,6 +1958,45 @@ pub fn decodeBankLedger(model: *Model, bytes: []const u8) void {
         };
     }
     model.bank_ledger_list = list[0..index];
+}
+
+pub fn decodePromotions(model: *Model, bytes: []const u8) void {
+    var reader = page.Reader.init(bytes);
+    if (!reader.readHeader()) return;
+    model.promotions_buf.reset();
+    const count = reader.rows_left;
+    const list = model.promotions_buf.allocSlice(domain.Promotion, count) orelse return;
+    var values: [page.max_columns]page.Value = undefined;
+    var index: usize = 0;
+    while (index < count and reader.nextRow(&values)) : (index += 1) {
+        list[index] = .{
+            .id = reader.intOf(&values, "id", 0),
+            .name = model.promotions_buf.dupe(reader.textOf(&values, "name")) orelse "",
+            .kind = reader.intOf(&values, "kind", 0),
+            .value_minor = reader.intOf(&values, "value_minor", 0),
+            .active = reader.boolOf(&values, "active"),
+        };
+    }
+    model.promotions_list = list[0..index];
+}
+
+pub fn decodeGiftCards(model: *Model, bytes: []const u8) void {
+    var reader = page.Reader.init(bytes);
+    if (!reader.readHeader()) return;
+    model.gift_cards_buf.reset();
+    const count = reader.rows_left;
+    const list = model.gift_cards_buf.allocSlice(domain.GiftCard, count) orelse return;
+    var values: [page.max_columns]page.Value = undefined;
+    var index: usize = 0;
+    while (index < count and reader.nextRow(&values)) : (index += 1) {
+        list[index] = .{
+            .id = reader.intOf(&values, "id", 0),
+            .code = model.gift_cards_buf.dupe(reader.textOf(&values, "code")) orelse "",
+            .balance_minor = reader.intOf(&values, "balance_minor", 0),
+            .active = reader.boolOf(&values, "active"),
+        };
+    }
+    model.gift_cards_list = list[0..index];
 }
 
 pub fn expenseVoucher(model: *Model, fx: *Effects, amount_minor: i64, note: []const u8, employee_id: i64, at: i64) void {
