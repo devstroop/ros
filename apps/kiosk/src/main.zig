@@ -71,7 +71,29 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .min_height = 600,
     .views = &shell_views,
 }};
-const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
+// A second, customer-facing window shares the same canvas so the kiosk
+// can show the board and the guest display at once.
+const shell_windows2 = [_]native_sdk.ShellWindow{
+    .{
+        .label = "main",
+        .title = "Restaurant OS Kiosk",
+        .width = window_width,
+        .height = window_height,
+        .min_width = 960,
+        .min_height = 600,
+        .views = &shell_views,
+    },
+    .{
+        .label = "guest",
+        .title = "Restaurant OS Kiosk - Guest",
+        .width = 480,
+        .height = 800,
+        .min_width = 320,
+        .min_height = 480,
+        .views = &shell_views,
+    },
+};
+const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows2 };
 
 // ------------------------------------------------------------------ view
 
