@@ -13,4 +13,5 @@
 test {
     _ = @import("net/tests.zig");
     _ = @import("core/rbac.zig");
+    _ = @import("domain/models.zig");
 }

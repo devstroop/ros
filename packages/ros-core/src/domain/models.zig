@@ -31,7 +31,55 @@ pub const OrderType = enum(i64) {
             .delivery => "Delivery",
         };
     }
+
+    /// A dine-in sale belongs to a table.
+    pub fn requiresTable(self: OrderType) bool {
+        return self == .dine_in;
+    }
+
+    /// A delivery sale needs a customer and an address.
+    pub fn requiresCustomer(self: OrderType) bool {
+        return self == .delivery;
+    }
+
+    /// Every service type in ROS sends a ticket to the kitchen.
+    pub fn generatesKot(_: OrderType) bool {
+        return true;
+    }
+
+    /// Alias for the KOT rule, for callers that ask it that way.
+    pub fn kotRequired(self: OrderType) bool {
+        return self.generatesKot();
+    }
+
+    /// The billing path the sale follows.
+    pub fn billingPath(self: OrderType) []const u8 {
+        return switch (self) {
+            .dine_in => "table",
+            .take_away => "counter",
+            .delivery => "delivery",
+        };
+    }
 };
+
+test "service types declare their KOT and billing rules" {
+    const testing = std.testing;
+    try testing.expect(OrderType.dine_in.requiresTable());
+    try testing.expect(!OrderType.take_away.requiresTable());
+    try testing.expect(!OrderType.delivery.requiresTable());
+
+    try testing.expect(OrderType.delivery.requiresCustomer());
+    try testing.expect(!OrderType.dine_in.requiresCustomer());
+    try testing.expect(!OrderType.take_away.requiresCustomer());
+
+    try testing.expect(OrderType.dine_in.generatesKot());
+    try testing.expect(OrderType.take_away.generatesKot());
+    try testing.expect(OrderType.delivery.generatesKot());
+
+    try testing.expectEqualStrings("table", OrderType.dine_in.billingPath());
+    try testing.expectEqualStrings("counter", OrderType.take_away.billingPath());
+    try testing.expectEqualStrings("delivery", OrderType.delivery.billingPath());
+}
 
 /// Order lifecycle. The transition table lives in `nextStatus`, in
 /// `core/update.zig`. The ordinals are the database's `status` column and
