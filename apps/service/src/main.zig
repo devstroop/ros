@@ -94,6 +94,20 @@ pub fn initialModel() Model {
 }
 
 pub fn main(init: std.process.Init) !void {
+    // Only one copy of this app at a time: a second launch finds the
+    // lock already held and steps aside instead of corrupting state.
+    const lock_file = std.Io.Dir.cwd().createFile(init.io, ".ros-service.lock", .{ .truncate = false }) catch |err| {
+        std.debug.print("ros: could not create lock file: {}\n", .{err});
+        return err;
+    };
+    const got_lock = lock_file.tryLock(init.io, .exclusive) catch false;
+    if (!got_lock) {
+        lock_file.close(init.io);
+        std.debug.print("ros: another instance is already running\n", .{});
+        return;
+    }
+    defer lock_file.close(init.io);
+
     // `create` heap-allocates and constructs the model in place: the
     // model carries the row buffers and is far too large for the stack.
     const app_state = try RosApp.create(std.heap.page_allocator, .{
