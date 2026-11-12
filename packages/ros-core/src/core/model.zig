@@ -664,11 +664,13 @@ pub const Model = struct {
     form_reset_credential_kind: domain.CredentialKind = .pin,
     form_reset_employee_id: i64 = 0,
     form_bank_account_id: i64 = 0,
+    form_bank_amount_minor: i64 = 0,
     form_loyalty_member_id: i64 = 0,
     form_loyalty_points: i64 = 0,
+    form_bank_account_id_buf: canvas.TextBuffer(16) = .{},
+    form_bank_amount_minor_buf: canvas.TextBuffer(16) = .{},
     form_loyalty_member_id_buf: canvas.TextBuffer(16) = .{},
     form_loyalty_points_buf: canvas.TextBuffer(16) = .{},
-    form_bank_amount_minor: i64 = 0,
     form_reset_employee_name: []const u8 = "",
     form_category_name_buf: canvas.TextBuffer(64) = .{},
     form_category_id: i64 = 0,
@@ -721,6 +723,7 @@ pub const Model = struct {
     work_periods_list: []const domain.WorkPeriod = &.{},
     attendance_list: []const domain.Attendance = &.{},
     loyalty_members_list: []const domain.LoyaltyMember = &.{},
+    bank_accounts_list: []const domain.BankAccount = &.{},
 
     /// Storage for the settings rows the screens show.
     printers_buf: bump.Bump(8192) = .{},
@@ -742,6 +745,7 @@ pub const Model = struct {
     work_periods_buf: bump.Bump(8192) = .{},
     attendance_buf: bump.Bump(8192) = .{},
     loyalty_members_buf: bump.Bump(8192) = .{},
+    bank_accounts_buf: bump.Bump(8192) = .{},
 
     // ------------------------------------------------- the company form
 
@@ -1951,6 +1955,16 @@ pub const Model = struct {
     /// How many loyalty members there are.
     pub fn loyalty_members_count(model: *const Model) usize {
         return model.loyalty_members_list.len;
+    }
+
+    /// The bank accounts.
+    pub fn bank_accounts(model: *const Model) []const domain.BankAccount {
+        return model.bank_accounts_list;
+    }
+
+    /// How many bank accounts there are.
+    pub fn bank_accounts_count(model: *const Model) usize {
+        return model.bank_accounts_list.len;
     }
 
     /// The refunds given back.

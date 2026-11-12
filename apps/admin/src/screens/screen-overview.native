@@ -210,6 +210,32 @@
       </card>
     </if>
 
+    <if test="{bank_accounts_count > 0}">
+      <card padding="16">
+        <column gap="6">
+          <text size="lg">Bank accounts</text>
+          <for each="bank_accounts" key="id" as="account">
+            <row cross="center">
+              <text grow="1">{account.name}</text>
+              <text>{account.account_no}</text>
+            </row>
+          </for>
+          <row gap="8" cross="end">
+            <column gap="4" grow="1">
+              <text size="sm" foreground="text_muted">Account id</text>
+              <text-field text="{form_bank_account_id_buf}" label="Account id" on-input="form_bank_account_id_edit"/>
+            </column>
+            <column gap="4" grow="1">
+              <text size="sm" foreground="text_muted">Amount</text>
+              <text-field text="{form_bank_amount_minor_buf}" label="Amount" on-input="form_bank_amount_minor_edit"/>
+            </column>
+            <button size="sm" variant="primary" on-press="bank_deposit">Deposit</button>
+            <button size="sm" variant="secondary" on-press="bank_withdrawal">Withdraw</button>
+          </row>
+        </column>
+      </card>
+    </if>
+
     <if test="{loyalty_members_count > 0}">
       <card padding="16">
         <column gap="6">
