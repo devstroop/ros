@@ -727,6 +727,7 @@ pub const Model = struct {
     attendance_list: []const domain.Attendance = &.{},
     loyalty_members_list: []const domain.LoyaltyMember = &.{},
     bank_accounts_list: []const domain.BankAccount = &.{},
+    bank_ledger_list: []const domain.BankLedgerEntry = &.{},
     expenses_list: []const domain.Expense = &.{},
 
     /// Storage for the settings rows the screens show.
@@ -750,6 +751,7 @@ pub const Model = struct {
     attendance_buf: bump.Bump(8192) = .{},
     loyalty_members_buf: bump.Bump(8192) = .{},
     bank_accounts_buf: bump.Bump(8192) = .{},
+    bank_ledger_buf: bump.Bump(8192) = .{},
     expenses_buf: bump.Bump(8192) = .{},
 
     // ------------------------------------------------- the company form
@@ -1970,6 +1972,16 @@ pub const Model = struct {
     /// How many bank accounts there are.
     pub fn bank_accounts_count(model: *const Model) usize {
         return model.bank_accounts_list.len;
+    }
+
+    /// The bank ledger entries.
+    pub fn bank_ledger(model: *const Model) []const domain.BankLedgerEntry {
+        return model.bank_ledger_list;
+    }
+
+    /// How many bank ledger entries there are.
+    pub fn bank_ledger_count(model: *const Model) usize {
+        return model.bank_ledger_list.len;
     }
 
     /// The expense amount field's text.

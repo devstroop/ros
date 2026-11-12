@@ -86,6 +86,7 @@ pub const key_attendance = 56;
 pub const key_loyalty_members = 57;
 pub const key_bank_accounts = 58;
 pub const key_expenses = 59;
+pub const key_bank_ledger = 60;
 pub const key_report = 43;
 pub const key_report_modes = 44;
 pub const key_stock = 45;
@@ -334,6 +335,13 @@ pub const expenses_sql =
     \\SELECT id, category_id, amount_minor, note, spent_at
     \\FROM expense
     \\ORDER BY spent_at DESC
+    \\LIMIT 100;
+;
+
+pub const bank_ledger_sql =
+    \\SELECT id, account_id, entry_type, amount_minor, reference, created_at
+    \\FROM bank_ledger
+    \\ORDER BY created_at DESC
     \\LIMIT 100;
 ;
 
@@ -838,6 +846,10 @@ pub fn loadBankAccounts(model: *Model, fx: *Effects) void {
 
 pub fn loadExpenses(model: *Model, fx: *Effects) void {
     query(model, fx, key_expenses, expenses_sql, &.{}, Effects.dbMsg(.expenses_loaded));
+}
+
+pub fn loadBankLedger(model: *Model, fx: *Effects) void {
+    query(model, fx, key_bank_ledger, bank_ledger_sql, &.{}, Effects.dbMsg(.bank_ledger_loaded));
 }
 
 pub fn loadOrderLines(model: *Model, fx: *Effects) void {
@@ -1899,6 +1911,27 @@ pub fn decodeExpenses(model: *Model, bytes: []const u8) void {
         };
     }
     model.expenses_list = list[0..index];
+}
+
+pub fn decodeBankLedger(model: *Model, bytes: []const u8) void {
+    var reader = page.Reader.init(bytes);
+    if (!reader.readHeader()) return;
+    model.bank_ledger_buf.reset();
+    const count = reader.rows_left;
+    const list = model.bank_ledger_buf.allocSlice(domain.BankLedgerEntry, count) orelse return;
+    var values: [page.max_columns]page.Value = undefined;
+    var index: usize = 0;
+    while (index < count and reader.nextRow(&values)) : (index += 1) {
+        list[index] = .{
+            .id = reader.intOf(&values, "id", 0),
+            .account_id = reader.intOf(&values, "account_id", 0),
+            .entry_type = reader.intOf(&values, "entry_type", 0),
+            .amount_minor = reader.intOf(&values, "amount_minor", 0),
+            .reference = model.bank_ledger_buf.dupe(reader.textOf(&values, "reference")) orelse "",
+            .created_at = reader.intOf(&values, "created_at", 0),
+        };
+    }
+    model.bank_ledger_list = list[0..index];
 }
 
 pub fn expenseVoucher(model: *Model, fx: *Effects, amount_minor: i64, note: []const u8, employee_id: i64, at: i64) void {

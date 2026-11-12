@@ -497,6 +497,16 @@ pub const Refund = struct {
     refunded_at: i64,
 };
 
+/// A bank ledger entry.
+pub const BankLedgerEntry = struct {
+    id: i64,
+    account_id: i64,
+    entry_type: i64,
+    amount_minor: i64,
+    reference: []const u8,
+    created_at: i64,
+};
+
 /// An expense voucher.
 pub const Expense = struct {
     id: i64,
