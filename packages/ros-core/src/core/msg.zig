@@ -154,6 +154,7 @@ pub const Msg = union(enum) {
     work_periods_loaded: native_sdk.EffectDbResult,
     attendance_loaded: native_sdk.EffectDbResult,
     loyalty_members_loaded: native_sdk.EffectDbResult,
+    bank_accounts_loaded: native_sdk.EffectDbResult,
     /// The refunds CSV export finished.
     refunds_exported: native_sdk.EffectFileResult,
     /// The user asked to export refunds as CSV.
@@ -233,6 +234,10 @@ pub const Msg = union(enum) {
     loyalty_saved: native_sdk.EffectDbResult,
     /// Record a bank deposit.
     bank_deposit,
+    /// The bank account id field changed.
+    form_bank_account_id_edit: canvas.TextInputEvent,
+    /// The bank amount field changed.
+    form_bank_amount_minor_edit: canvas.TextInputEvent,
     /// Record a bank withdrawal.
     bank_withdrawal,
     /// The bank write came back.

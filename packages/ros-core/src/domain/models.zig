@@ -497,6 +497,14 @@ pub const Refund = struct {
     refunded_at: i64,
 };
 
+/// A bank account.
+pub const BankAccount = struct {
+    id: i64,
+    name: []const u8,
+    account_no: []const u8,
+    active: bool,
+};
+
 /// A loyalty member.
 pub const LoyaltyMember = struct {
     id: i64,
