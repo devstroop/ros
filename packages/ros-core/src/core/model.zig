@@ -665,6 +665,9 @@ pub const Model = struct {
     form_reset_employee_id: i64 = 0,
     form_bank_account_id: i64 = 0,
     form_bank_amount_minor: i64 = 0,
+    form_expense_amount_minor: i64 = 0,
+    form_expense_note_buf: canvas.TextBuffer(128) = .{},
+    form_expense_amount_minor_buf: canvas.TextBuffer(16) = .{},
     form_loyalty_member_id: i64 = 0,
     form_loyalty_points: i64 = 0,
     form_bank_account_id_buf: canvas.TextBuffer(16) = .{},
@@ -724,6 +727,7 @@ pub const Model = struct {
     attendance_list: []const domain.Attendance = &.{},
     loyalty_members_list: []const domain.LoyaltyMember = &.{},
     bank_accounts_list: []const domain.BankAccount = &.{},
+    expenses_list: []const domain.Expense = &.{},
 
     /// Storage for the settings rows the screens show.
     printers_buf: bump.Bump(8192) = .{},
@@ -746,6 +750,7 @@ pub const Model = struct {
     attendance_buf: bump.Bump(8192) = .{},
     loyalty_members_buf: bump.Bump(8192) = .{},
     bank_accounts_buf: bump.Bump(8192) = .{},
+    expenses_buf: bump.Bump(8192) = .{},
 
     // ------------------------------------------------- the company form
 
@@ -1965,6 +1970,26 @@ pub const Model = struct {
     /// How many bank accounts there are.
     pub fn bank_accounts_count(model: *const Model) usize {
         return model.bank_accounts_list.len;
+    }
+
+    /// The expense amount field's text.
+    pub fn form_expense_amount_minor_text(model: *const Model) []const u8 {
+        return model.form_expense_amount_minor_buf.text();
+    }
+
+    /// The expense note field's text.
+    pub fn form_expense_note_text(model: *const Model) []const u8 {
+        return model.form_expense_note_buf.text();
+    }
+
+    /// The expense vouchers.
+    pub fn expenses(model: *const Model) []const domain.Expense {
+        return model.expenses_list;
+    }
+
+    /// How many expense vouchers there are.
+    pub fn expenses_count(model: *const Model) usize {
+        return model.expenses_list.len;
     }
 
     /// The refunds given back.

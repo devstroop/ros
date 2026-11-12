@@ -210,6 +210,17 @@
       </card>
     </if>
 
+
+
+    <card padding="16">
+      <row gap="8" cross="end">
+        <column gap="4" grow="1">
+          <text size="sm" foreground="text_muted">Expense amount</text>
+          <text-field text="{form_expense_amount_minor_text}" label="Amount" on-input="form_expense_amount_minor_edit"/>
+        </column>
+      </row>
+    </card>
+
     <if test="{bank_accounts_count > 0}">
       <card padding="16">
         <column gap="6">

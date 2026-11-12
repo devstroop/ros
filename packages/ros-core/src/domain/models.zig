@@ -497,6 +497,15 @@ pub const Refund = struct {
     refunded_at: i64,
 };
 
+/// An expense voucher.
+pub const Expense = struct {
+    id: i64,
+    category_id: i64,
+    amount_minor: i64,
+    note: []const u8,
+    spent_at: i64,
+};
+
 /// A bank account.
 pub const BankAccount = struct {
     id: i64,
