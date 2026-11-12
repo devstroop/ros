@@ -221,6 +221,20 @@
       </row>
     </card>
 
+    <if test="{bank_ledger_count > 0}">
+      <card padding="16">
+        <column gap="6">
+          <text size="lg">Bank ledger</text>
+          <for each="bank_ledger" key="id" as="entry">
+            <row cross="center">
+              <text grow="1">{entry.reference}</text>
+              <text>{currency_symbol}{fixed(entry.amount_minor / currency_divisor, currency_decimal_count)}</text>
+            </row>
+          </for>
+        </column>
+      </card>
+    </if>
+
     <if test="{bank_accounts_count > 0}">
       <card padding="16">
         <column gap="6">

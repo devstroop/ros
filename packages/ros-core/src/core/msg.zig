@@ -155,6 +155,7 @@ pub const Msg = union(enum) {
     attendance_loaded: native_sdk.EffectDbResult,
     loyalty_members_loaded: native_sdk.EffectDbResult,
     bank_accounts_loaded: native_sdk.EffectDbResult,
+    bank_ledger_loaded: native_sdk.EffectDbResult,
     expenses_loaded: native_sdk.EffectDbResult,
     /// The refunds CSV export finished.
     refunds_exported: native_sdk.EffectFileResult,
