@@ -160,6 +160,13 @@ pub fn main(init: std.process.Init) !void {
         net_bridge.deviceRole(&app_state.model),
         app_state.model.pairing(),
     );
+    net_bridge.print_stop = false;
+    const print_thread = std.Thread.spawn(.{}, printLoop, .{init.io}) catch null;
+    defer {
+        net_bridge.print_stop = true;
+        if (print_thread) |thread| thread.join();
+    }
+
     defer {
         net_bridge.stop(init.io);
         net_threads.join();
@@ -177,6 +184,23 @@ pub fn main(init: std.process.Init) !void {
             .navigation = .{ .allowed_origins = &.{ "zero://inline", "zero://app" } },
         },
     }, init);
+}
+
+
+fn printLoop(io: std.Io) void {
+    while (!net_bridge.print_stop) {
+        if (net_bridge.print_pending) {
+            net_bridge.print_pending = false;
+            const host = net_bridge.print_host;
+            const port = net_bridge.print_port;
+            const order_no = net_bridge.print_order_no;
+            const total = net_bridge.print_total;
+            const decimals = net_bridge.print_decimals;
+            const job = @import("ros_core").print.job;
+            job.run(io, host, port, order_no, total, decimals, 3) catch {};
+        }
+        std.Io.sleep(io, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+    }
 }
 
 test {

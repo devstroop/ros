@@ -151,6 +151,13 @@ fn settlePayment(model: *Model, fx: *Effects) void {
     model.payment_error = "";
     go(model, .orders);
     net_bridge.notify();
+    if (model.printer_has) {
+        net_bridge.print_host = model.printer_address_field;
+        net_bridge.print_port = @intCast(model.printer_port_field);
+        net_bridge.print_order_no = model.last_order_no_field;
+        net_bridge.print_decimals = @intCast(model.printer_decimals_field);
+    }
+    net_bridge.print_pending = true;
     repos.maybeCompact(model, fx);
 }
 

@@ -1830,6 +1830,25 @@ pub fn decodePrinters(model: *Model, bytes: []const u8) void {
         };
     }
     model.printers_list = list[0..index];
+    // Remember the first active receipt printer so the sale flow can
+    // print without re-scanning the list on the update thread.
+    model.printer_has = false;
+    model.printer_address_field = "";
+    model.printer_port_field = 9100;
+    for (list[0..index]) |printer| {
+        if (!printer.active) continue;
+        if (!std.mem.eql(u8, printer.job, "receipt")) continue;
+        if (!std.mem.eql(u8, printer.transport, "tcp")) continue;
+        model.printer_address_field = printer.address;
+        var port: i64 = 9100;
+        if (std.mem.lastIndexOfScalar(u8, printer.address, ':')) |idx| {
+            port = std.fmt.parseInt(i64, printer.address[idx + 1 ..], 10) catch 9100;
+        }
+        model.printer_port_field = port;
+        model.printer_decimals_field = model.currency_decimal_count();
+        model.printer_has = true;
+        break;
+    }
 }
 
 pub fn decodeTaxSlabs(model: *Model, bytes: []const u8) void {
