@@ -196,6 +196,20 @@
       <text size="sm" foreground="text_muted">{error_text}</text>
     </row>
 
+    <if test="{work_periods_count > 0}">
+      <card padding="16">
+        <column gap="6">
+          <text size="lg">Work periods</text>
+          <for each="work_periods" key="id" as="period">
+            <row cross="center">
+              <text grow="1">{period.started_at}</text>
+              <text>{period.status}</text>
+            </row>
+          </for>
+        </column>
+      </card>
+    </if>
+
     <if test="{refunds_count > 0}">
       <card padding="16">
         <column gap="6">

@@ -716,6 +716,7 @@ pub const Model = struct {
     devices_list: []const domain.Device = &.{},
     sync_state_list: []const domain.SyncState = &.{},
     purchase_orders_list: []const domain.PurchaseOrder = &.{},
+    work_periods_list: []const domain.WorkPeriod = &.{},
 
     /// Storage for the settings rows the screens show.
     printers_buf: bump.Bump(8192) = .{},
@@ -734,6 +735,7 @@ pub const Model = struct {
     devices_buf: bump.Bump(4096) = .{},
     sync_state_buf: bump.Bump(4096) = .{},
     purchase_orders_buf: bump.Bump(8192) = .{},
+    work_periods_buf: bump.Bump(8192) = .{},
 
     // ------------------------------------------------- the company form
 
@@ -1913,6 +1915,16 @@ pub const Model = struct {
     /// The payments the restaurant has taken.
     pub fn payments(model: *const Model) []const domain.Payment {
         return model.payments_list;
+    }
+
+    /// The work periods.
+    pub fn work_periods(model: *const Model) []const domain.WorkPeriod {
+        return model.work_periods_list;
+    }
+
+    /// How many work periods there are.
+    pub fn work_periods_count(model: *const Model) usize {
+        return model.work_periods_list.len;
     }
 
     /// The refunds given back.
