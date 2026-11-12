@@ -79,6 +79,7 @@ const migration_sql = [_][]const u8{
     @embedFile("schema/0026_banking.sql"),
     @embedFile("schema/0027_loyalty.sql"),
     @embedFile("schema/0028_attendance.sql"),
+    @embedFile("schema/0029_promotion.sql"),
 };
 
 const migration_names = [_][]const u8{
@@ -86,7 +87,7 @@ const migration_names = [_][]const u8{
     "inventory",        "ops",            "compliance",        "printing",      "sync",
     "default_tax_slab", "order_sequence", "order_request_key", "payment_once",  "currency_decimals",
     "order_origin",     "sync_snapshot",  "order_line_stock",  "company_brand", "employee_credential",
-    "unpaid_closures", "refund", "recipe", "work_period", "customer_ledger", "banking", "loyalty", "attendance",
+    "unpaid_closures", "refund", "recipe", "work_period", "customer_ledger", "banking", "loyalty", "attendance", "promotion", "gift_card",
 };
 
 /// The migrations, in the order the runtime applies them, each at the

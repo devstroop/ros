@@ -728,6 +728,8 @@ pub const Model = struct {
     loyalty_members_list: []const domain.LoyaltyMember = &.{},
     bank_accounts_list: []const domain.BankAccount = &.{},
     bank_ledger_list: []const domain.BankLedgerEntry = &.{},
+    promotions_list: []const domain.Promotion = &.{},
+    gift_cards_list: []const domain.GiftCard = &.{},
     expenses_list: []const domain.Expense = &.{},
 
     /// Storage for the settings rows the screens show.
@@ -752,6 +754,8 @@ pub const Model = struct {
     loyalty_members_buf: bump.Bump(8192) = .{},
     bank_accounts_buf: bump.Bump(8192) = .{},
     bank_ledger_buf: bump.Bump(8192) = .{},
+    promotions_buf: bump.Bump(8192) = .{},
+    gift_cards_buf: bump.Bump(8192) = .{},
     expenses_buf: bump.Bump(8192) = .{},
 
     // ------------------------------------------------- the company form
@@ -1984,6 +1988,26 @@ pub const Model = struct {
         return model.bank_ledger_list.len;
     }
 
+    /// The promotions.
+    pub fn promotions(model: *const Model) []const domain.Promotion {
+        return model.promotions_list;
+    }
+
+    /// How many promotions there are.
+    pub fn promotions_count(model: *const Model) usize {
+        return model.promotions_list.len;
+    }
+
+    /// The gift cards.
+    pub fn gift_cards(model: *const Model) []const domain.GiftCard {
+        return model.gift_cards_list;
+    }
+
+    /// How many gift cards there are.
+    pub fn gift_cards_count(model: *const Model) usize {
+        return model.gift_cards_list.len;
+    }
+
     /// The expense amount field's text.
     pub fn form_expense_amount_minor_text(model: *const Model) []const u8 {
         return model.form_expense_amount_minor_buf.text();
@@ -2919,7 +2943,7 @@ pub const KitchenDish = struct {
 /// of the app, and this version must not write to it. A test counts
 /// the tables in the migrations and says when the two disagree, so a
 /// new migration that adds a table cannot slip past.
-pub const known_table_count: i64 = 55;
+pub const known_table_count: i64 = 57;
 
 /// One food marking, as the product form offers it.
 /// One palette, as the Settings screen offers it.

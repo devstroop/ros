@@ -221,6 +221,34 @@
       </row>
     </card>
 
+    <if test="{promotions_count > 0}">
+      <card padding="16">
+        <column gap="6">
+          <text size="lg">Promotions</text>
+          <for each="promotions" key="id" as="promotion">
+            <row cross="center">
+              <text grow="1">{promotion.name}</text>
+              <text>{promotion.value_minor}</text>
+            </row>
+          </for>
+        </column>
+      </card>
+    </if>
+
+    <if test="{gift_cards_count > 0}">
+      <card padding="16">
+        <column gap="6">
+          <text size="lg">Gift cards</text>
+          <for each="gift_cards" key="id" as="card">
+            <row cross="center">
+              <text grow="1">{card.code}</text>
+              <text>{card.balance_minor}</text>
+            </row>
+          </for>
+        </column>
+      </card>
+    </if>
+
     <if test="{bank_ledger_count > 0}">
       <card padding="16">
         <column gap="6">
