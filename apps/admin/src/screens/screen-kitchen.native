@@ -45,6 +45,7 @@
               <text wrap="true">{ticket.summary}</text>
               <row gap="8">
                 <button size="sm" variant="primary" disabled="{advancing}" on-press="advance_order:{ticket.id}">{ticket.advance_label}</button>
+                <button size="sm" variant="ghost" on-press="void_order:{ticket.id}">Void</button>
                 <text size="sm" foreground="text_muted">{ticket.waiting_label}</text>
               </row>
             </column>
