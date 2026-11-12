@@ -188,6 +188,8 @@
     </if>
 
     <row gap="8" cross="center">
+      <button size="sm" variant="secondary" on-press="start_work_period">Start work period</button>
+      <button size="sm" variant="secondary" on-press="end_work_period">End work period</button>
       <button size="sm" variant="secondary" on-press="export_refunds">Export refunds CSV</button>
       <button size="sm" variant="secondary" on-press="export_payments">Export payments CSV</button>
       <button size="sm" variant="secondary" on-press="export_orders">Export orders CSV</button>

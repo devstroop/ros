@@ -1321,6 +1321,18 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.clockOut(model, fx, model.form_employee_id, fx.wallMs());
         },
 
+        .clock_in_employee => |employee_id| {
+            model.busy = true;
+            model.error_text = "";
+            repos.clockIn(model, fx, employee_id, fx.wallMs());
+        },
+
+        .clock_out_employee => |employee_id| {
+            model.busy = true;
+            model.error_text = "";
+            repos.clockOut(model, fx, employee_id, fx.wallMs());
+        },
+
         .attendance_saved => |result| {
             model.busy = false;
             if (result.outcome != .ok) {
