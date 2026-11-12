@@ -497,6 +497,15 @@ pub const Refund = struct {
     refunded_at: i64,
 };
 
+/// A loyalty member.
+pub const LoyaltyMember = struct {
+    id: i64,
+    name: []const u8,
+    phone: []const u8,
+    points: i64,
+    active: bool,
+};
+
 /// A staff attendance entry.
 pub const Attendance = struct {
     id: i64,

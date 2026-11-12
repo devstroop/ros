@@ -1364,6 +1364,16 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.error_text = "";
         },
 
+        .form_loyalty_member_id_edit => |event| {
+            model.form_loyalty_member_id_buf.apply(event);
+            model.form_loyalty_member_id = std.fmt.parseInt(i64, std.mem.trim(u8, model.form_loyalty_member_id_buf.text(), " "), 10) catch model.form_loyalty_member_id;
+        },
+
+        .form_loyalty_points_edit => |event| {
+            model.form_loyalty_points_buf.apply(event);
+            model.form_loyalty_points = std.fmt.parseInt(i64, std.mem.trim(u8, model.form_loyalty_points_buf.text(), " "), 10) catch model.form_loyalty_points;
+        },
+
         .bank_deposit => {
             model.busy = true;
             model.error_text = "";
@@ -2110,6 +2120,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .open_employees => {
             go(model, .employees);
             repos.loadAttendance(model, fx);
+            repos.loadLoyaltyMembers(model, fx);
         },
 
         .reset_employee_credential => |id| {
@@ -2577,6 +2588,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .attendance_loaded => |result| {
             if (result.outcome != .ok) return;
             if (result.kind == .page) repos.decodeAttendance(model, result.bytes);
+        },
+
+        .loyalty_members_loaded => |result| {
+            if (result.outcome != .ok) return;
+            if (result.kind == .page) repos.decodeLoyaltyMembers(model, result.bytes);
         },
 
         .refunds_exported => |result| {

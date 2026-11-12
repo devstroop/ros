@@ -210,6 +210,32 @@
       </card>
     </if>
 
+    <if test="{loyalty_members_count > 0}">
+      <card padding="16">
+        <column gap="6">
+          <text size="lg">Loyalty members</text>
+          <for each="loyalty_members" key="id" as="member">
+            <row cross="center">
+              <text grow="1">{member.name}</text>
+              <text>{member.points}</text>
+            </row>
+          </for>
+          <row gap="8" cross="end">
+            <column gap="4" grow="1">
+              <text size="sm" foreground="text_muted">Member id</text>
+              <text-field text="{form_loyalty_member_id_buf}" label="Member id" on-input="form_loyalty_member_id_edit"/>
+            </column>
+            <column gap="4" grow="1">
+              <text size="sm" foreground="text_muted">Points</text>
+              <text-field text="{form_loyalty_points_buf}" label="Points" on-input="form_loyalty_points_edit"/>
+            </column>
+            <button size="sm" variant="primary" on-press="loyalty_earn">Earn</button>
+            <button size="sm" variant="secondary" on-press="loyalty_redeem">Redeem</button>
+          </row>
+        </column>
+      </card>
+    </if>
+
     <if test="{refunds_count > 0}">
       <card padding="16">
         <column gap="6">
