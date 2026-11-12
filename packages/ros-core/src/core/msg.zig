@@ -153,6 +153,7 @@ pub const Msg = union(enum) {
     refunds_loaded: native_sdk.EffectDbResult,
     work_periods_loaded: native_sdk.EffectDbResult,
     attendance_loaded: native_sdk.EffectDbResult,
+    loyalty_members_loaded: native_sdk.EffectDbResult,
     /// The refunds CSV export finished.
     refunds_exported: native_sdk.EffectFileResult,
     /// The user asked to export refunds as CSV.
@@ -222,6 +223,10 @@ pub const Msg = union(enum) {
     clock_out_employee: i64,
     /// Award loyalty points.
     loyalty_earn,
+    /// The loyalty member id field changed.
+    form_loyalty_member_id_edit: canvas.TextInputEvent,
+    /// The loyalty points field changed.
+    form_loyalty_points_edit: canvas.TextInputEvent,
     /// Redeem loyalty points.
     loyalty_redeem,
     /// The loyalty write came back.

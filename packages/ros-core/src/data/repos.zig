@@ -83,6 +83,7 @@ pub const key_payments = 42;
 pub const key_refunds = 54;
 pub const key_work_periods = 55;
 pub const key_attendance = 56;
+pub const key_loyalty_members = 57;
 pub const key_report = 43;
 pub const key_report_modes = 44;
 pub const key_stock = 45;
@@ -310,6 +311,13 @@ pub const attendance_sql =
     \\SELECT id, employee_id, clock_in, clock_out
     \\FROM attendance
     \\ORDER BY clock_in DESC
+    \\LIMIT 100;
+;
+
+pub const loyalty_members_sql =
+    \\SELECT id, name, phone, points, active
+    \\FROM loyalty_member
+    \\ORDER BY name
     \\LIMIT 100;
 ;
 
@@ -802,6 +810,10 @@ pub fn loadWorkPeriods(model: *Model, fx: *Effects) void {
 
 pub fn loadAttendance(model: *Model, fx: *Effects) void {
     query(model, fx, key_attendance, attendance_sql, &.{}, Effects.dbMsg(.attendance_loaded));
+}
+
+pub fn loadLoyaltyMembers(model: *Model, fx: *Effects) void {
+    query(model, fx, key_loyalty_members, loyalty_members_sql, &.{}, Effects.dbMsg(.loyalty_members_loaded));
 }
 
 pub fn loadOrderLines(model: *Model, fx: *Effects) void {
@@ -1804,6 +1816,26 @@ pub fn decodeAttendance(model: *Model, bytes: []const u8) void {
         };
     }
     model.attendance_list = list[0..index];
+}
+
+pub fn decodeLoyaltyMembers(model: *Model, bytes: []const u8) void {
+    var reader = page.Reader.init(bytes);
+    if (!reader.readHeader()) return;
+    model.loyalty_members_buf.reset();
+    const count = reader.rows_left;
+    const list = model.loyalty_members_buf.allocSlice(domain.LoyaltyMember, count) orelse return;
+    var values: [page.max_columns]page.Value = undefined;
+    var index: usize = 0;
+    while (index < count and reader.nextRow(&values)) : (index += 1) {
+        list[index] = .{
+            .id = reader.intOf(&values, "id", 0),
+            .name = model.loyalty_members_buf.dupe(reader.textOf(&values, "name")) orelse "",
+            .phone = model.loyalty_members_buf.dupe(reader.textOf(&values, "phone")) orelse "",
+            .points = reader.intOf(&values, "points", 0),
+            .active = reader.boolOf(&values, "active"),
+        };
+    }
+    model.loyalty_members_list = list[0..index];
 }
 
 pub fn decodeSuppliers(model: *Model, bytes: []const u8) void {

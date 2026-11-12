@@ -666,6 +666,8 @@ pub const Model = struct {
     form_bank_account_id: i64 = 0,
     form_loyalty_member_id: i64 = 0,
     form_loyalty_points: i64 = 0,
+    form_loyalty_member_id_buf: canvas.TextBuffer(16) = .{},
+    form_loyalty_points_buf: canvas.TextBuffer(16) = .{},
     form_bank_amount_minor: i64 = 0,
     form_reset_employee_name: []const u8 = "",
     form_category_name_buf: canvas.TextBuffer(64) = .{},
@@ -718,6 +720,7 @@ pub const Model = struct {
     purchase_orders_list: []const domain.PurchaseOrder = &.{},
     work_periods_list: []const domain.WorkPeriod = &.{},
     attendance_list: []const domain.Attendance = &.{},
+    loyalty_members_list: []const domain.LoyaltyMember = &.{},
 
     /// Storage for the settings rows the screens show.
     printers_buf: bump.Bump(8192) = .{},
@@ -738,6 +741,7 @@ pub const Model = struct {
     purchase_orders_buf: bump.Bump(8192) = .{},
     work_periods_buf: bump.Bump(8192) = .{},
     attendance_buf: bump.Bump(8192) = .{},
+    loyalty_members_buf: bump.Bump(8192) = .{},
 
     // ------------------------------------------------- the company form
 
@@ -1937,6 +1941,16 @@ pub const Model = struct {
     /// How many attendance entries there are.
     pub fn attendance_count(model: *const Model) usize {
         return model.attendance_list.len;
+    }
+
+    /// The loyalty members.
+    pub fn loyalty_members(model: *const Model) []const domain.LoyaltyMember {
+        return model.loyalty_members_list;
+    }
+
+    /// How many loyalty members there are.
+    pub fn loyalty_members_count(model: *const Model) usize {
+        return model.loyalty_members_list.len;
     }
 
     /// The refunds given back.
