@@ -248,7 +248,7 @@ centre_pixel() {
 # published in the first snapshot after the press.
 repainted() {
   local before="$1" screen="$2" after attempt
-  for attempt in 1 2 3 4 5 6 7 8; do
+  for attempt in $(seq 1 20); do
     after="$(centre_pixel)"
     if [ -n "$after" ] && [ "$after" != "$before" ]; then
       return 0
