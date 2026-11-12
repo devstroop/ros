@@ -189,6 +189,8 @@
 
     <row gap="8" cross="center">
       <button size="sm" variant="secondary" on-press="export_refunds">Export refunds CSV</button>
+      <button size="sm" variant="secondary" on-press="export_payments">Export payments CSV</button>
+      <button size="sm" variant="secondary" on-press="export_orders">Export orders CSV</button>
       <text size="sm" foreground="text_muted">{error_text}</text>
     </row>
 

@@ -155,6 +155,10 @@ pub const Msg = union(enum) {
     refunds_exported: native_sdk.EffectFileResult,
     /// The user asked to export refunds as CSV.
     export_refunds,
+    /// The user asked to export payments as CSV.
+    export_payments,
+    /// The user asked to export orders as CSV.
+    export_orders,
     /// The day's takings.
     report_loaded: native_sdk.EffectDbResult,
     /// The stock on the shelf.

@@ -1260,6 +1260,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             go(model, .reports);
             repos.loadReport(model, fx, model.report_day_start_ms());
             repos.loadRefunds(model, fx);
+            repos.loadPayments(model, fx);
+            repos.loadOrders(model, fx);
         },
 
         .export_refunds => {
@@ -1275,6 +1277,36 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 .on_result = Effects.fileMsg(.refunds_exported),
             });
             model.error_text = "Exporting refunds...";
+        },
+
+        .export_payments => {
+            var w = std.Io.Writer.fixed(&export_buf);
+            export_mod.paymentsCsv(&w, model.payments()) catch {
+                model.error_text = "Could not prepare payments export";
+                return;
+            };
+            fx.writeFile(.{
+                .key = 9002,
+                .path = "payments.csv",
+                .bytes = w.buffered(),
+                .on_result = Effects.fileMsg(.refunds_exported),
+            });
+            model.error_text = "Exporting payments...";
+        },
+
+        .export_orders => {
+            var w = std.Io.Writer.fixed(&export_buf);
+            export_mod.ordersCsv(&w, model.orders) catch {
+                model.error_text = "Could not prepare orders export";
+                return;
+            };
+            fx.writeFile(.{
+                .key = 9003,
+                .path = "orders.csv",
+                .bytes = w.buffered(),
+                .on_result = Effects.fileMsg(.refunds_exported),
+            });
+            model.error_text = "Exporting orders...";
         },
 
         .clock_in => {

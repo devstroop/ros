@@ -46,3 +46,23 @@ test "refundsCsv scales to a large refund log" {
     try std.testing.expect(elapsed_ms < 1000);
     try std.testing.expect(w.buffered().len > count);
 }
+
+/// Write payments as CSV. Amounts are minor units.
+pub fn paymentsCsv(writer: *std.Io.Writer, payments: []const domain.Payment) !void {
+    try writer.writeAll("id,order_id,order_no,mode,amount_minor,reference,paid_at\n");
+    for (payments) |p| {
+        try writer.print("{d},{d},\"{s}\",{d},{d},\"{s}\",{d}\n", .{
+            p.id, p.order_id, p.order_no, @intFromEnum(p.mode), p.amount_minor, p.reference, p.paid_at,
+        });
+    }
+}
+
+/// Write orders as CSV. Amounts are minor units.
+pub fn ordersCsv(writer: *std.Io.Writer, orders: []const domain.Order) !void {
+    try writer.writeAll("id,order_no,status,total_minor,placed_at\n");
+    for (orders) |o| {
+        try writer.print("{d},\"{s}\",{d},{d},{d}\n", .{
+            o.id, o.order_no, o.status_code, o.total_minor, o.placed_at,
+        });
+    }
+}
