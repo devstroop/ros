@@ -187,6 +187,11 @@
       </card>
     </if>
 
+    <row gap="8" cross="center">
+      <button size="sm" variant="secondary" on-press="export_refunds">Export refunds CSV</button>
+      <text size="sm" foreground="text_muted">{error_text}</text>
+    </row>
+
     <if test="{refunds_count > 0}">
       <card padding="16">
         <column gap="6">
