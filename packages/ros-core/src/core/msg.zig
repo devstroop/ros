@@ -151,6 +151,10 @@ pub const Msg = union(enum) {
     /// The payments the restaurant has taken.
     payments_loaded: native_sdk.EffectDbResult,
     refunds_loaded: native_sdk.EffectDbResult,
+    /// The refunds CSV export finished.
+    refunds_exported: native_sdk.EffectFileResult,
+    /// The user asked to export refunds as CSV.
+    export_refunds,
     /// The day's takings.
     report_loaded: native_sdk.EffectDbResult,
     /// The stock on the shelf.

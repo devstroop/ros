@@ -18,6 +18,7 @@ const domain = @import("../domain/models.zig");
 const repos = @import("../data/repos.zig");
 const page = @import("../data/page.zig");
 const auth = @import("../data/auth.zig");
+const export_mod = @import("../data/export.zig");
 
 const Model = model_mod.Model;
 const Msg = msg_mod.Msg;
@@ -25,6 +26,8 @@ const Role = nav.Role;
 const Screen = nav.Screen;
 const canvas = native_sdk.canvas;
 const Effects = native_sdk.Effects(Msg);
+
+var export_buf: [1 << 20]u8 = undefined;
 
 /// The clock tick. A repeating timer keeps `now_ms` fresh so the
 /// kitchen board can show how long a ticket has been waiting.
@@ -1257,6 +1260,21 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             go(model, .reports);
             repos.loadReport(model, fx, model.report_day_start_ms());
             repos.loadRefunds(model, fx);
+        },
+
+        .export_refunds => {
+            var w = std.Io.Writer.fixed(&export_buf);
+            export_mod.refundsCsv(&w, model.refunds()) catch {
+                model.error_text = "Could not prepare refunds export";
+                return;
+            };
+            fx.writeFile(.{
+                .key = 9001,
+                .path = "refunds.csv",
+                .bytes = w.buffered(),
+                .on_result = Effects.fileMsg(.refunds_exported),
+            });
+            model.error_text = "Exporting refunds...";
         },
 
         .clock_in => {
@@ -2501,6 +2519,14 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             model.error_text = "";
             if (result.kind == .page) repos.decodeRefunds(model, result.bytes);
+        },
+
+        .refunds_exported => |result| {
+            if (result.outcome == .ok) {
+                model.error_text = "Refunds exported to refunds.csv";
+            } else {
+                model.error_text = "Could not export refunds";
+            }
         },
 
         .orders_loaded => |result| {
