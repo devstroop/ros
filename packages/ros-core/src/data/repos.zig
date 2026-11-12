@@ -4118,17 +4118,30 @@ pub fn voidOrder(model: *Model, fx: *Effects, order_id: i64, reason: []const u8,
     statements[2] = .{
         .sql =
         \\UPDATE product
-        \\SET stock_qty = COALESCE(stock_qty, 0) + (
-        \\      SELECT COALESCE(SUM(qty), 0) FROM order_line
-        \\      WHERE order_id = ?1 AND product_id = product.id
-        \\        AND stock_taken = 1
-        \\    ),
+        \\SET stock_qty = COALESCE(stock_qty, 0)
+        \\    + COALESCE((
+        \\        SELECT COALESCE(SUM(qty), 0) FROM order_line
+        \\        WHERE order_id = ?1 AND product_id = product.id
+        \\          AND stock_taken = 1
+        \\      ), 0)
+        \\    + COALESCE((
+        \\        SELECT COALESCE(SUM(r.qty * ol.qty), 0) FROM recipe r
+        \\        JOIN order_line ol ON ol.product_id = r.product_id
+        \\        WHERE ol.order_id = ?1 AND r.ingredient_id = product.id
+        \\      ), 0),
         \\    updated_at = ?2
         \\WHERE track_stock = 1
-        \\  AND EXISTS (
-        \\    SELECT 1 FROM order_line
-        \\    WHERE order_id = ?1 AND product_id = product.id
-        \\      AND stock_taken = 1
+        \\  AND (
+        \\        EXISTS (
+        \\          SELECT 1 FROM order_line
+        \\          WHERE order_id = ?1 AND product_id = product.id
+        \\            AND stock_taken = 1
+        \\        )
+        \\     OR EXISTS (
+        \\          SELECT 1 FROM recipe r
+        \\          JOIN order_line ol ON ol.product_id = r.product_id
+        \\          WHERE ol.order_id = ?1 AND r.ingredient_id = product.id
+        \\        )
         \\  )
         \\  AND EXISTS (SELECT 1 FROM orders WHERE id = ?1 AND status <= ?3);
         ,
