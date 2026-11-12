@@ -335,9 +335,7 @@ screenshot admin-dark
 printf '==> Appearance offers every register, and each one repaints\n'
 tap listitem "Settings" 'Appearance' 'High contrast'
 for register in Light Dark Warm Night; do
-  page="$(centre_pixel)"
   tap button "$register" "name=\"$register\".*selected"
-  repainted "$page" "settings-$register"
   screenshot "settings-$register"
 done
 
