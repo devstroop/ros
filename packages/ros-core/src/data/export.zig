@@ -35,7 +35,7 @@ test "refundsCsv scales to a large refund log" {
             .refunded_at = 1_700_000_000_000,
         };
     }
-    var buf = try allocator.alloc(u8, 1024 * 1024);
+    const buf = try allocator.alloc(u8, 1024 * 1024);
     defer allocator.free(buf);
     var w = std.Io.Writer.fixed(buf);
     const start = std.time.nanoTimestamp();
