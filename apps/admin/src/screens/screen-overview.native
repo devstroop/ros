@@ -186,5 +186,19 @@
         </column>
       </card>
     </if>
+
+    <if test="{refunds_count > 0}">
+      <card padding="16">
+        <column gap="6">
+          <text size="lg">Refunds</text>
+          <for each="refunds" key="id" as="refund">
+            <row cross="center">
+              <text grow="1">{refund.reason}</text>
+              <text>{currency_symbol}{fixed(-refund.amount_minor / currency_divisor, currency_decimal_count)}</text>
+            </row>
+          </for>
+        </column>
+      </card>
+    </if>
   </column>
 </template>
