@@ -1384,6 +1384,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.form_bank_amount_minor = std.fmt.parseInt(i64, std.mem.trim(u8, model.form_bank_amount_minor_buf.text(), " "), 10) catch model.form_bank_amount_minor;
         },
 
+        .form_expense_amount_minor_edit => |event| {
+            model.form_expense_amount_minor_buf.apply(event);
+            model.form_expense_amount_minor = std.fmt.parseInt(i64, std.mem.trim(u8, model.form_expense_amount_minor_buf.text(), " "), 10) catch model.form_expense_amount_minor;
+        },
+
+        .form_expense_note_edit => |event| model.form_expense_note_buf.apply(event),
+
         .bank_deposit => {
             model.busy = true;
             model.error_text = "";
@@ -1394,6 +1401,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.busy = true;
             model.error_text = "";
             repos.bankWithdrawal(model, fx, model.form_bank_account_id, model.form_bank_amount_minor, fx.wallMs());
+        },
+
+        .expense_voucher => {
+            model.busy = true;
+            model.error_text = "";
+            repos.expenseVoucher(model, fx, model.form_expense_amount_minor, model.form_expense_note_buf.text(), model.employee_id, fx.wallMs());
         },
 
         .bank_saved => |result| {
@@ -2132,6 +2145,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.loadAttendance(model, fx);
             repos.loadLoyaltyMembers(model, fx);
             repos.loadBankAccounts(model, fx);
+            repos.loadExpenses(model, fx);
         },
 
         .reset_employee_credential => |id| {
@@ -2609,6 +2623,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .bank_accounts_loaded => |result| {
             if (result.outcome != .ok) return;
             if (result.kind == .page) repos.decodeBankAccounts(model, result.bytes);
+        },
+
+        .expenses_loaded => |result| {
+            if (result.outcome != .ok) return;
+            if (result.kind == .page) repos.decodeExpenses(model, result.bytes);
         },
 
         .refunds_exported => |result| {

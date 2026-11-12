@@ -85,6 +85,7 @@ pub const key_work_periods = 55;
 pub const key_attendance = 56;
 pub const key_loyalty_members = 57;
 pub const key_bank_accounts = 58;
+pub const key_expenses = 59;
 pub const key_report = 43;
 pub const key_report_modes = 44;
 pub const key_stock = 45;
@@ -326,6 +327,13 @@ pub const bank_accounts_sql =
     \\SELECT id, name, account_no, active
     \\FROM bank_account
     \\ORDER BY name
+    \\LIMIT 100;
+;
+
+pub const expenses_sql =
+    \\SELECT id, category_id, amount_minor, note, spent_at
+    \\FROM expense
+    \\ORDER BY spent_at DESC
     \\LIMIT 100;
 ;
 
@@ -826,6 +834,10 @@ pub fn loadLoyaltyMembers(model: *Model, fx: *Effects) void {
 
 pub fn loadBankAccounts(model: *Model, fx: *Effects) void {
     query(model, fx, key_bank_accounts, bank_accounts_sql, &.{}, Effects.dbMsg(.bank_accounts_loaded));
+}
+
+pub fn loadExpenses(model: *Model, fx: *Effects) void {
+    query(model, fx, key_expenses, expenses_sql, &.{}, Effects.dbMsg(.expenses_loaded));
 }
 
 pub fn loadOrderLines(model: *Model, fx: *Effects) void {
@@ -1867,6 +1879,44 @@ pub fn decodeBankAccounts(model: *Model, bytes: []const u8) void {
         };
     }
     model.bank_accounts_list = list[0..index];
+}
+
+pub fn decodeExpenses(model: *Model, bytes: []const u8) void {
+    var reader = page.Reader.init(bytes);
+    if (!reader.readHeader()) return;
+    model.expenses_buf.reset();
+    const count = reader.rows_left;
+    const list = model.expenses_buf.allocSlice(domain.Expense, count) orelse return;
+    var values: [page.max_columns]page.Value = undefined;
+    var index: usize = 0;
+    while (index < count and reader.nextRow(&values)) : (index += 1) {
+        list[index] = .{
+            .id = reader.intOf(&values, "id", 0),
+            .category_id = reader.intOf(&values, "category_id", 0),
+            .amount_minor = reader.intOf(&values, "amount_minor", 0),
+            .note = model.expenses_buf.dupe(reader.textOf(&values, "note")) orelse "",
+            .spent_at = reader.intOf(&values, "spent_at", 0),
+        };
+    }
+    model.expenses_list = list[0..index];
+}
+
+pub fn expenseVoucher(model: *Model, fx: *Effects, amount_minor: i64, note: []const u8, employee_id: i64, at: i64) void {
+    _ = model;
+    var params: [4]native_sdk.EffectDbValue = .{
+        .{ .integer = amount_minor },
+        .{ .text = note },
+        .{ .integer = at },
+        idParam(employee_id),
+    };
+    fx.dbExec(.{
+        .key = 9103,
+        .statements = &.{.{
+            .sql = "INSERT INTO expense (category_id, amount_minor, note, spent_at, created_at, employee_id) VALUES (NULL, ?1, ?2, ?3, ?3, ?4);",
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.bank_saved),
+    });
 }
 
 pub fn decodeSuppliers(model: *Model, bytes: []const u8) void {
