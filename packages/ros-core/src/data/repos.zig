@@ -82,6 +82,7 @@ pub const key_save_pin_hash = 38;
 pub const key_payments = 42;
 pub const key_refunds = 54;
 pub const key_work_periods = 55;
+pub const key_attendance = 56;
 pub const key_report = 43;
 pub const key_report_modes = 44;
 pub const key_stock = 45;
@@ -303,6 +304,13 @@ pub const work_periods_sql =
     \\FROM work_period
     \\ORDER BY started_at DESC
     \\LIMIT 50;
+;
+
+pub const attendance_sql =
+    \\SELECT id, employee_id, clock_in, clock_out
+    \\FROM attendance
+    \\ORDER BY clock_in DESC
+    \\LIMIT 100;
 ;
 
 /// The sign-in reads the employee the picker chose.
@@ -790,6 +798,10 @@ pub fn loadRefunds(model: *Model, fx: *Effects) void {
 
 pub fn loadWorkPeriods(model: *Model, fx: *Effects) void {
     query(model, fx, key_work_periods, work_periods_sql, &.{}, Effects.dbMsg(.work_periods_loaded));
+}
+
+pub fn loadAttendance(model: *Model, fx: *Effects) void {
+    query(model, fx, key_attendance, attendance_sql, &.{}, Effects.dbMsg(.attendance_loaded));
 }
 
 pub fn loadOrderLines(model: *Model, fx: *Effects) void {
@@ -1773,6 +1785,25 @@ pub fn decodeWorkPeriods(model: *Model, bytes: []const u8) void {
         };
     }
     model.work_periods_list = list[0..index];
+}
+
+pub fn decodeAttendance(model: *Model, bytes: []const u8) void {
+    var reader = page.Reader.init(bytes);
+    if (!reader.readHeader()) return;
+    model.attendance_buf.reset();
+    const count = reader.rows_left;
+    const list = model.attendance_buf.allocSlice(domain.Attendance, count) orelse return;
+    var values: [page.max_columns]page.Value = undefined;
+    var index: usize = 0;
+    while (index < count and reader.nextRow(&values)) : (index += 1) {
+        list[index] = .{
+            .id = reader.intOf(&values, "id", 0),
+            .employee_id = reader.intOf(&values, "employee_id", 0),
+            .clock_in = reader.intOf(&values, "clock_in", 0),
+            .clock_out = reader.intOf(&values, "clock_out", 0),
+        };
+    }
+    model.attendance_list = list[0..index];
 }
 
 pub fn decodeSuppliers(model: *Model, bytes: []const u8) void {
