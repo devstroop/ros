@@ -32,6 +32,8 @@
             <text grow="1" on-press="edit_employee:{employee.id}">{employee.name}</text>
             <badge>{employee.role_label}</badge>
             <badge>{employee.credential_label}</badge>
+            <button size="sm" variant="ghost" on-press="clock_in_employee:{employee.id}">Clock in</button>
+            <button size="sm" variant="ghost" on-press="clock_out_employee:{employee.id}">Clock out</button>
             <button size="sm" variant="ghost" on-press="reset_employee_credential:{employee.id}">Reset sign-in</button>
             <button size="sm" variant="ghost" on-press="deactivate_employee:{employee.id}">Remove</button>
           </row>

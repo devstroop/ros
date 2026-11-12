@@ -214,6 +214,10 @@ pub const Msg = union(enum) {
     clock_out,
     /// The attendance write came back.
     attendance_saved: native_sdk.EffectDbResult,
+    /// Clock in the named employee.
+    clock_in_employee: i64,
+    /// Clock out the named employee.
+    clock_out_employee: i64,
     /// Award loyalty points.
     loyalty_earn,
     /// Redeem loyalty points.
