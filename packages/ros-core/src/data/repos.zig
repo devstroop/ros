@@ -3659,7 +3659,7 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
     // The order, its lines, the stock it takes, and the op row: three
     // statements per line plus four, and one transaction for all of
     // them.
-    var statements: [4 + 3 * max_order_lines]native_sdk.EffectDbStatement = undefined;
+    var statements: [5 + 3 * max_order_lines]native_sdk.EffectDbStatement = undefined;
     var line_params: [max_order_lines][9]native_sdk.EffectDbValue = undefined;
     var stock_params: [max_order_lines][3]native_sdk.EffectDbValue = undefined;
 
@@ -3774,6 +3774,28 @@ pub fn saveOrder(model: *Model, fx: *Effects, order: domain.Order, lines: []cons
         };
         count += 1;
     }
+
+    // Recipe ingredients leave the shelf with the sale.
+    var recipe_params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = order.placed_at },
+        .{ .integer = order.id },
+    };
+    statements[count] = .{
+        .sql =
+        \\UPDATE product SET stock_qty = COALESCE(stock_qty, 0) - (
+        \\  SELECT COALESCE(SUM(r.qty * ol.qty), 0) FROM recipe r
+        \\  JOIN order_line ol ON ol.product_id = r.product_id
+        \\  WHERE ol.order_id = ?2 AND r.ingredient_id = product.id
+        \\), updated_at = ?1
+        \\WHERE track_stock = 1 AND id IN (
+        \\  SELECT r.ingredient_id FROM recipe r
+        \\  JOIN order_line ol ON ol.product_id = r.product_id
+        \\  WHERE ol.order_id = ?2
+        \\);
+        ,
+        .params = &recipe_params,
+    };
+    count += 1;
 
     // The op the peers receive. One op carries the whole order - the
     // header and its lines - so a receiving device can show the ticket
