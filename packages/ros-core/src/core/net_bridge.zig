@@ -129,6 +129,14 @@ pub fn printReceipt(host: []const u8, port: u16, order_no: []const u8, total_min
     _ = std.Thread.spawn(.{}, printThread, .{ctx}) catch {};
 }
 
+pub var print_pending: bool = false;
+pub var print_stop: bool = false;
+pub var print_host: []const u8 = "127.0.0.1";
+pub var print_port: u16 = 9100;
+pub var print_order_no: []const u8 = "";
+pub var print_total: i64 = 0;
+pub var print_decimals: u8 = 2;
+
 /// Open the channel and tell the thread it may post.
 ///
 /// Called from `boot`, which is the first thing the runtime runs on the

@@ -1830,6 +1830,25 @@ pub fn decodePrinters(model: *Model, bytes: []const u8) void {
         };
     }
     model.printers_list = list[0..index];
+    // Remember the first active receipt printer so the sale flow can
+    // print without re-scanning the list on the update thread.
+    model.printer_has = false;
+    model.printer_address_field = "";
+    model.printer_port_field = 9100;
+    for (list[0..index]) |printer| {
+        if (!printer.active) continue;
+        if (!std.mem.eql(u8, printer.job, "receipt")) continue;
+        if (!std.mem.eql(u8, printer.transport, "tcp")) continue;
+        model.printer_address_field = printer.address;
+        var port: i64 = 9100;
+        if (std.mem.lastIndexOfScalar(u8, printer.address, ':')) |idx| {
+            port = std.fmt.parseInt(i64, printer.address[idx + 1 ..], 10) catch 9100;
+        }
+        model.printer_port_field = port;
+        model.printer_decimals_field = model.currency_decimal_count();
+        model.printer_has = true;
+        break;
+    }
 }
 
 pub fn decodeTaxSlabs(model: *Model, bytes: []const u8) void {
@@ -5462,5 +5481,75 @@ pub fn endWorkPeriod(model: *Model, fx: *Effects, at: i64) void {
             .params = &.{ .{ .integer = at } },
         }},
         .on_result = Effects.dbMsg(.work_period_saved),
+    });
+}
+
+/// Clock an employee in.
+pub fn clockIn(model: *Model, fx: *Effects, employee_id: i64, at: i64) void {
+    _ = model;
+    var params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = employee_id },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = 9301,
+        .statements = &.{.{
+            .sql = "INSERT INTO attendance (employee_id, clock_in) VALUES (?1, ?2);",
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.attendance_saved),
+    });
+}
+
+/// Clock an employee out.
+pub fn clockOut(model: *Model, fx: *Effects, employee_id: i64, at: i64) void {
+    _ = model;
+    var params: [2]native_sdk.EffectDbValue = .{
+        .{ .integer = employee_id },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = 9302,
+        .statements = &.{.{
+            .sql = "UPDATE attendance SET clock_out = ?2 WHERE employee_id = ?1 AND clock_out IS NULL;",
+            .params = &params,
+        }},
+        .on_result = Effects.dbMsg(.attendance_saved),
+    });
+}
+
+/// Award loyalty points to a member.
+pub fn loyaltyEarn(model: *Model, fx: *Effects, member_id: i64, points: i64, at: i64) void {
+    _ = model;
+    var params: [3]native_sdk.EffectDbValue = .{
+        .{ .integer = member_id },
+        .{ .integer = points },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = 9201,
+        .statements = &.{
+            .{ .sql = "INSERT INTO loyalty_ledger (member_id, entry_type, points, created_at) VALUES (?1, 0, ?2, ?3);", .params = &params },
+            .{ .sql = "UPDATE loyalty_member SET points = points + ?2 WHERE id = ?1;", .params = &.{ .{ .integer = member_id }, .{ .integer = points } } },
+        },
+        .on_result = Effects.dbMsg(.loyalty_saved),
+    });
+}
+
+/// Redeem loyalty points from a member.
+pub fn loyaltyRedeem(model: *Model, fx: *Effects, member_id: i64, points: i64, at: i64) void {
+    _ = model;
+    var params: [3]native_sdk.EffectDbValue = .{
+        .{ .integer = member_id },
+        .{ .integer = points },
+        .{ .integer = at },
+    };
+    fx.dbExec(.{
+        .key = 9202,
+        .statements = &.{
+            .{ .sql = "INSERT INTO loyalty_ledger (member_id, entry_type, points, created_at) VALUES (?1, 1, ?2, ?3);", .params = &params },
+            .{ .sql = "UPDATE loyalty_member SET points = points - ?2 WHERE id = ?1 AND points >= ?2;", .params = &.{ .{ .integer = member_id }, .{ .integer = points } } },
+        },
+        .on_result = Effects.dbMsg(.loyalty_saved),
     });
 }
