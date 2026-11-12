@@ -81,6 +81,7 @@ pub const key_save_category = 41;
 pub const key_save_pin_hash = 38;
 pub const key_payments = 42;
 pub const key_refunds = 54;
+pub const key_work_periods = 55;
 pub const key_report = 43;
 pub const key_report_modes = 44;
 pub const key_stock = 45;
@@ -295,6 +296,13 @@ pub const refunds_sql =
     \\FROM refund
     \\ORDER BY refunded_at DESC
     \\LIMIT 200;
+;
+
+pub const work_periods_sql =
+    \\SELECT id, started_at, ended_at, status, started_by, ended_by
+    \\FROM work_period
+    \\ORDER BY started_at DESC
+    \\LIMIT 50;
 ;
 
 /// The sign-in reads the employee the picker chose.
@@ -778,6 +786,10 @@ pub fn loadPayments(model: *Model, fx: *Effects) void {
 
 pub fn loadRefunds(model: *Model, fx: *Effects) void {
     query(model, fx, key_refunds, refunds_sql, &.{}, Effects.dbMsg(.refunds_loaded));
+}
+
+pub fn loadWorkPeriods(model: *Model, fx: *Effects) void {
+    query(model, fx, key_work_periods, work_periods_sql, &.{}, Effects.dbMsg(.work_periods_loaded));
 }
 
 pub fn loadOrderLines(model: *Model, fx: *Effects) void {
@@ -1740,6 +1752,27 @@ pub fn decodeRefunds(model: *Model, bytes: []const u8) void {
         };
     }
     model.refunds_list = list[0..index];
+}
+
+pub fn decodeWorkPeriods(model: *Model, bytes: []const u8) void {
+    var reader = page.Reader.init(bytes);
+    if (!reader.readHeader()) return;
+    model.work_periods_buf.reset();
+    const count = reader.rows_left;
+    const list = model.work_periods_buf.allocSlice(domain.WorkPeriod, count) orelse return;
+    var values: [page.max_columns]page.Value = undefined;
+    var index: usize = 0;
+    while (index < count and reader.nextRow(&values)) : (index += 1) {
+        list[index] = .{
+            .id = reader.intOf(&values, "id", 0),
+            .started_at = reader.intOf(&values, "started_at", 0),
+            .ended_at = reader.intOf(&values, "ended_at", 0),
+            .status = reader.intOf(&values, "status", 0),
+            .started_by = reader.intOf(&values, "started_by", 0),
+            .ended_by = reader.intOf(&values, "ended_by", 0),
+        };
+    }
+    model.work_periods_list = list[0..index];
 }
 
 pub fn decodeSuppliers(model: *Model, bytes: []const u8) void {

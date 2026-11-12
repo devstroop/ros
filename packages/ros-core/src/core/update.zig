@@ -1262,6 +1262,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             repos.loadRefunds(model, fx);
             repos.loadPayments(model, fx);
             repos.loadOrders(model, fx);
+            repos.loadWorkPeriods(model, fx);
         },
 
         .export_refunds => {
@@ -2563,6 +2564,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             model.error_text = "";
             if (result.kind == .page) repos.decodeRefunds(model, result.bytes);
+        },
+
+        .work_periods_loaded => |result| {
+            if (result.outcome != .ok) return;
+            if (result.kind == .page) repos.decodeWorkPeriods(model, result.bytes);
         },
 
         .refunds_exported => |result| {

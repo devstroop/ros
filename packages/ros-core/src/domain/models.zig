@@ -497,6 +497,16 @@ pub const Refund = struct {
     refunded_at: i64,
 };
 
+/// A work period: an open/close boundary for reports and cash.
+pub const WorkPeriod = struct {
+    id: i64,
+    started_at: i64,
+    ended_at: i64,
+    status: i64,
+    started_by: i64,
+    ended_by: i64,
+};
+
 /// How the money came in, on one mode.
 pub const ReportMode = struct {
     mode: PaymentMode,
